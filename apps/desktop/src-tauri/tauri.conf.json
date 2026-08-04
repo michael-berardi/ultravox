@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dictator",
+  "identifier": "com.imploselabs.dictator",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Dictator",
+        "width": 450,
+        "height": 650,
+        "minWidth": 400,
+        "minHeight": 500,
+        "resizable": true,
+        "center": true,
+        "visible": true,
+        "transparent": true,
+        "decorations": true,
+        "focus": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    },
+    "trayIcon": {
+      "id": "main-tray",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": true,
+      "tooltip": "Dictator"
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "copyright": "Copyright © 2024-present Implose Labs",
+    "category": "Productivity",
+    "macOS": {
+      "infoPlist": "Info.plist",
+      "signingIdentity": "-"
+    },
+    "shortDescription": "Real-time audio transcription",
+    "longDescription": "Dictator provides real-time audio transcription using downloadable on-device models."
+  }
+}

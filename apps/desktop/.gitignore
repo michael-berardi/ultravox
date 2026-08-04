@@ -1,0 +1,21 @@
+# Dictator (Tauri v2 rewrite) — dependencies and frontend build tooling
+node_modules/
+dist/
+.vite/
+*.local
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+*.rs.bk
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Editor
+.vscode/
+.idea/

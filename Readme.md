@@ -1,0 +1,77 @@
+# Dictator
+
+Dictator is a private, on-device macOS transcription app for microphone recordings, meeting capture, and supported media URLs.
+
+<p align="center">
+  <img src="docs/image.png" alt="Dictator ready to record" width="360" />
+  <img src="docs/image_indicator.png" alt="Dictator on-device model settings" width="360" />
+</p>
+
+## Features
+
+- On-device transcription with downloadable English and multilingual models.
+- Microphone recording with configurable global shortcuts.
+- Hold-to-record mode: hold the shortcut to record, then release to stop.
+- Meeting mode for repeated capture, with each segment queued for transcription.
+- Supported media URL import and queued processing.
+- Language auto-detection for supported models.
+
+## Architecture
+
+The canonical app is a Rust/Tauri v2 desktop application backed by the shared `dictator-core` crate. The original SwiftUI implementation remains in `Dictator/` as a reference during the migration. Current development, build, and release workflows target the Tauri app.
+
+## Installation
+
+No prebuilt release is currently published. Build the app from source using the steps below.
+
+## Requirements
+
+- macOS (Apple Silicon/ARM64)
+
+## Support
+
+If you encounter any issues or have questions, please:
+1. Check the existing issues in the repository
+2. Create a new issue with detailed information about your problem
+3. Include system information and logs when reporting bugs
+
+## Building locally
+
+Requirements: macOS on Apple Silicon, Node.js 22, pnpm 10.27.0, Rust, CMake, and libomp.
+
+```bash
+git clone https://github.com/michael-berardi/dictator.git
+cd dictator
+git submodule update --init --recursive
+brew install cmake libomp rust node@22
+npm install --global pnpm@10.27.0
+pnpm install --frozen-lockfile
+./run.sh build
+```
+
+The same build runs in `.github/workflows/build.yml`.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit pull requests or create issues for bugs and feature requests.
+
+## License
+
+Dictator is licensed under the MIT License. The root [LICENSE](LICENSE) preserves the OpenSuperWhisper notice and covers Implose Labs modifications.
+
+This project is based on [OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper) by Starmel.
+
+## Credits & Third-Party Software
+
+Dictator includes or depends on the following open-source projects:
+
+- [OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper) — MIT License
+- [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) — MIT License
+- [FluidAudio](https://github.com/FluidInference/FluidAudio) — used under its respective license
+- [autocorrect](https://github.com/huacnlee/autocorrect) — used under its respective license
+
+All third-party licenses and notices remain the property of their respective owners.
+
+## Privacy and models
+
+Transcription runs on-device. After the selected model is downloaded from Hugging Face, microphone recording and meeting capture can be transcribed offline. Media URL import still requires network access to download the source.
