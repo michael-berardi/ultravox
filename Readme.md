@@ -22,7 +22,25 @@ The canonical app is a Rust/Tauri v2 desktop application backed by the shared `d
 
 ## Installation
 
-No prebuilt release is currently published. Build the app from source using the steps below.
+Prebuilt Apple Silicon releases include both `Dictator.app` and the
+`dictator-control` CLI. The installer verifies the published SHA-256 checksum
+and macOS code signature before replacing anything.
+
+For an AI agent or a user account install (no compiler or `sudo` required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/michael-berardi/dictator/master/install.sh | bash
+```
+
+This installs the app to `~/Applications/Dictator.app` and the CLI to
+`~/.local/bin/dictator-control`. For a machine-wide install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/michael-berardi/dictator/master/install.sh | bash -s -- --system
+```
+
+Release assets are also available from
+[GitHub Releases](https://github.com/michael-berardi/dictator/releases).
 
 ## Requirements
 
@@ -49,7 +67,21 @@ pnpm install --frozen-lockfile
 ./run.sh build
 ```
 
-The same build runs in `.github/workflows/build.yml`.
+## Publishing a release
+
+Releases are built locally, Developer ID signed, notarized, checksum-staged,
+and published without GitHub Actions:
+
+```bash
+export APPLE_SIGNING_IDENTITY=\"Developer ID Application: …\"
+export APPLE_INSTALLER_SIGNING_IDENTITY=\"Developer ID Installer: …\"
+export NOTARYTOOL_PROFILE=\"your-keychain-profile\"
+pnpm release:publish
+```
+
+`pnpm release:package` only stages the `.zip`, `.pkg`, and checksum assets in
+`dist/release/`. Publishing additionally requires an authenticated GitHub CLI.
+
 
 ## Contributing
 
