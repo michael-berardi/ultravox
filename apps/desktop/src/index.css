@@ -1451,6 +1451,40 @@ body {
   background: var(--text-tertiary);
 }
 
+@media (min-width: 640px) and (min-height: 700px) {
+  .main {
+    gap: var(--space-5);
+    padding: var(--space-5) var(--space-6) var(--space-6);
+  }
+
+  .hero {
+    gap: var(--space-4);
+  }
+
+  .record-button {
+    flex-basis: 96px;
+    width: 96px;
+    min-width: 96px;
+    height: 96px;
+    min-height: 96px;
+  }
+
+  .record-button svg {
+    width: 31px;
+    height: 31px;
+  }
+
+  .status-label {
+    font-size: 13px;
+  }
+
+  .secondary-action {
+    min-height: 32px;
+    padding-inline: 13px;
+    font-size: 12px;
+  }
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *,
