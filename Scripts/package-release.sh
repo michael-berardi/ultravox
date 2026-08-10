@@ -47,6 +47,16 @@ if [[ ! -d "$APP_PATH" || ! -x "$CLI_PATH" ]]; then
   exit 1
 fi
 
+AUDIO_INPUT_ENTITLEMENT="$(
+  codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null \
+    | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null \
+    || true
+)"
+if [[ "$AUDIO_INPUT_ENTITLEMENT" != "true" ]]; then
+  echo "UltraVox.app is missing the required audio-input entitlement." >&2
+  exit 1
+fi
+
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
   codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$CLI_PATH"
 else

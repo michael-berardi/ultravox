@@ -48,6 +48,7 @@
     "category": "Productivity",
     "macOS": {
       "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist",
       "signingIdentity": "-"
     },
     "shortDescription": "Real-time audio transcription",
