@@ -72,6 +72,7 @@ else
 fi
 
 mv "$VERSIONED_PKG" "$STABLE_PKG"
+rm -f "${VERSIONED_PKG}.sha256"
 
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-release.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
