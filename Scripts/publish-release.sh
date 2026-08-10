@@ -6,7 +6,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${VERSION:-$(node -p "require('${ROOT_DIR}/apps/desktop/package.json').version")}"
 TAG="v${VERSION}"
-OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/dist/release}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/release}"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "GitHub CLI is required: https://cli.github.com/" >&2
@@ -39,15 +39,15 @@ if git -C "$ROOT_DIR" rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
   fi
 else
-  git -C "$ROOT_DIR" tag -a "$TAG" -m "Dictator $TAG"
+  git -C "$ROOT_DIR" tag -a "$TAG" -m "UltraVox $TAG"
 fi
 
 git -C "$ROOT_DIR" push origin HEAD
 git -C "$ROOT_DIR" push origin "$TAG"
-if gh release view "$TAG" --repo michael-berardi/dictator >/dev/null 2>&1; then
-  gh release upload "$TAG" "${ASSETS[@]}" --repo michael-berardi/dictator --clobber
+if gh release view "$TAG" --repo michael-berardi/ultravox >/dev/null 2>&1; then
+  gh release upload "$TAG" "${ASSETS[@]}" --repo michael-berardi/ultravox --clobber
 else
-  gh release create "$TAG" "${ASSETS[@]}" --repo michael-berardi/dictator \
-    --verify-tag --generate-notes --title "Dictator $TAG"
+  gh release create "$TAG" "${ASSETS[@]}" --repo michael-berardi/ultravox \
+    --verify-tag --generate-notes --title "UltraVox $TAG"
 fi
-printf 'Published https://github.com/michael-berardi/dictator/releases/tag/%s\n' "$TAG"
+printf 'Published https://github.com/michael-berardi/ultravox/releases/tag/%s\n' "$TAG"

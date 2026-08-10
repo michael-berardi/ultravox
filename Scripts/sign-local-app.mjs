@@ -4,12 +4,12 @@ import { resolve } from "node:path";
 
 if (process.platform !== "darwin") process.exit(0);
 
-const appPath = resolve("target/release/bundle/macos/Dictator.app");
+const appPath = resolve("target/release/bundle/macos/UltraVox.app");
 if (!existsSync(appPath)) {
-  throw new Error(`Dictator bundle not found: ${appPath}`);
+  throw new Error(`UltraVox bundle not found: ${appPath}`);
 }
 
-const requirement = '=designated => identifier "com.imploselabs.dictator"';
+const requirement = '=designated => identifier "com.imploselabs.ultravox"';
 const result = spawnSync(
   "codesign",
   ["--force", "--deep", "--sign", "-", "--requirements", requirement, appPath],

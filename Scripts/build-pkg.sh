@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PRODUCT_NAME="Dictator"
-BUNDLE_ID="com.imploselabs.dictator"
+PRODUCT_NAME="UltraVox"
+BUNDLE_ID="com.imploselabs.ultravox"
 VERSION="${VERSION:-$(node -p "require('${ROOT_DIR}/apps/desktop/package.json').version")}"
 ARCH="${PACKAGE_ARCH:-$(uname -m)}"
-OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/dist/installers}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/release}"
 PKG_PATH="${OUTPUT_DIR}/${PRODUCT_NAME}-${VERSION}-${ARCH}.pkg"
 
 if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
@@ -22,7 +22,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   if [[ -n "${TAURI_TARGET:-}" ]]; then
     BUILD_ARGS+=(--target "$TAURI_TARGET")
   fi
-  (cd "$ROOT_DIR" && CI=false pnpm --filter dictator-desktop tauri "${BUILD_ARGS[@]}")
+  (cd "$ROOT_DIR" && CI=false pnpm --filter ultravox-desktop tauri "${BUILD_ARGS[@]}")
 fi
 
 TARGET_SEGMENT="${TAURI_TARGET:+${TAURI_TARGET}/}release"

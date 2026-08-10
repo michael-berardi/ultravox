@@ -10,18 +10,18 @@ use tauri::{Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use uuid::Uuid;
 
-use dictator_core::{
+use ultravox_core::{
     AppConfig, AudioBackend, AudioDeviceInfo, AudioInputConfig, AudioRecording, DownloadManager,
     DownloadProgress, ModelCatalog, ModelDownload, RecordingRow,
 };
 
 #[cfg(target_os = "macos")]
-use dictator_macos_bridge as bridge;
+use ultravox_macos_bridge as bridge;
 
 use crate::state::{AppState, MeetingSession};
 
-pub const APP_NAME: &str = "Dictator";
-pub const APP_IDENTIFIER: &str = "com.imploselabs.dictator";
+pub const APP_NAME: &str = "UltraVox";
+pub const APP_IDENTIFIER: &str = "com.imploselabs.ultravox";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,7 +120,7 @@ pub async fn get_app_status(state: State<'_, AppState>) -> Result<AppStatus, Str
 }
 
 // These are no-op stubs in this first pass; implementations live in
-// crates/dictator-macos-bridge/native/DictatorMacOSBridge.
+// crates/ultravox-macos-bridge/native/UltraVoxMacOSBridge.
 
 #[derive(Debug, Serialize, Clone)]
 pub struct BridgeVersion {
@@ -367,9 +367,9 @@ pub async fn prepare_model(state: State<'_, AppState>, model_id: String) -> Resu
         .ok_or_else(|| "model not found".to_string())?;
 
     #[cfg(target_os = "macos")]
-    if model.family == dictator_core::ModelFamily::FluidAudio {
+    if model.family == ultravox_core::ModelFamily::FluidAudio {
         let version = match model.version {
-            dictator_core::ModelVersion::V3 => "v3",
+            ultravox_core::ModelVersion::V3 => "v3",
             _ => "v2",
         };
         let directory = state
@@ -424,9 +424,9 @@ pub fn is_model_downloaded(state: State<AppState>, model_id: String) -> Result<b
         .ok_or_else(|| "model not found".to_string())?;
 
     #[cfg(target_os = "macos")]
-    if model.family == dictator_core::ModelFamily::FluidAudio {
+    if model.family == ultravox_core::ModelFamily::FluidAudio {
         let version = match model.version {
-            dictator_core::ModelVersion::V3 => "v3",
+            ultravox_core::ModelVersion::V3 => "v3",
             _ => "v2",
         };
         let directory = state
@@ -453,7 +453,7 @@ pub fn get_model_progress(state: State<AppState>, model_id: String) -> Result<f6
         .get(&model_id)
         .ok_or_else(|| "model not found".to_string())?;
     let version = match model.version {
-        dictator_core::ModelVersion::V3 => "v3",
+        ultravox_core::ModelVersion::V3 => "v3",
         _ => "v2",
     };
     #[cfg(target_os = "macos")]
@@ -815,7 +815,7 @@ pub async fn start_meeting(state: State<'_, AppState>) -> Result<String, String>
                     .map_err(|error| format!("could not request microphone access: {error}"))?;
                 if !granted {
                     return Err(
-                        "Microphone access was not granted. Enable Dictator in System Settings > Privacy & Security > Microphone."
+                        "Microphone access was not granted. Enable UltraVox in System Settings > Privacy & Security > Microphone."
                             .to_string(),
                     );
                 }
@@ -823,7 +823,7 @@ pub async fn start_meeting(state: State<'_, AppState>) -> Result<String, String>
             bridge::MicrophoneAuthorizationStatus::Denied
             | bridge::MicrophoneAuthorizationStatus::Restricted => {
                 return Err(
-                    "Microphone access is disabled for Dictator. Enable it in System Settings > Privacy & Security > Microphone."
+                    "Microphone access is disabled for UltraVox. Enable it in System Settings > Privacy & Security > Microphone."
                         .to_string(),
                 );
             }

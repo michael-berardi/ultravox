@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use dictator_core::{AppConfig, AudioRecording, RecordingRow};
+use ultravox_core::{AppConfig, AudioRecording, RecordingRow};
 
 pub const RECORDING_STARTED: &str = "recording-started";
 pub const RECORDING_STOPPED: &str = "recording-stopped";

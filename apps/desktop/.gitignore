@@ -1,4 +1,4 @@
-# Dictator (Tauri v2 rewrite) — dependencies and frontend build tooling
+# UltraVox (Tauri v2 rewrite) — dependencies and frontend build tooling
 node_modules/
 dist/
 .vite/

@@ -14,7 +14,7 @@ use crate::state::AppState;
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
-const SOCKET_ENV: &str = "DICTATOR_VOICE_SOCKET";
+const SOCKET_ENV: &str = "ULTRAVOX_VOICE_SOCKET";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,7 +98,7 @@ struct VoiceIpcState {
 }
 
 fn app_socket_dir() -> PathBuf {
-    std::env::temp_dir().join("com.imploselabs.dictator")
+    std::env::temp_dir().join("com.imploselabs.ultravox")
 }
 
 fn socket_path_from_env(env: Option<&std::ffi::OsStr>) -> PathBuf {
@@ -121,7 +121,7 @@ fn owner_path() -> PathBuf {
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(error) = serve(app).await {
-            eprintln!("Dictator voice IPC stopped: {error}");
+            eprintln!("UltraVox voice IPC stopped: {error}");
         }
     });
 }
@@ -172,7 +172,7 @@ async fn serve(app: AppHandle) -> Result<(), String> {
         let service = service.clone();
         tokio::spawn(async move {
             if let Err(error) = serve_connection(stream, app, service).await {
-                eprintln!("Dictator voice IPC request failed: {error}");
+                eprintln!("UltraVox voice IPC request failed: {error}");
             }
         });
     }
@@ -264,9 +264,9 @@ async fn handle_request(
             {
                 let mut response = VoiceResponse::success(request_id, row.status.as_str());
                 response.recording_id = Some(recording_id);
-                if row.status == dictator_core::RecordingStatus::Completed {
+                if row.status == ultravox_core::RecordingStatus::Completed {
                     response.transcript = Some(row.transcription);
-                } else if row.status == dictator_core::RecordingStatus::Failed {
+                } else if row.status == ultravox_core::RecordingStatus::Failed {
                     response.ok = false;
                     response.error = Some(row.transcription);
                 }
@@ -300,7 +300,7 @@ async fn handle_request(
                     .get(id)
                     .map_err(|e| e.to_string())?
                 {
-                    if row.status == dictator_core::RecordingStatus::Cancelled {
+                    if row.status == ultravox_core::RecordingStatus::Cancelled {
                         let mut response = VoiceResponse::success(request_id, "cancelled");
                         response.recording_id = Some(recording_id);
                         return Ok(response);

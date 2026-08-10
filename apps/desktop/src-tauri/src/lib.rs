@@ -28,7 +28,7 @@ pub use commands::{
 };
 
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<Wry>, Box<dyn std::error::Error>> {
-    let open_i = MenuItem::with_id(app, "open", "Open Dictator", true, None::<&str>)?;
+    let open_i = MenuItem::with_id(app, "open", "Open UltraVox", true, None::<&str>)?;
     let settings_i = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -59,7 +59,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_tray_menu(app)?;
 
     let _tray = TrayIconBuilder::new()
-        .tooltip("Dictator")
+        .tooltip("UltraVox")
         .icon_as_template(true)
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -94,7 +94,7 @@ mod hotkey {
     use std::sync::OnceLock;
     use std::time::Duration;
 
-    use dictator_macos_bridge as bridge;
+    use ultravox_macos_bridge as bridge;
     use tauri::{AppHandle, Emitter, Listener, Manager};
 
     use crate::commands;
@@ -219,7 +219,7 @@ mod hotkey {
         if !bridge::is_accessibility_trusted(false) {
             let _ = bridge::is_accessibility_trusted(true);
             eprintln!(
-                "Dictator needs Accessibility access to place its indicator and insert transcriptions"
+                "UltraVox needs Accessibility access to place its indicator and insert transcriptions"
             );
         }
 
@@ -424,7 +424,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Dictator application");
+        .expect("error while building UltraVox application");
 
     app.run(|app, event| match event {
         tauri::RunEvent::ExitRequested { api, .. } if !SHUTTING_DOWN.load(Ordering::SeqCst) => {

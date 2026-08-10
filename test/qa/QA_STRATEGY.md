@@ -1,25 +1,25 @@
-# Dictator End-to-End QA Strategy
+# UltraVox End-to-End QA Strategy
 
-This document defines a non-disruptive QA sequence for Dictator's real transcription
+This document defines a non-disruptive QA sequence for UltraVox's real transcription
 path once the macOS bridge / transcription engine is implemented. It uses only the
-existing `dictator-control` CLI surface and proposes small, safe extensions for the
+existing `ultravox-control` CLI surface and proposes small, safe extensions for the
 post-implementation CLI. No core bridge, command, or Tauri command files are
 modified here; only isolated fixtures and docs live under `test/`.
 
 ## Environment isolation
 
-All QA commands use a temporary `DICTATOR_DATA_DIR` so they do not touch the real
+All QA commands use a temporary `ULTRAVOX_DATA_DIR` so they do not touch the real
 user settings, model cache, or recording history. Run from the repo root or use
 absolute paths for the fixture.
 
 ```bash
-export DICTATOR_DATA_DIR="$(mktemp -d)/dictator-qa"
-export DICTATOR_FIXTURE="$PWD/test/fixtures/jfk-short.wav"
-export DICTATOR_CONTROL="$PWD/target/debug/dictator-control"
+export ULTRAVOX_DATA_DIR="$(mktemp -d)/ultravox-qa"
+export ULTRAVOX_FIXTURE="$PWD/test/fixtures/jfk-short.wav"
+export ULTRAVOX_CONTROL="$PWD/target/debug/ultravox-control"
 ```
 
 > On a fresh checkout the binary may need to be rebuilt with
-> `cargo build -p dictator --features cli --bin dictator-control` first.
+> `cargo build -p ultravox --features cli --bin ultravox-control` first.
 
 ## Phase 1 — Core CLI health (no microphone, no UI, no paste)
 
@@ -29,19 +29,19 @@ permission prompts.
 ### 1.1 health
 
 ```bash
-$DICTATOR_CONTROL health
+$ULTRAVOX_CONTROL health
 ```
 
 **Pass criteria:**
 - Exit code `0`.
 - Output contains `health: ok`.
 - Default model is listed (currently `fluidaudio-en-v2`).
-- Config and history paths point inside `DICTATOR_DATA_DIR`.
+- Config and history paths point inside `ULTRAVOX_DATA_DIR`.
 
 ### 1.2 status
 
 ```bash
-$DICTATOR_CONTROL status
+$ULTRAVOX_CONTROL status
 ```
 
 **Pass criteria:**
@@ -52,7 +52,7 @@ $DICTATOR_CONTROL status
 ### 1.3 model-catalog
 
 ```bash
-$DICTATOR_CONTROL model-catalog
+$ULTRAVOX_CONTROL model-catalog
 ```
 
 **Pass criteria:**
@@ -63,7 +63,7 @@ $DICTATOR_CONTROL model-catalog
 ### 1.4 history-smoke
 
 ```bash
-$DICTATOR_CONTROL history-smoke
+$ULTRAVOX_CONTROL history-smoke
 ```
 
 **Pass criteria:**
@@ -74,7 +74,7 @@ $DICTATOR_CONTROL history-smoke
 ### 1.5 download-smoke
 
 ```bash
-$DICTATOR_CONTROL download-smoke
+$ULTRAVOX_CONTROL download-smoke
 ```
 
 **Pass criteria:**
@@ -85,7 +85,7 @@ $DICTATOR_CONTROL download-smoke
 ### 1.6 shortcut-config-smoke
 
 ```bash
-$DICTATOR_CONTROL shortcut-config-smoke
+$ULTRAVOX_CONTROL shortcut-config-smoke
 ```
 
 **Pass criteria:**
@@ -98,7 +98,7 @@ $DICTATOR_CONTROL shortcut-config-smoke
 ### 2.1 audio-devices
 
 ```bash
-$DICTATOR_CONTROL audio-devices
+$ULTRAVOX_CONTROL audio-devices
 ```
 
 **Pass criteria:**
@@ -120,7 +120,7 @@ large model or opening a real recording stream.
 ### 3.1 caret-bridge-dry-run
 
 ```bash
-$DICTATOR_CONTROL caret-bridge-dry-run
+$ULTRAVOX_CONTROL caret-bridge-dry-run
 ```
 
 **Pass criteria:**
@@ -132,7 +132,7 @@ $DICTATOR_CONTROL caret-bridge-dry-run
 ### 3.2 paste-bridge-dry-run
 
 ```bash
-$DICTATOR_CONTROL paste-bridge-dry-run
+$ULTRAVOX_CONTROL paste-bridge-dry-run
 ```
 
 **Pass criteria:**
@@ -140,7 +140,7 @@ $DICTATOR_CONTROL paste-bridge-dry-run
 - Output contains `paste-bridge-dry-run: ok`.
 - Result code is non-negative.
 
-**Risk / safety:** This command actually writes "Dictator paste bridge dry run" to
+**Risk / safety:** This command actually writes "UltraVox paste bridge dry run" to
 the general pasteboard and posts a `Cmd+V` event to the currently focused
 application. Run it with a harmless target window focused (e.g., a scratch text
 file) and be aware it will overwrite the user's clipboard. Do not run it during
@@ -153,7 +153,7 @@ The current CLI exposes two file-transcription checks backed by the macOS bridge
 ### 4.1 Bundled fixture smoke
 
 ```bash
-$DICTATOR_CONTROL transcribe-fixture-smoke
+$ULTRAVOX_CONTROL transcribe-fixture-smoke
 ```
 
 **Pass criteria:**
@@ -165,7 +165,7 @@ $DICTATOR_CONTROL transcribe-fixture-smoke
 ### 4.2 Arbitrary audio path
 
 ```bash
-$DICTATOR_CONTROL transcribe "$DICTATOR_FIXTURE"
+$ULTRAVOX_CONTROL transcribe "$ULTRAVOX_FIXTURE"
 ```
 
 Pass `v2` or `v3` as a second argument to select a supported transcription
@@ -181,11 +181,11 @@ version; the default is `v2`.
 Before trusting the fixture, verify it is valid WAV audio:
 
 ```bash
-file "$DICTATOR_FIXTURE"
+file "$ULTRAVOX_FIXTURE"
 python3 - <<'PY'
 import os
 import wave
-with wave.open(os.environ["DICTATOR_FIXTURE"], "rb") as w:
+with wave.open(os.environ["ULTRAVOX_FIXTURE"], "rb") as w:
     assert w.getnchannels() == 1
     assert w.getframerate() == 16000
     assert w.getsampwidth() == 2
@@ -203,17 +203,17 @@ non-disruptive, gate it behind a manual step.
 ### Proposed command after implementation
 
 ```bash
-$DICTATOR_CONTROL record-mic-smoke --duration 1 --output /tmp/dictator-qa-mic.wav
+$ULTRAVOX_CONTROL record-mic-smoke --duration 1 --output /tmp/ultravox-qa-mic.wav
 ```
 
 **Pass criteria:**
 - Exit code `0`.
 - Output contains `record-mic-smoke: ok`.
-- `/tmp/dictator-qa-mic.wav` exists and is non-empty.
+- `/tmp/ultravox-qa-mic.wav` exists and is non-empty.
 - WAV header is valid and duration is approximately 1 second.
 
 **Safety rules:**
-- Only run this on a machine where Dictator already has microphone permission, or
+- Only run this on a machine where UltraVox already has microphone permission, or
   where a human can approve the prompt.
 - Run it in a quiet environment so the captured file has actual audio energy.
 - Do not run it as part of an unattended CI job unless the runner has already
@@ -226,14 +226,14 @@ $DICTATOR_CONTROL record-mic-smoke --duration 1 --output /tmp/dictator-qa-mic.wa
 ### 6.1 Launch the built app without stealing foreground
 
 ```bash
-open -j -g /Applications/Dictator.app
+open -j -g /Applications/UltraVox.app
 ```
 
 Or, during development:
 
 ```bash
 # from the repo root, in a subshell so it does not block the terminal
-( pnpm desktop:dev & ) >/tmp/dictator-qa-dev.log 2>&1
+( pnpm desktop:dev & ) >/tmp/ultravox-qa-dev.log 2>&1
 ```
 
 ### 6.2 Verify the app is alive
@@ -241,8 +241,8 @@ Or, during development:
 Use the CLI or an invoke-based probe:
 
 ```bash
-$DICTATOR_CONTROL health
-$DICTATOR_CONTROL status
+$ULTRAVOX_CONTROL health
+$ULTRAVOX_CONTROL status
 ```
 
 **Pass criteria:**
@@ -252,9 +252,9 @@ $DICTATOR_CONTROL status
 ### 6.3 Shut down the app cleanly
 
 ```bash
-pkill -x "Dictator"
+pkill -x "UltraVox"
 # or, if launched via pnpm desktop:dev, kill the Tauri process group
-pkill -f "dictator-desktop"
+pkill -f "ultravox-desktop"
 ```
 
 ## Phase 7 — Full non-disruptive run checklist
@@ -263,21 +263,21 @@ Run in order, stopping at any failure:
 
 ```bash
 set -e
-export DICTATOR_DATA_DIR="$(mktemp -d)/dictator-qa"
-export DICTATOR_CONTROL="$PWD/target/debug/dictator-control"
-export DICTATOR_FIXTURE="$PWD/test/fixtures/jfk-short.wav"
+export ULTRAVOX_DATA_DIR="$(mktemp -d)/ultravox-qa"
+export ULTRAVOX_CONTROL="$PWD/target/debug/ultravox-control"
+export ULTRAVOX_FIXTURE="$PWD/test/fixtures/jfk-short.wav"
 
-$DICTATOR_CONTROL health
-$DICTATOR_CONTROL status
-$DICTATOR_CONTROL model-catalog
-$DICTATOR_CONTROL history-smoke
-$DICTATOR_CONTROL download-smoke
-$DICTATOR_CONTROL shortcut-config-smoke
-$DICTATOR_CONTROL audio-devices
-$DICTATOR_CONTROL caret-bridge-dry-run
-$DICTATOR_CONTROL transcribe-fixture-smoke
-$DICTATOR_CONTROL transcribe "$DICTATOR_FIXTURE"
-# $DICTATOR_CONTROL paste-bridge-dry-run   # only in a safe scratch window
+$ULTRAVOX_CONTROL health
+$ULTRAVOX_CONTROL status
+$ULTRAVOX_CONTROL model-catalog
+$ULTRAVOX_CONTROL history-smoke
+$ULTRAVOX_CONTROL download-smoke
+$ULTRAVOX_CONTROL shortcut-config-smoke
+$ULTRAVOX_CONTROL audio-devices
+$ULTRAVOX_CONTROL caret-bridge-dry-run
+$ULTRAVOX_CONTROL transcribe-fixture-smoke
+$ULTRAVOX_CONTROL transcribe "$ULTRAVOX_FIXTURE"
+# $ULTRAVOX_CONTROL paste-bridge-dry-run   # only in a safe scratch window
 ```
 
 ## Blockers and risks

@@ -413,7 +413,7 @@ function ModelSettings({ config, onChange }: SettingsSectionProps) {
           setCatalog(visibleCatalog);
           setDownloaded(statuses);
           if (visibleCatalog.length !== 2) {
-            setModelError("The model catalog is incomplete. Restart Dictator and try again.");
+            setModelError("The model catalog is incomplete. Restart UltraVox and try again.");
           }
         }
       } catch (loadError) {
@@ -520,7 +520,7 @@ function ModelSettings({ config, onChange }: SettingsSectionProps) {
     }
   };
 
-  const defaultModelsDirectory = "Dictator app data / models";
+  const defaultModelsDirectory = "UltraVox app data / models";
 
   return (
     <div className="settings-group" role="tabpanel" id="panel-model" aria-labelledby="tab-model">

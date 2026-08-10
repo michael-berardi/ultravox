@@ -1,12 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-PRODUCT_NAME="Dictator"
-BUNDLE_ID="com.imploselabs.dictator"
+PRODUCT_NAME="UltraVox"
+BUNDLE_ID="com.imploselabs.ultravox"
 PKG_PATH="${1:-}"
 INSTALL_MODE="${2:-}"
 if [[ -z "$PKG_PATH" || ! -f "$PKG_PATH" ]]; then
-  echo "Usage: $0 /path/to/Dictator.pkg [--install]" >&2
+  echo "Usage: $0 /path/to/UltraVox.pkg [--install]" >&2
   exit 1
 fi
 
@@ -29,14 +29,14 @@ if [[ "$INSTALL_MODE" == "--install" ]]; then
   sudo installer -pkg "$PKG_PATH" -target /
   INSTALLED_APP="/Applications/${PRODUCT_NAME}.app"
 elif [[ "$INSTALL_MODE" == "--install-user" ]]; then
-  echo "Per-user installation is disabled; Dictator must be installed in /Applications." >&2
+  echo "Per-user installation is disabled; UltraVox must be installed in /Applications." >&2
   exit 2
 else
   INSTALLED_APP=""
 fi
 
 if [[ -n "$INSTALLED_APP" ]]; then
-  test -x "${INSTALLED_APP}/Contents/MacOS/dictator"
+  test -x "${INSTALLED_APP}/Contents/MacOS/ultravox"
   INSTALLED_ID="$(codesign -dv "$INSTALLED_APP" 2>&1 | sed -n 's/^Identifier=//p')"
   test "$INSTALLED_ID" = "$BUNDLE_ID"
   codesign --verify --deep --strict --verbose=2 "$INSTALLED_APP"

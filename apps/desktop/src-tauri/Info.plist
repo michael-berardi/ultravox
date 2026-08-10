@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Dictator needs microphone access to transcribe your speech.</string>
+  <string>UltraVox needs microphone access to transcribe your speech.</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Dictator uses Screen &amp; System Audio Recording access to capture meeting audio from your Mac.</string>
+  <string>UltraVox uses Screen &amp; System Audio Recording access to capture meeting audio from your Mac.</string>
   <key>NSAccessibilityUsageDescription</key>
-  <string>Dictator uses accessibility access to integrate with system text fields.</string>
+  <string>UltraVox uses accessibility access to integrate with system text fields.</string>
 </dict>
 </plist>

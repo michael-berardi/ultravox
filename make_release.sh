@@ -45,7 +45,7 @@ else
 fi
 
 echo ""
-echo "🚀 Making release for Dictator v${NEW_VERSION}"
+echo "🚀 Making release for UltraVox v${NEW_VERSION}"
 echo "   Code signing identity: ${CODE_SIGN_IDENTITY}"
 if [[ -n "$GITHUB_TOKEN" ]]; then
     echo "   GitHub release: ✅ Enabled"
@@ -55,7 +55,7 @@ fi
 echo ""
 
 # Update canonical Tauri and workspace package versions.
-echo "📝 Updating Dictator version to ${NEW_VERSION}..."
+echo "📝 Updating UltraVox version to ${NEW_VERSION}..."
 python3 - "${NEW_VERSION}" <<'PY'
 import json
 import re
@@ -66,13 +66,13 @@ version = sys.argv[1]
 cargo_path = Path("apps/desktop/src-tauri/Cargo.toml")
 cargo_content = cargo_path.read_text()
 updated, count = re.subn(
-    r'(\[package\]\nname = "dictator"\nversion = ")[^"]+',
+    r'(\[package\]\nname = "ultravox"\nversion = ")[^"]+',
     rf'\g<1>{version}',
     cargo_content,
     count=1,
 )
 if count != 1:
-    raise SystemExit("could not update Dictator package version")
+    raise SystemExit("could not update UltraVox package version")
 cargo_path.write_text(updated)
 
 for package_path in (Path("package.json"), Path("apps/desktop/package.json")):
@@ -80,14 +80,14 @@ for package_path in (Path("package.json"), Path("apps/desktop/package.json")):
     package["version"] = version
     package_path.write_text(json.dumps(package, indent=2) + "\n")
 PY
-echo "✅ Updated Dictator package versions to ${NEW_VERSION}"
+echo "✅ Updated UltraVox package versions to ${NEW_VERSION}"
 
 # Clean previous release bundles
 echo "🧹 Cleaning previous release bundles..."
 rm -rf target/release/bundle
-rm -f Dictator.dmg
-rm -f Dictator.dmg.sha256
-rm -f Dictator.app.dSYM.zip
+rm -f UltraVox.dmg
+rm -f UltraVox.dmg.sha256
+rm -f UltraVox.app.dSYM.zip
 
 # Use the existing notarize_app.sh script to build, sign, and notarize
 echo "🔨 Building, signing and notarizing with notarize_app.sh..."
@@ -106,7 +106,7 @@ fi
 
 echo "✅ Build and notarization successful!"
 
-DMG_PATH="./Dictator.dmg"
+DMG_PATH="./UltraVox.dmg"
 
 # Verify DMG exists
 if [[ ! -f "$DMG_PATH" ]]; then
@@ -115,8 +115,8 @@ if [[ ! -f "$DMG_PATH" ]]; then
 fi
 
 # Find and prepare Rust dSYM output when enabled.
-DSYM_PATH="./target/release/dictator.dSYM"
-DSYM_ZIP_PATH="./Dictator.app.dSYM.zip"
+DSYM_PATH="./target/release/ultravox.dSYM"
+DSYM_ZIP_PATH="./UltraVox.app.dSYM.zip"
 
 if [[ -d "$DSYM_PATH" ]]; then
     echo "📦 Creating dSYM zip..."
@@ -160,12 +160,12 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer ${GITHUB_TOKEN}" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        https://api.github.com/repos/michael-berardi/dictator/releases \
+        https://api.github.com/repos/michael-berardi/ultravox/releases \
         -d '{
             "tag_name": "'${NEW_VERSION}'",
             "target_commitish": "master",
             "name": "Release '${NEW_VERSION}'",
-            "body": "## Dictator '${NEW_VERSION}'\n\nReal-time audio transcription for macOS using Whisper.\n\n## Installation\n\n### Homebrew (Recommended)\n```bash\nbrew update\nbrew install dictator\n```\n\n### Manual Installation\n1. Download the `Dictator.dmg` file below\n2. Open the DMG and drag Dictator to Applications\n3. Launch the app and grant necessary permissions\n\n## Requirements\n- macOS 14.0 (Sonoma) or later\n- Apple Silicon (ARM64) Mac",
+            "body": "## UltraVox '${NEW_VERSION}'\n\nReal-time audio transcription for macOS using Whisper.\n\n## Installation\n\n### Homebrew (Recommended)\n```bash\nbrew update\nbrew install ultravox\n```\n\n### Manual Installation\n1. Download the `UltraVox.dmg` file below\n2. Open the DMG and drag UltraVox to Applications\n3. Launch the app and grant necessary permissions\n\n## Requirements\n- macOS 14.0 (Sonoma) or later\n- Apple Silicon (ARM64) Mac",
             "draft": false,
             "prerelease": false,
             "generate_release_notes": false
@@ -189,7 +189,7 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
         -H "Authorization: Bearer ${GITHUB_TOKEN}" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         -H "Content-Type: application/octet-stream" \
-        "https://uploads.github.com/repos/michael-berardi/dictator/releases/${RELEASE_ID}/assets?name=Dictator.dmg" \
+        "https://uploads.github.com/repos/michael-berardi/ultravox/releases/${RELEASE_ID}/assets?name=UltraVox.dmg" \
         --data-binary @"${DMG_PATH}")
     
     # Check if upload was successful
@@ -216,7 +216,7 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             -H "Content-Type: application/zip" \
-            "https://uploads.github.com/repos/michael-berardi/dictator/releases/${RELEASE_ID}/assets?name=Dictator.app.dSYM.zip" \
+            "https://uploads.github.com/repos/michael-berardi/ultravox/releases/${RELEASE_ID}/assets?name=UltraVox.app.dSYM.zip" \
             --data-binary @"${DSYM_ZIP_PATH}")
         
         # Check dSYM upload
@@ -235,45 +235,45 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
     
     echo "✅ DMG uploaded successfully!"
     echo "🎉 GitHub release is complete!"
-    echo "🔗 Release URL: https://github.com/michael-berardi/dictator/releases/tag/${NEW_VERSION}"
+    echo "🔗 Release URL: https://github.com/michael-berardi/ultravox/releases/tag/${NEW_VERSION}"
 else
     echo "⚠️ Skipping GitHub release creation (no token provided)"
     echo "📋 Manual steps needed:"
     echo "1. Create GitHub release at:"
-    echo "   https://github.com/michael-berardi/dictator/releases/new?tag=${NEW_VERSION}"
-    echo "2. Upload the DMG file: Dictator.dmg"
+    echo "   https://github.com/michael-berardi/ultravox/releases/new?tag=${NEW_VERSION}"
+    echo "2. Upload the DMG file: UltraVox.dmg"
 fi
 
 echo ""
 echo "🎉 Release ${NEW_VERSION} is ready!"
 echo ""
 echo "📁 Files created:"
-echo "   - Dictator.dmg"
-echo "   - Dictator.dmg.sha256"
+echo "   - UltraVox.dmg"
+echo "   - UltraVox.dmg.sha256"
 if [[ -f "$DSYM_ZIP_PATH" ]]; then
-    echo "   - Dictator.app.dSYM.zip"
+    echo "   - UltraVox.app.dSYM.zip"
 fi
 echo ""
 echo "🍺 Homebrew cask update:"
 echo "-----"
 cat << EOF
-cask "dictator" do
+cask "ultravox" do
   version "${NEW_VERSION}"
   sha256 "${SHA256}"
 
-  url "https://github.com/michael-berardi/dictator/releases/download/#{version}/Dictator.dmg"
-  name "Dictator"
+  url "https://github.com/michael-berardi/ultravox/releases/download/#{version}/UltraVox.dmg"
+  name "UltraVox"
   desc "Private on-device dictation and transcription for macOS"
-  homepage "https://github.com/michael-berardi/dictator"
+  homepage "https://github.com/michael-berardi/ultravox"
 
   depends_on macos: ">= :sonoma"
   depends_on arch: :arm64
 
-  app "Dictator.app"
+  app "UltraVox.app"
 
   zap trash: [
-    "~/Library/Application Scripts/com.imploselabs.dictator",
-    "~/Library/Application Support/com.imploselabs.dictator",
+    "~/Library/Application Scripts/com.imploselabs.ultravox",
+    "~/Library/Application Support/com.imploselabs.ultravox",
   ]
 end
 EOF

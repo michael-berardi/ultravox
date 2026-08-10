@@ -135,7 +135,7 @@ export function MainWindow({
       setModelError(
         visibleCatalog.length === 2
           ? null
-          : "The model catalog is incomplete. Restart Dictator and try again.",
+          : "The model catalog is incomplete. Restart UltraVox and try again.",
       );
     } catch (catalogError) {
       setModelError(`Could not load model status: ${String(catalogError)}`);
@@ -641,20 +641,11 @@ export function MainWindow({
               onClick={() => void toggleRecording()}
               aria-label={recording ? "Stop recording" : "Start recording"}
               disabled={!recording && (meeting || modelStatusLoading || status !== "ready" || transcribing)}
-              aria-describedby="recording-hint"
+              aria-describedby={activityError ? "activity-error" : undefined}
             >
               {recording ? <StopIcon /> : <MicIcon />}
             </button>
 
-            <p className="hint" id="recording-hint">
-              {recording
-                ? "Speak naturally, then press stop."
-                : meeting
-                  ? "Capturing this Mac and your microphone. Press stop when the meeting ends."
-                  : transcribing
-                    ? "Your recording is being transcribed on this Mac."
-                    : "Press the microphone or use your recording shortcut."}
-            </p>
             <div className="secondary-actions">
               <button
                 type="button"
@@ -687,7 +678,7 @@ export function MainWindow({
                 Transcribe URL
               </button>
             </div>
-            {activityError && <p className="activity-error" role="alert">{activityError}</p>}
+            {activityError && <p id="activity-error" className="activity-error" role="alert">{activityError}</p>}
           </section>
         )}
 
@@ -862,7 +853,7 @@ export function MainWindow({
               </button>
             </div>
             <p className="compact-modal-copy">
-              Paste a YouTube link or direct media URL. Dictator downloads only the audio, then uses your selected on-device model.
+              Paste a YouTube link or direct media URL. UltraVox downloads only the audio, then uses your selected on-device model.
             </p>
             <form
               className="url-import-form"

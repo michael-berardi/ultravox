@@ -9,13 +9,13 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::{AbortHandle, JoinHandle};
 use uuid::Uuid;
 
-use dictator_core::{
+use ultravox_core::{
     AppConfig, AudioBackend, AudioInputConfig, AudioRecording, ConfigManager, CpalAudioBackend,
     DownloadManager, ModelCatalog, RecordingHistory, RecordingRow, RecordingStatus,
 };
 
 #[cfg(target_os = "macos")]
-use dictator_macos_bridge as bridge;
+use ultravox_macos_bridge as bridge;
 
 use crate::events::{
     IndicatorHidePayload, IndicatorShowPayload, RecordingAddedPayload, RecordingDeletedPayload,
@@ -250,7 +250,7 @@ impl AppState {
     }
 
     /// Emit `recording-added`.
-    pub fn emit_recording_added(&self, row: &dictator_core::RecordingRow) -> Result<(), String> {
+    pub fn emit_recording_added(&self, row: &ultravox_core::RecordingRow) -> Result<(), String> {
         self.app
             .emit(RECORDING_ADDED, RecordingAddedPayload::from(row))
             .map_err(|e| e.to_string())
@@ -357,7 +357,7 @@ impl AppState {
                     .map_err(|error| format!("could not request microphone access: {error}"))?;
                 if !granted {
                     return Err(
-                        "Microphone access was not granted. Enable Dictator in System Settings > Privacy & Security > Microphone."
+                        "Microphone access was not granted. Enable UltraVox in System Settings > Privacy & Security > Microphone."
                             .to_string(),
                     );
                 }
@@ -365,7 +365,7 @@ impl AppState {
             bridge::MicrophoneAuthorizationStatus::Denied
             | bridge::MicrophoneAuthorizationStatus::Restricted => {
                 return Err(
-                    "Microphone access is disabled for Dictator. Enable it in System Settings > Privacy & Security > Microphone."
+                    "Microphone access is disabled for UltraVox. Enable it in System Settings > Privacy & Security > Microphone."
                         .to_string(),
                 );
             }
@@ -995,9 +995,9 @@ impl AppState {
                 #[cfg(target_os = "macos")]
                 if auto_paste && allow_auto_paste && bridge::paste_text(&final_text) <= 0 {
                     let message = if bridge::is_accessibility_trusted(false) {
-                        "transcription completed, but Dictator could not insert it into the original text field; select the field and try again"
+                        "transcription completed, but UltraVox could not insert it into the original text field; select the field and try again"
                     } else {
-                        "transcription completed, but Dictator could not insert it; enable Dictator in System Settings > Privacy & Security > Accessibility"
+                        "transcription completed, but UltraVox could not insert it; enable UltraVox in System Settings > Privacy & Security > Accessibility"
                     };
                     bridge::set_indicator_state("paste-failed");
                     tokio::time::sleep(Duration::from_millis(1_600)).await;

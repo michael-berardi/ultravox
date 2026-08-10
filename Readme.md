@@ -1,10 +1,10 @@
-# Dictator
+# UltraVox
 
-Dictator is a private, on-device macOS transcription app for microphone recordings, meeting capture, and supported media URLs.
+UltraVox is a private, on-device macOS transcription app for microphone recordings, meeting capture, and supported media URLs.
 
 <p align="center">
-  <img src="docs/image.png" alt="Dictator ready to record" width="360" />
-  <img src="docs/image_indicator.png" alt="Dictator on-device model settings" width="360" />
+  <img src="docs/image.png" alt="UltraVox ready to record" width="360" />
+  <img src="docs/image_indicator.png" alt="UltraVox on-device model settings" width="360" />
 </p>
 
 ## Features
@@ -18,29 +18,29 @@ Dictator is a private, on-device macOS transcription app for microphone recordin
 
 ## Architecture
 
-The canonical app is a Rust/Tauri v2 desktop application backed by the shared `dictator-core` crate. The original SwiftUI implementation remains in `Dictator/` as a reference during the migration. Current development, build, and release workflows target the Tauri app.
+The canonical app is a Rust/Tauri v2 desktop application backed by the shared `ultravox-core` crate. The original SwiftUI implementation remains in `UltraVox/` as a reference during the migration. Current development, build, and release workflows target the Tauri app.
 
 ## Installation
 
-Prebuilt Apple Silicon releases include both `Dictator.app` and the
-`dictator-control` CLI. The installer verifies the published SHA-256 checksum
+Prebuilt Apple Silicon releases include both `UltraVox.app` and the
+`ultravox-control` CLI. The installer verifies the published SHA-256 checksum
 and macOS code signature before replacing anything.
 
 For an AI agent or a user account install (no compiler or `sudo` required):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/michael-berardi/dictator/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/michael-berardi/ultravox/master/install.sh | bash
 ```
 
-This installs the app to `~/Applications/Dictator.app` and the CLI to
-`~/.local/bin/dictator-control`. For a machine-wide install:
+This installs the app to `~/Applications/UltraVox.app` and the CLI to
+`~/.local/bin/ultravox-control`. For a machine-wide install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/michael-berardi/dictator/master/install.sh | bash -s -- --system
+curl -fsSL https://raw.githubusercontent.com/michael-berardi/ultravox/master/install.sh | bash -s -- --system
 ```
 
 Release assets are also available from
-[GitHub Releases](https://github.com/michael-berardi/dictator/releases).
+[GitHub Releases](https://github.com/michael-berardi/ultravox/releases).
 
 ## Requirements
 
@@ -58,8 +58,8 @@ If you encounter any issues or have questions, please:
 Requirements: macOS on Apple Silicon, Node.js 22, pnpm 10.27.0, Rust, CMake, and libomp.
 
 ```bash
-git clone https://github.com/michael-berardi/dictator.git
-cd dictator
+git clone https://github.com/michael-berardi/ultravox.git
+cd ultravox
 git submodule update --init --recursive
 brew install cmake libomp rust node@22
 npm install --global pnpm@10.27.0
@@ -80,7 +80,7 @@ pnpm release:publish
 ```
 
 `pnpm release:package` only stages the `.zip`, `.pkg`, and checksum assets in
-`dist/release/`. Publishing additionally requires an authenticated GitHub CLI.
+`release/`. Publishing additionally requires an authenticated GitHub CLI.
 
 
 ## Contributing
@@ -89,13 +89,13 @@ Contributions are welcome! Please feel free to submit pull requests or create is
 
 ## License
 
-Dictator is licensed under the MIT License. The root [LICENSE](LICENSE) preserves the OpenSuperWhisper notice and covers Implose Labs modifications.
+UltraVox is licensed under the MIT License. The root [LICENSE](LICENSE) preserves the OpenSuperWhisper notice and covers Implose Labs modifications.
 
 This project is based on [OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper) by Starmel.
 
 ## Credits & Third-Party Software
 
-Dictator includes or depends on the following open-source projects:
+UltraVox includes or depends on the following open-source projects:
 
 - [OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper) — MIT License
 - [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) — MIT License

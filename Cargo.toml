@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "crates/dictator-core", "crates/dictator-macos-bridge"]
+members = ["apps/desktop/src-tauri", "crates/ultravox-core", "crates/ultravox-macos-bridge"]
 resolver = "2"
 
 [profile.release]

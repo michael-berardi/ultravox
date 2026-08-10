@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_NAME="Dictator"
-APP_PATH="./target/release/bundle/macos/Dictator.app"
-ZIP_PATH="./target/release/bundle/macos/Dictator.zip"
-DMG_PATH="./Dictator.dmg"
+APP_NAME="UltraVox"
+APP_PATH="./target/release/bundle/macos/UltraVox.app"
+ZIP_PATH="./target/release/bundle/macos/UltraVox.zip"
+DMG_PATH="./UltraVox.dmg"
 KEYCHAIN_PROFILE="${NOTARYTOOL_PROFILE:-}"
 CODE_SIGN_IDENTITY="${1:-}"
 
@@ -22,7 +22,7 @@ if [[ -z "${KEYCHAIN_PROFILE}" ]]; then
 fi
 
 echo "Building canonical Tauri app..."
-CI=false pnpm --filter dictator-desktop tauri build --bundles app
+CI=false pnpm --filter ultravox-desktop tauri build --bundles app
 
 if [[ ! -d "${APP_PATH}" ]]; then
   echo "Tauri bundle not found: ${APP_PATH}" >&2

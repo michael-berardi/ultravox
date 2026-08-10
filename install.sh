@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PRODUCT="Dictator"
-REPOSITORY="michael-berardi/dictator"
-ARCHIVE="Dictator-macos-arm64.zip"
+PRODUCT="UltraVox"
+REPOSITORY="michael-berardi/ultravox"
+ARCHIVE="UltraVox-macos-arm64.zip"
 INSTALL_SCOPE="user"
 LAUNCH=1
 INSTALL_DIR="${INSTALL_DIR:-}"
@@ -13,13 +13,13 @@ ALLOW_UNNOTARIZED="${ALLOW_UNNOTARIZED:-0}"
 
 usage() {
   cat <<'USAGE'
-Install the latest prebuilt Dictator app and dictator-control CLI.
+Install the latest prebuilt UltraVox app and ultravox-control CLI.
 
 Usage: install.sh [--user|--system] [--no-launch]
 
   --user       Install to ~/Applications and ~/.local/bin (default; no sudo)
   --system     Install to /Applications and /usr/local/bin (uses sudo)
-  --no-launch  Do not open Dictator after installation
+  --no-launch  Do not open UltraVox after installation
 
 Environment overrides: DOWNLOAD_BASE, INSTALL_DIR, BIN_DIR, ALLOW_UNNOTARIZED=1.
 USAGE
@@ -37,11 +37,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "Dictator supports macOS only." >&2
+  echo "UltraVox supports macOS only." >&2
   exit 1
 fi
 if [[ "$(uname -m)" != "arm64" ]]; then
-  echo "Dictator currently supports Apple Silicon (arm64) only." >&2
+  echo "UltraVox currently supports Apple Silicon (arm64) only." >&2
   exit 1
 fi
 
@@ -53,7 +53,7 @@ else
   BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
 fi
 
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dictator-install.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-install.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE}"
 CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
@@ -66,20 +66,19 @@ curl --fail --location --silent --show-error "${DOWNLOAD_BASE}/${ARCHIVE}.sha256
 )
 
 ditto -x -k "$ARCHIVE_PATH" "$TMP_DIR/unpacked"
-PAYLOAD_DIR="${TMP_DIR}/unpacked/Dictator-macos-arm64"
+PAYLOAD_DIR="${TMP_DIR}/unpacked/UltraVox-macos-arm64"
 APP_SOURCE="${PAYLOAD_DIR}/${PRODUCT}.app"
-CLI_SOURCE="${PAYLOAD_DIR}/bin/dictator-control"
+CLI_SOURCE="${PAYLOAD_DIR}/bin/ultravox-control"
 
 if [[ ! -d "$APP_SOURCE" || ! -x "$CLI_SOURCE" ]]; then
-  echo "Release archive is missing Dictator.app or dictator-control." >&2
+  echo "Release archive is missing UltraVox.app or ultravox-control." >&2
   exit 1
 fi
 codesign --verify --deep --strict "$APP_SOURCE"
 codesign --verify --strict "$CLI_SOURCE"
-if { ! spctl --assess --type execute "$APP_SOURCE" >/dev/null 2>&1 \
-  || ! spctl --assess --type execute "$CLI_SOURCE" >/dev/null 2>&1; } \
+if ! spctl --assess --type execute "$APP_SOURCE" >/dev/null 2>&1 \
   && [[ "$ALLOW_UNNOTARIZED" != "1" ]]; then
-  echo "Dictator is not accepted by Gatekeeper; refusing installation." >&2
+  echo "UltraVox is not accepted by Gatekeeper; refusing installation." >&2
   exit 1
 fi
 "$CLI_SOURCE" health >/dev/null
@@ -87,7 +86,7 @@ fi
 APP_TARGET="${INSTALL_DIR}/${PRODUCT}.app"
 APP_STAGE="${INSTALL_DIR}/.${PRODUCT}.app.install.$$"
 APP_BACKUP="${INSTALL_DIR}/.${PRODUCT}.app.previous.$$"
-CLI_TARGET="${BIN_DIR}/dictator-control"
+CLI_TARGET="${BIN_DIR}/ultravox-control"
 if [[ "$INSTALL_SCOPE" == "system" ]]; then
   sudo mkdir -p "$INSTALL_DIR" "$BIN_DIR"
   sudo rm -rf "$APP_STAGE" "$APP_BACKUP"
@@ -121,11 +120,11 @@ fi
 codesign --verify --deep --strict "$APP_TARGET"
 "$CLI_TARGET" health >/dev/null
 
-echo "Installed Dictator to $APP_TARGET"
-echo "Installed dictator-control to $CLI_TARGET"
+echo "Installed UltraVox to $APP_TARGET"
+echo "Installed ultravox-control to $CLI_TARGET"
 case ":${PATH}:" in
   *":${BIN_DIR}:"*) ;;
-  *) echo "Add ${BIN_DIR} to PATH to call dictator-control directly." ;;
+  *) echo "Add ${BIN_DIR} to PATH to call ultravox-control directly." ;;
 esac
 if [[ "$LAUNCH" == "1" ]]; then
   open "$APP_TARGET"

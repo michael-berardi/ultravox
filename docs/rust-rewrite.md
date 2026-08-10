@@ -1,15 +1,15 @@
-# Dictator Rust / Tauri Rewrite
+# UltraVox Rust / Tauri Rewrite
 
-This directory contains the scaffold for the Rust-first, Tauri v2 desktop rewrite of Dictator. The existing SwiftUI macOS implementation in the repository root and `Dictator/` is preserved as the verified baseline and remains the production app until the rewrite is complete.
+This directory contains the scaffold for the Rust-first, Tauri v2 desktop rewrite of UltraVox. The existing SwiftUI macOS implementation in the repository root and `UltraVox/` is preserved as the verified baseline and remains the production app until the rewrite is complete.
 
 ## Repository Layout
 
 ```
 /                                 # Repository root
-├── Dictator/             # SwiftUI baseline app source
-├── Dictator.xcodeproj/   # Xcode project for the Swift baseline
-├── DictatorTests/        # Swift baseline unit tests
-├── DictatorUITests/      # Swift baseline UI tests
+├── UltraVox/             # SwiftUI baseline app source
+├── UltraVox.xcodeproj/   # Xcode project for the Swift baseline
+├── UltraVoxTests/        # Swift baseline unit tests
+├── UltraVoxUITests/      # Swift baseline UI tests
 ├── apps/
 │   └── desktop/                  # Rust / Tauri v2 rewrite
 │       ├── src/                  # React + TypeScript frontend
@@ -22,7 +22,7 @@ This directory contains the scaffold for the Rust-first, Tauri v2 desktop rewrit
 
 ## Why a Separate `apps/desktop` Directory?
 
-- **Preserves the Swift baseline.** Nothing in `Dictator/`, `Dictator.xcodeproj/`, or the existing Xcode tests is deleted or modified.
+- **Preserves the Swift baseline.** Nothing in `UltraVox/`, `UltraVox.xcodeproj/`, or the existing Xcode tests is deleted or modified.
 - **Allows parallel work.** The Swift app can still be built, signed, and released while the Rust rewrite progresses.
 - **Matches the long-term architecture.** The Readme states that the core transcription pipeline will eventually be extracted into Rust and wrapped in a Tauri shell. `apps/desktop` is that shell.
 - **Keeps tooling isolated.** `pnpm`/`npm`, `cargo`, and `vite` live under `apps/desktop` without polluting the Swift build.
@@ -32,9 +32,9 @@ This directory contains the scaffold for the Rust-first, Tauri v2 desktop rewrit
 The scaffold is intentionally a thin, buildable shell. It includes:
 
 - Tauri v2 with a React + TypeScript frontend.
-- Product name `Dictator` and bundle identifier `com.imploselabs.dictator`.
+- Product name `UltraVox` and bundle identifier `com.imploselabs.ultravox`.
 - A macOS menu-bar-capable tray icon configuration.
-- A main Dictator window (450 × 650 px, matching the Swift baseline dimensions).
+- A main UltraVox window (450 × 650 px, matching the Swift baseline dimensions).
 - A settings view with placeholders for the four baseline tabs:
   - **Shortcut** — recording trigger and shortcut capture.
   - **Model** — model choice (English default, Multilingual optional) and download directory.

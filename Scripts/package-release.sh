@@ -4,14 +4,14 @@ set -euo pipefail
 export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PRODUCT="Dictator"
+PRODUCT="UltraVox"
 VERSION="${VERSION:-$(node -p "require('${ROOT_DIR}/apps/desktop/package.json').version")}"
 ARCH="${PACKAGE_ARCH:-$(uname -m)}"
-OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/dist/release}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/release}"
 PAYLOAD_NAME="${PRODUCT}-macos-${ARCH}"
 ARCHIVE_NAME="${PAYLOAD_NAME}.zip"
 APP_PATH="${APP_PATH:-${ROOT_DIR}/target/release/bundle/macos/${PRODUCT}.app}"
-CLI_PATH="${CLI_PATH:-${ROOT_DIR}/target/release/dictator-control}"
+CLI_PATH="${CLI_PATH:-${ROOT_DIR}/target/release/ultravox-control}"
 BUILD_QUEUE="${BUILD_QUEUE:-/Users/libertydesignstudio/dev/scripts/build_queue.py}"
 ALLOW_ADHOC="${ALLOW_ADHOC:-0}"
 
@@ -39,11 +39,11 @@ run_heavy() {
 }
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  run_heavy env CI=false pnpm --filter dictator-desktop tauri build --bundles app
-  run_heavy cargo build --release -p dictator --features cli --bin dictator-control
+  run_heavy env CI=false pnpm --filter ultravox-desktop tauri build --bundles app
+  run_heavy cargo build --release -p ultravox --features cli --bin ultravox-control
 fi
 if [[ ! -d "$APP_PATH" || ! -x "$CLI_PATH" ]]; then
-  echo "Missing Dictator.app or dictator-control release binary." >&2
+  echo "Missing UltraVox.app or ultravox-control release binary." >&2
   exit 1
 fi
 
@@ -73,12 +73,12 @@ fi
 
 mv "$VERSIONED_PKG" "$STABLE_PKG"
 
-STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dictator-release.XXXXXX")"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-release.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 PAYLOAD_DIR="${STAGING_DIR}/${PAYLOAD_NAME}"
 mkdir -p "${PAYLOAD_DIR}/bin"
 ditto "$APP_PATH" "${PAYLOAD_DIR}/${PRODUCT}.app"
-install -m 0755 "$CLI_PATH" "${PAYLOAD_DIR}/bin/dictator-control"
+install -m 0755 "$CLI_PATH" "${PAYLOAD_DIR}/bin/ultravox-control"
 
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
@@ -90,7 +90,7 @@ if [[ "$SIGNED_RELEASE" == "1" ]]; then
 fi
 
 codesign --verify --deep --strict "${PAYLOAD_DIR}/${PRODUCT}.app"
-codesign --verify --strict "${PAYLOAD_DIR}/bin/dictator-control"
+codesign --verify --strict "${PAYLOAD_DIR}/bin/ultravox-control"
 (
   cd "$OUTPUT_DIR"
   shasum -a 256 "$(basename "$STABLE_PKG")" > "$(basename "$STABLE_PKG").sha256"
