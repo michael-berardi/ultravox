@@ -16,7 +16,7 @@ import {
 } from "../ipc";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
-type TabId = "shortcut" | "model" | "transcription";
+type TabId = "shortcut" | "model" | "transcription" | "privacy";
 
 interface SettingsPageProps {
   initialConfig: AppConfig;
@@ -153,6 +153,7 @@ export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
         <TabButton id="shortcut" label="Shortcut" active={activeTab} onClick={setActiveTab} />
         <TabButton id="model" label="Model" active={activeTab} onClick={setActiveTab} />
         <TabButton id="transcription" label="Transcription" active={activeTab} onClick={setActiveTab} />
+        <TabButton id="privacy" label="Privacy" active={activeTab} onClick={setActiveTab} />
       </div>
       {error && <div className="settings-error" role="alert">{error}</div>}
 
@@ -160,6 +161,7 @@ export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
         {activeTab === "shortcut" && <ShortcutSettings config={cfg} onChange={updateShortcut} />}
         {activeTab === "model" && <ModelSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "transcription" && <TranscriptionSettings config={cfg} onChange={updateConfig} />}
+        {activeTab === "privacy" && <PrivacySettings config={cfg} onChange={updateConfig} />}
       </div>
 
     </div>
@@ -701,6 +703,26 @@ function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
           description="Insert a space before pasting so text does not run together."
           checked={config.add_space_after_sentence}
           onChange={(checked) => onChange({ add_space_after_sentence: checked })}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PrivacySettings({ config, onChange }: SettingsSectionProps) {
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-privacy" aria-labelledby="tab-privacy">
+      <div className="settings-card">
+        <h3>Meeting detection</h3>
+        <p className="description">
+          UltraVox can receive a privacy-preserving signal from the connected browser extension.
+          It uses only a local opaque meeting key; URLs, titles, participants, and meeting content never leave your device.
+        </p>
+        <ToggleRow
+          label="Show meeting reminders"
+          description="Ask before recording when a Google Meet or Zoom meeting is detected. Recording never starts automatically."
+          checked={config.meeting_detection_enabled}
+          onChange={(checked) => onChange({ meeting_detection_enabled: checked })}
         />
       </div>
     </div>

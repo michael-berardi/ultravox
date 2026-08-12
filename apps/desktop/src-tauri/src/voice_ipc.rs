@@ -1,21 +1,23 @@
 use std::collections::HashSet;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::events::MeetingDetection;
+use crate::state::{AppState, MeetingDetectionRegistration, MEETING_DETECTION_TTL};
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_ID_BYTES: usize = 128;
 const SOCKET_ENV: &str = "ULTRAVOX_VOICE_SOCKET";
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VoiceRequest {
@@ -44,6 +46,9 @@ enum VoiceCommand {
     Cancel {
         #[serde(rename = "recordingId", alias = "recording_id")]
         recording_id: String,
+    },
+    MeetingDetected {
+        detection: MeetingDetection,
     },
 }
 
@@ -113,6 +118,32 @@ pub fn socket_path() -> PathBuf {
 fn is_managed_socket_dir(path: &std::path::Path) -> bool {
     path == app_socket_dir()
 }
+fn ensure_managed_socket_dir(path: &std::path::Path) -> Result<(), String> {
+    if !is_managed_socket_dir(path) {
+        return Ok(());
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("managed voice socket directory is not a real directory".to_string());
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err("managed voice socket directory has the wrong owner".to_string());
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err("managed voice socket directory permissions are too broad".to_string());
+    }
+    Ok(())
+}
+fn ensure_managed_entry(path: &std::path::Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err("managed voice IPC path has unsafe ownership or permissions".to_string());
+    }
+    Ok(())
+}
 
 fn owner_path() -> PathBuf {
     socket_path().with_extension("pid")
@@ -144,12 +175,22 @@ async fn serve(app: AppHandle) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "voice socket path has no parent directory".to_string())?;
+    let managed_dir = is_managed_socket_dir(parent);
+    let parent_existed = std::fs::symlink_metadata(parent).is_ok();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    if is_managed_socket_dir(parent) {
+    if managed_dir && !parent_existed {
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
-
+    if managed_dir {
+        ensure_managed_socket_dir(parent)?;
+    }
+    if managed_dir && path.exists() {
+        ensure_managed_entry(&path)?;
+    }
+    if managed_dir && owner_path().exists() {
+        ensure_managed_entry(&owner_path())?;
+    }
     if path.exists() {
         if UnixStream::connect(&path).await.is_ok() {
             return Err(format!("voice socket already active at {}", path.display()));
@@ -157,7 +198,6 @@ async fn serve(app: AppHandle) -> Result<(), String> {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_file(owner_path());
     }
-
     let listener = UnixListener::bind(&path).map_err(|e| e.to_string())?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
@@ -165,7 +205,6 @@ async fn serve(app: AppHandle) -> Result<(), String> {
     std::fs::set_permissions(owner_path(), std::fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
     let service = Arc::new(VoiceIpcState::default());
-
     loop {
         let (stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let app = app.clone();
@@ -177,22 +216,42 @@ async fn serve(app: AppHandle) -> Result<(), String> {
         });
     }
 }
+fn verify_peer_uid(stream: &UnixStream) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut effective_uid = 0;
+        let mut effective_gid = 0;
+        let result =
+            unsafe { libc::getpeereid(stream.as_raw_fd(), &mut effective_uid, &mut effective_gid) };
+        if result != 0 || effective_uid != unsafe { libc::geteuid() } {
+            return Err("voice IPC rejected a client owned by another user".to_string());
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let credentials = stream.peer_cred().map_err(|e| e.to_string())?;
+        if credentials.uid() != unsafe { libc::geteuid() } {
+            return Err("voice IPC rejected a client owned by another user".to_string());
+        }
+        Ok(())
+    }
+}
 
 async fn serve_connection(
     mut stream: UnixStream,
     app: AppHandle,
     service: Arc<VoiceIpcState>,
 ) -> Result<(), String> {
-    let credentials = stream.peer_cred().map_err(|e| e.to_string())?;
-    if credentials.uid() != unsafe { libc::geteuid() } {
-        return Err("voice IPC rejected a client owned by another user".to_string());
-    }
+    verify_peer_uid(&stream)?;
 
     let request: VoiceRequest = read_json_frame(&mut stream)
         .await
         .map_err(|e| e.to_string())?;
     let request_id = request.request_id.clone();
-    let response = if request.version != PROTOCOL_VERSION {
+    let response = if !valid_request_id(&request.request_id) {
+        VoiceResponse::failure(String::new(), "invalid request id")
+    } else if request.version != PROTOCOL_VERSION {
         VoiceResponse::failure(
             request_id,
             format!(
@@ -211,6 +270,12 @@ async fn serve_connection(
         .map_err(|e| e.to_string())
 }
 
+fn valid_request_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_REQUEST_ID_BYTES
+        && value.bytes().all(|byte| !byte.is_ascii_control())
+}
+
 async fn handle_request(
     app: AppHandle,
     service: Arc<VoiceIpcState>,
@@ -221,6 +286,45 @@ async fn handle_request(
 
     match request.command {
         VoiceCommand::Health => Ok(VoiceResponse::success(request_id, "ready")),
+        VoiceCommand::MeetingDetected { detection } => {
+            let _transition = state.activity_transition.lock().await;
+            let detection_id = detection.detection_id.clone();
+            let rollback_detection = detection.clone();
+            let (registration, payload) = state.register_meeting_detection(detection).await?;
+            if registration == MeetingDetectionRegistration::Prompt {
+                let payload = payload.ok_or_else(|| {
+                    "meeting detection prompt payload was not created".to_string()
+                })?;
+                if let Err(error) = crate::show_meeting_reminder(&app) {
+                    state.rollback_meeting_detection(&rollback_detection).await;
+                    return Err(error);
+                }
+                if let Err(error) = state
+                    .app
+                    .emit(crate::events::MEETING_DETECTION_PENDING, &payload)
+                {
+                    state.rollback_meeting_detection(&rollback_detection).await;
+                    crate::close_meeting_reminder(&app);
+                    return Err(error.to_string());
+                }
+                let expiry_app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(MEETING_DETECTION_TTL).await;
+                    let expiry_state = expiry_app.state::<AppState>();
+                    if expiry_state.expire_meeting_detection(&detection_id).await {
+                        crate::close_meeting_reminder(&expiry_app);
+                    }
+                });
+            }
+            let response_state = match registration {
+                MeetingDetectionRegistration::Prompt => "prompted",
+                MeetingDetectionRegistration::Disabled => "disabled",
+                MeetingDetectionRegistration::Active => "active",
+                MeetingDetectionRegistration::Duplicate => "duplicate",
+                MeetingDetectionRegistration::Pending => "pending",
+            };
+            Ok(VoiceResponse::success(request_id, response_state))
+        }
         VoiceCommand::Start { recording_id } => {
             let id = parse_recording_id(&recording_id)?;
             let recording_id = state.begin_with_id(id).await?;
@@ -536,7 +640,7 @@ mod tests {
             "version": PROTOCOL_VERSION,
             "requestId": "req-2",
             "command": "start",
-            "recording_id": id
+            "recordingId": id
         });
         let first_decoded: VoiceRequest = serde_json::from_value(first).unwrap();
         let second_decoded: VoiceRequest = serde_json::from_value(second).unwrap();
@@ -547,6 +651,41 @@ mod tests {
             }
             _ => panic!("expected two Start commands"),
         }
+    }
+
+    #[test]
+    fn meeting_detection_request_round_trips_without_legacy_changes() {
+        let request = serde_json::json!({
+            "version": PROTOCOL_VERSION,
+            "requestId": "meeting-request",
+            "command": "meeting_detected",
+            "detection": {
+                "version": 1,
+                "detection_id": "det-1",
+                "provider": "google_meet",
+                "meeting_key": "a".repeat(64),
+                "detected_at_ms": 1_000
+            }
+        });
+        let parsed: VoiceRequest = serde_json::from_value(request).unwrap();
+        assert!(matches!(
+            parsed.command,
+            VoiceCommand::MeetingDetected { .. }
+        ));
+    }
+
+    #[test]
+    fn request_id_bounds_are_enforced() {
+        assert!(valid_request_id("ok"));
+        assert!(!valid_request_id(""));
+        assert!(!valid_request_id(&"x".repeat(MAX_REQUEST_ID_BYTES + 1)));
+    }
+    #[test]
+    fn invalid_request_id_response_uses_bounded_sentinel() {
+        let response = VoiceResponse::failure(String::new(), "invalid request id");
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["requestId"], "");
+        assert!(serde_json::to_vec(&value).unwrap().len() < MAX_FRAME_BYTES);
     }
 
     #[test]

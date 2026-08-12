@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for the UltraVox desktop app",
-  "windows": ["main"],
+  "windows": ["main", "meeting-reminder"],
   "permissions": [
     "core:default",
     "shell:default",
@@ -32,6 +32,8 @@
     "stop_recording",
     "import_url",
     "start_meeting",
+    "respond_meeting_detection",
+    "get_pending_meeting_detection",
     "stop_meeting",
     "get_transcription_status",
     "retry_transcription",

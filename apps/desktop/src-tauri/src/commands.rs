@@ -785,6 +785,10 @@ pub(crate) async fn discard_active_meeting(state: &AppState) {
 
 #[tauri::command]
 pub async fn start_meeting(state: State<'_, AppState>) -> Result<String, String> {
+    start_meeting_impl(state.inner()).await
+}
+
+pub(crate) async fn start_meeting_impl(state: &AppState) -> Result<String, String> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = state;
@@ -800,13 +804,15 @@ pub async fn start_meeting(state: State<'_, AppState>) -> Result<String, String>
         if state.active_transcription.lock().await.is_some() {
             return Err("wait for the active transcription to finish".to_string());
         }
-        if let Some(session) = state.meeting_session.lock().await.as_ref() {
+        let existing_meeting = state.meeting_session.lock().await.clone();
+        if let Some(session) = existing_meeting {
             if session.stopping {
                 return Err("meeting mode is stopping".to_string());
             }
+            state.clear_pending_meeting_detection().await;
+            crate::close_meeting_reminder(&state.app);
             return Ok(session.id.to_string());
         }
-
         match bridge::microphone_authorization_status() {
             bridge::MicrophoneAuthorizationStatus::Authorized => {}
             bridge::MicrophoneAuthorizationStatus::NotDetermined => {
@@ -854,7 +860,87 @@ pub async fn start_meeting(state: State<'_, AppState>) -> Result<String, String>
         });
         drop(meeting);
         state.emit_meeting_state_changed(true)?;
+        state.clear_pending_meeting_detection().await;
+        crate::close_meeting_reminder(&state.app);
         Ok(id.to_string())
+    }
+}
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingDetectionDecision {
+    Accept,
+    Decline,
+}
+
+#[tauri::command]
+pub async fn respond_meeting_detection(
+    state: State<'_, AppState>,
+    detection_id: String,
+    decision: MeetingDetectionDecision,
+) -> Result<String, String> {
+    match decision {
+        MeetingDetectionDecision::Accept => match state.claim_meeting_accept(&detection_id).await {
+            crate::state::MeetingAcceptClaim::Claimed(detection, expires_at) => {
+                match start_meeting_impl(state.inner()).await {
+                    Ok(recording_id) => {
+                        state
+                            .complete_meeting_accept(&detection.detection_id, recording_id.clone())
+                            .await;
+                        crate::close_meeting_reminder(&state.app);
+                        Ok(recording_id)
+                    }
+                    Err(error) => {
+                        let _transition = state.activity_transition.lock().await;
+                        let restore_allowed = state.session.lock().await.is_none()
+                            && state.active_transcription.lock().await.is_none()
+                            && state.meeting_session.lock().await.is_none();
+                        let restored = state
+                            .release_meeting_accept(
+                                detection,
+                                expires_at,
+                                restore_allowed,
+                                error.clone(),
+                            )
+                            .await;
+                        if !restored && state.pending_meeting_detection().await.is_none() {
+                            crate::close_meeting_reminder(&state.app);
+                        }
+                        Err(error)
+                    }
+                }
+            }
+            crate::state::MeetingAcceptClaim::AlreadyAccepted(recording_id) => {
+                crate::close_meeting_reminder(&state.app);
+                Ok(recording_id)
+            }
+            crate::state::MeetingAcceptClaim::AlreadyDeclined => {
+                Err("meeting detection was declined".to_string())
+            }
+            crate::state::MeetingAcceptClaim::InFlight => {
+                Err("meeting decision is already in progress".to_string())
+            }
+            crate::state::MeetingAcceptClaim::Failed(error) => Err(error),
+        },
+        MeetingDetectionDecision::Decline => {
+            let result = state.decline_meeting_detection(&detection_id).await;
+            match result {
+                crate::state::MeetingDeclineResult::Declined
+                | crate::state::MeetingDeclineResult::AlreadyDeclined => {
+                    crate::close_meeting_reminder(&state.app);
+                    Ok("declined".to_string())
+                }
+                crate::state::MeetingDeclineResult::AlreadyAccepted => {
+                    crate::close_meeting_reminder(&state.app);
+                    Ok("already_accepted".to_string())
+                }
+                crate::state::MeetingDeclineResult::InFlight => {
+                    Err("meeting decision is already in progress".to_string())
+                }
+                crate::state::MeetingDeclineResult::NotFound => {
+                    Err("meeting detection is not pending".to_string())
+                }
+            }
+        }
     }
 }
 
@@ -909,6 +995,12 @@ pub async fn stop_meeting(state: State<'_, AppState>) -> Result<AudioRecording, 
         queued?;
         Ok(recording)
     }
+}
+#[tauri::command]
+pub async fn get_pending_meeting_detection(
+    state: State<'_, AppState>,
+) -> Result<Option<crate::events::MeetingDetectionPendingPayload>, String> {
+    Ok(state.pending_meeting_detection().await)
 }
 
 #[tauri::command]

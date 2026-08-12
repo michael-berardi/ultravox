@@ -14,6 +14,83 @@ pub const RECORDING_ADDED: &str = "recording-added";
 pub const RECORDING_DELETED: &str = "recording-deleted";
 pub const MEETING_STATE_CHANGED: &str = "meeting-state-changed";
 pub const URL_IMPORT_PROGRESS: &str = "url-import-progress";
+pub const MEETING_DETECTION_PENDING: &str = "meeting-detection-pending";
+pub const MEETING_DETECTION_TTL_MS: u64 = 10 * 60 * 1_000;
+pub const MAX_MEETING_DETECTION_ID_BYTES: usize = 128;
+pub const MAX_MEETING_DETECTION_SKEW_MS: u64 = 5 * 60 * 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingProvider {
+    GoogleMeet,
+    Zoom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeetingDetection {
+    pub version: u8,
+    pub detection_id: String,
+    pub provider: MeetingProvider,
+    pub meeting_key: String,
+    pub detected_at_ms: u64,
+}
+
+impl MeetingDetection {
+    pub fn validate(&self, now_ms: u64) -> Result<(), String> {
+        if self.version != 1 {
+            return Err(format!(
+                "unsupported meeting detection version {}; expected 1",
+                self.version
+            ));
+        }
+        if self.detection_id.is_empty()
+            || self.detection_id.len() > MAX_MEETING_DETECTION_ID_BYTES
+            || !self
+                .detection_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+        {
+            return Err("meeting detection id is invalid".to_string());
+        }
+        if self.meeting_key.len() != 64
+            || !self
+                .meeting_key
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("meeting key must be 64 lowercase hexadecimal characters".to_string());
+        }
+        let skew = now_ms.abs_diff(self.detected_at_ms);
+        if skew > MAX_MEETING_DETECTION_SKEW_MS {
+            return Err(
+                "meeting detection timestamp is outside the allowed clock skew".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MeetingDetectionPendingPayload {
+    pub version: u8,
+    pub detection_id: String,
+    pub provider: MeetingProvider,
+    pub detected_at_ms: u64,
+    pub expires_at_ms: u64,
+}
+
+impl MeetingDetectionPendingPayload {
+    pub fn from_detection(detection: &MeetingDetection, expires_at_ms: u64) -> Self {
+        Self {
+            version: detection.version,
+            detection_id: detection.detection_id.clone(),
+            provider: detection.provider,
+            detected_at_ms: detection.detected_at_ms,
+            expires_at_ms,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordingStartedPayload {
@@ -162,5 +239,44 @@ impl From<uuid::Uuid> for RecordingDeletedPayload {
 impl From<&uuid::Uuid> for RecordingDeletedPayload {
     fn from(id: &uuid::Uuid) -> Self {
         Self { id: id.to_string() }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detection() -> MeetingDetection {
+        MeetingDetection {
+            version: 1,
+            detection_id: "det-1".to_string(),
+            provider: MeetingProvider::GoogleMeet,
+            meeting_key: "a".repeat(64),
+            detected_at_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn detection_validation_accepts_opaque_key_and_rejects_raw_shapes() {
+        assert!(detection().validate(1_000).is_ok());
+        let mut invalid = detection();
+        invalid.meeting_key = "A".repeat(64);
+        assert!(invalid.validate(1_000).is_err());
+        invalid = detection();
+        invalid.detection_id = "meeting id".to_string();
+        assert!(invalid.validate(1_000).is_err());
+    }
+
+    #[test]
+    fn detection_validation_rejects_clock_skew() {
+        assert!(detection()
+            .validate(MAX_MEETING_DETECTION_SKEW_MS + 1_001)
+            .is_err());
+    }
+
+    #[test]
+    fn pending_payload_does_not_expose_meeting_key() {
+        let payload = MeetingDetectionPendingPayload::from_detection(&detection(), 2_000);
+        let value = serde_json::to_value(payload).unwrap();
+        assert!(value.get("meeting_key").is_none());
     }
 }

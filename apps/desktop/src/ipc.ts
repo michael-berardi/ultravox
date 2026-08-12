@@ -26,6 +26,7 @@ export type AppConfig = {
   key_combination: string;
   hold_to_record: boolean;
   meeting_key_combination: string;
+  meeting_detection_enabled: boolean;
   add_space_after_sentence: boolean;
   auto_copy_to_clipboard: boolean;
   auto_paste_transcription: boolean;
@@ -226,6 +227,16 @@ export type RecordingDeletedPayload = {
   id: string;
 };
 
+export type MeetingProvider = "google_meet" | "zoom";
+
+export type MeetingDetectionPendingPayload = {
+  version: 1;
+  detection_id: string;
+  provider: MeetingProvider;
+  detected_at_ms: number;
+  expires_at_ms: number;
+};
+
 export type EventName =
   | "recording-started"
   | "recording-stopped"
@@ -233,10 +244,9 @@ export type EventName =
   | "transcription-completed"
   | "shortcut-triggered"
   | "indicator-show"
-  | "indicator-hide"
-  | "settings-changed"
   | "recording-added"
   | "meeting-state-changed"
+  | "meeting-detection-pending"
   | "url-import-progress"
   | "recording-deleted";
 
@@ -328,6 +338,20 @@ export async function startMeeting(): Promise<string> {
   return await invoke<string>("start_meeting");
 }
 
+export type MeetingDetectionDecision = "accept" | "decline";
+
+export async function respondMeetingDetection(
+  detectionId: string,
+  decision: MeetingDetectionDecision,
+): Promise<string> {
+  return await invoke<string>("respond_meeting_detection", {
+    detectionId,
+    decision,
+  });
+}
+export async function getPendingMeetingDetection(): Promise<MeetingDetectionPendingPayload | null> {
+  return await invoke<MeetingDetectionPendingPayload | null>("get_pending_meeting_detection");
+}
 export async function stopMeeting(): Promise<AudioRecording> {
   return await invoke<AudioRecording>("stop_meeting");
 }
@@ -463,6 +487,15 @@ export async function onSettingsChanged(
 ): Promise<UnlistenFn> {
   return listen<SettingsChangedPayload>("settings-changed", (event: Event<SettingsChangedPayload>) =>
     handler(event.payload)
+  );
+}
+
+export async function onMeetingDetectionPending(
+  handler: (payload: MeetingDetectionPendingPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<MeetingDetectionPendingPayload>(
+    "meeting-detection-pending",
+    (event: Event<MeetingDetectionPendingPayload>) => handler(event.payload),
   );
 }
 

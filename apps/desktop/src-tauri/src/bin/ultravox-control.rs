@@ -9,10 +9,10 @@ use ultravox_core::{
     ModelDownload, RecordingHistory, RecordingRow, RecordingStatus, ShortcutSettings,
 };
 
-#[cfg(target_os = "macos")]
-use ultravox_macos_bridge as bridge;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixStream};
+#[cfg(target_os = "macos")]
+use ultravox_macos_bridge as bridge;
 use uuid::Uuid;
 
 const USAGE: &str = "Usage: ultravox-control [health|status|model-catalog|history-smoke|download-smoke|shortcut-config-smoke|audio-devices|live-record-smoke|recording-id-db-smoke|paste-bridge-dry-run|caret-bridge-dry-run|transcribe-fixture-smoke|transcribe <path> [v2|v3]|voice-health|voice-start|voice-stop <id>|voice-status <id>|voice-cancel <id>]";

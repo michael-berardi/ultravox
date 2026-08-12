@@ -64,6 +64,8 @@ pub struct AppConfig {
     pub hold_to_record: bool,
     #[serde(default = "default_meeting_key_combination")]
     pub meeting_key_combination: String,
+    #[serde(default = "default_meeting_detection_enabled")]
+    pub meeting_detection_enabled: bool,
     pub add_space_after_sentence: bool,
     pub auto_copy_to_clipboard: bool,
     pub auto_paste_transcription: bool,
@@ -79,6 +81,9 @@ fn default_model_language() -> String {
 
 fn default_meeting_key_combination() -> String {
     "Control+M".to_string()
+}
+fn default_meeting_detection_enabled() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -104,6 +109,7 @@ impl Default for AppConfig {
             key_combination: "Option+Backtick".to_string(),
             hold_to_record: false,
             meeting_key_combination: default_meeting_key_combination(),
+            meeting_detection_enabled: default_meeting_detection_enabled(),
             add_space_after_sentence: true,
             auto_copy_to_clipboard: true,
             auto_paste_transcription: true,
@@ -185,6 +191,7 @@ mod tests {
         assert_eq!(cfg.whisper_language.0, "en");
         assert_eq!(cfg.key_combination, "Option+Backtick");
         assert_eq!(cfg.meeting_key_combination, "Control+M");
+        assert!(cfg.meeting_detection_enabled);
         assert!(!cfg.onboarding_completed);
         assert_eq!(cfg.model_language, "english");
     }
@@ -212,6 +219,7 @@ mod tests {
             key_combination: "Control+J".to_string(),
             hold_to_record: true,
             meeting_key_combination: "Option+M".to_string(),
+            meeting_detection_enabled: false,
             add_space_after_sentence: false,
             auto_copy_to_clipboard: false,
             auto_paste_transcription: false,
@@ -221,5 +229,39 @@ mod tests {
         let serialized = toml::to_string(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn old_settings_without_meeting_detection_use_safe_default() {
+        let parsed: AppConfig = toml::from_str(
+            r#"
+selected_engine = "whisper"
+fluid_audio_model_version = "v2"
+selected_whisper_model_path = "/tmp/whisper.bin"
+whisper_language = "en"
+translate_to_english = false
+suppress_blank_audio = true
+show_timestamps = false
+temperature = 0.0
+no_speech_threshold = 0.6
+initial_prompt = ""
+use_beam_search = false
+beam_size = 5
+debug_mode = false
+play_sound_on_record_start = true
+use_asian_autocorrect = false
+modifier_only_hotkey = "none"
+key_combination = "Option+Backtick"
+hold_to_record = false
+meeting_key_combination = "Control+M"
+add_space_after_sentence = true
+auto_copy_to_clipboard = true
+auto_paste_transcription = true
+onboarding_completed = false
+model_language = "english"
+"#,
+        )
+        .unwrap();
+        assert!(parsed.meeting_detection_enabled);
     }
 }

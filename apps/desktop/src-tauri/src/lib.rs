@@ -18,13 +18,14 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 pub use commands::{
     bridge_version, copy_to_clipboard, delete_recording, export_recording, get_app_info,
     get_app_status, get_audio_devices, get_audio_input_config, get_caret_position,
-    get_download_progress, get_downloads, get_model_catalog, get_recording, get_settings,
-    get_shortcut_settings, hide_indicator, import_url, is_model_downloaded, list_recordings,
-    paste_text, prepare_model, retry_transcription, set_settings, set_shortcut_settings,
-    show_indicator, start_download, start_key_combination_hotkey, start_meeting,
-    start_modifier_hotkey, start_recording, stop_key_combination_hotkey, stop_meeting,
-    stop_modifier_hotkey, stop_recording, transcribe_file, update_recording, AppInfo, AppStatus,
-    BridgeVersion, CaretPosition, TranscriptionResult,
+    get_download_progress, get_downloads, get_model_catalog, get_pending_meeting_detection,
+    get_recording, get_settings, get_shortcut_settings, hide_indicator, import_url,
+    is_model_downloaded, list_recordings, paste_text, prepare_model, respond_meeting_detection,
+    retry_transcription, search_recordings, set_settings, set_shortcut_settings, show_indicator,
+    start_download, start_key_combination_hotkey, start_meeting, start_modifier_hotkey,
+    start_recording, stop_key_combination_hotkey, stop_meeting, stop_modifier_hotkey,
+    stop_recording, transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion,
+    CaretPosition, TranscriptionResult,
 };
 
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<Wry>, Box<dyn std::error::Error>> {
@@ -39,6 +40,20 @@ fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+pub(crate) fn show_meeting_reminder(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("meeting-reminder")
+        .ok_or_else(|| "meeting reminder window is unavailable".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    let _ = window.unminimize();
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+pub(crate) fn close_meeting_reminder(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("meeting-reminder") {
+        let _ = window.hide();
     }
 }
 
@@ -94,8 +109,8 @@ mod hotkey {
     use std::sync::OnceLock;
     use std::time::Duration;
 
-    use ultravox_macos_bridge as bridge;
     use tauri::{AppHandle, Emitter, Listener, Manager};
+    use ultravox_macos_bridge as bridge;
 
     use crate::commands;
     use crate::events::{
@@ -369,10 +384,10 @@ pub fn run() {
             show_indicator,
             hide_indicator,
             transcribe_file,
+            prepare_model,
             get_settings,
             set_settings,
             get_model_catalog,
-            prepare_model,
             get_download_progress,
             get_downloads,
             start_download,
@@ -390,6 +405,8 @@ pub fn run() {
             stop_recording,
             start_meeting,
             stop_meeting,
+            respond_meeting_detection,
+            get_pending_meeting_detection,
             get_transcription_status,
             retry_transcription,
             get_shortcut_settings,

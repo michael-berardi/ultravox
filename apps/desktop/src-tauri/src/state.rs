@@ -1,8 +1,8 @@
+use chrono::Utc;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
-
-use chrono::Utc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as AsyncMutex;
@@ -18,10 +18,11 @@ use ultravox_core::{
 use ultravox_macos_bridge as bridge;
 
 use crate::events::{
-    IndicatorHidePayload, IndicatorShowPayload, RecordingAddedPayload, RecordingDeletedPayload,
-    RecordingStartedPayload, RecordingStoppedPayload, SettingsChangedPayload,
-    TranscriptionCompletedPayload, TranscriptionProgressPayload, UrlImportProgressPayload,
-    INDICATOR_HIDE, INDICATOR_SHOW, MEETING_STATE_CHANGED, RECORDING_ADDED, RECORDING_DELETED,
+    IndicatorHidePayload, IndicatorShowPayload, MeetingDetection, MeetingDetectionPendingPayload,
+    RecordingAddedPayload, RecordingDeletedPayload, RecordingStartedPayload,
+    RecordingStoppedPayload, SettingsChangedPayload, TranscriptionCompletedPayload,
+    TranscriptionProgressPayload, UrlImportProgressPayload, INDICATOR_HIDE, INDICATOR_SHOW,
+    MEETING_DETECTION_TTL_MS, MEETING_STATE_CHANGED, RECORDING_ADDED, RECORDING_DELETED,
     RECORDING_STARTED, RECORDING_STOPPED, SETTINGS_CHANGED, SHORTCUT_TRIGGERED,
     TRANSCRIPTION_COMPLETED, TRANSCRIPTION_PROGRESS, URL_IMPORT_PROGRESS,
 };
@@ -48,6 +49,55 @@ pub struct MeetingSession {
 pub struct ActiveTranscription {
     pub recording_id: Uuid,
     pub abort_handle: AbortHandle,
+}
+
+pub(crate) const MEETING_DETECTION_TTL: Duration = Duration::from_millis(MEETING_DETECTION_TTL_MS);
+const MAX_MEETING_DETECTION_ENTRIES: usize = 256;
+
+#[derive(Debug, Clone)]
+struct PendingMeetingDetection {
+    detection: MeetingDetection,
+    expires_at: Instant,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MeetingDecision {
+    InFlight,
+    Accepted(String),
+    Declined,
+}
+
+#[derive(Debug, Default)]
+struct MeetingDetectionState {
+    seen: HashMap<(crate::events::MeetingProvider, String), Instant>,
+    decisions: HashMap<String, (Instant, MeetingDecision)>,
+    pending: Option<PendingMeetingDetection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeetingDetectionRegistration {
+    Prompt,
+    Disabled,
+    Active,
+    Duplicate,
+    Pending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeetingDeclineResult {
+    Declined,
+    AlreadyDeclined,
+    AlreadyAccepted,
+    InFlight,
+    NotFound,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum MeetingAcceptClaim {
+    Claimed(MeetingDetection, Instant),
+    AlreadyAccepted(String),
+    AlreadyDeclined,
+    InFlight,
+    Failed(String),
 }
 
 #[cfg(target_os = "macos")]
@@ -78,6 +128,7 @@ pub struct AppState {
     pub session: AsyncMutex<Option<RecordingSession>>,
     pub active_transcription: AsyncMutex<Option<ActiveTranscription>>,
     pub meeting_session: AsyncMutex<Option<MeetingSession>>,
+    meeting_detection: AsyncMutex<MeetingDetectionState>,
     pub audio: AsyncMutex<CpalAudioBackend>,
 }
 
@@ -148,6 +199,7 @@ impl AppState {
             session: AsyncMutex::new(None),
             active_transcription: AsyncMutex::new(None),
             meeting_session: AsyncMutex::new(None),
+            meeting_detection: AsyncMutex::new(MeetingDetectionState::default()),
             audio: AsyncMutex::new(CpalAudioBackend::new()),
         })
     }
@@ -269,6 +321,268 @@ impl AppState {
             .map_err(|e| e.to_string())
     }
 
+    fn prune_meeting_detection_state(state: &mut MeetingDetectionState, now: Instant) -> bool {
+        state
+            .seen
+            .retain(|_, seen_at| now.duration_since(*seen_at) <= MEETING_DETECTION_TTL);
+        state
+            .decisions
+            .retain(|_, (decided_at, _)| now.duration_since(*decided_at) <= MEETING_DETECTION_TTL);
+        while state.decisions.len() > MAX_MEETING_DETECTION_ENTRIES {
+            let Some((oldest_id, _)) = state
+                .decisions
+                .iter()
+                .min_by_key(|(_, (decided_at, _))| *decided_at)
+            else {
+                break;
+            };
+            let oldest_id = oldest_id.clone();
+            state.decisions.remove(&oldest_id);
+        }
+        let expired = state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.expires_at <= now);
+        if expired {
+            if let Some(pending) = state.pending.take() {
+                state.decisions.insert(
+                    pending.detection.detection_id,
+                    (now, MeetingDecision::Declined),
+                );
+            }
+        }
+        expired
+    }
+
+    fn release_meeting_accept_state(
+        state: &mut MeetingDetectionState,
+        detection: MeetingDetection,
+        expires_at: Instant,
+        restore_allowed: bool,
+        now: Instant,
+    ) -> bool {
+        let detection_id = detection.detection_id.clone();
+        let restored = restore_allowed && expires_at > now && state.pending.is_none();
+        if restored {
+            state.pending = Some(PendingMeetingDetection {
+                detection,
+                expires_at,
+            });
+            state.decisions.remove(&detection_id);
+        } else {
+            state
+                .decisions
+                .insert(detection_id, (now, MeetingDecision::Declined));
+        }
+        restored
+    }
+    pub(crate) async fn register_meeting_detection(
+        &self,
+        detection: MeetingDetection,
+    ) -> Result<
+        (
+            MeetingDetectionRegistration,
+            Option<MeetingDetectionPendingPayload>,
+        ),
+        String,
+    > {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis() as u64;
+        detection.validate(now_ms)?;
+
+        let enabled = self
+            .config
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get()
+            .meeting_detection_enabled;
+        if !enabled {
+            return Ok((MeetingDetectionRegistration::Disabled, None));
+        }
+        if self.meeting_session.lock().await.is_some() || self.session.lock().await.is_some() {
+            return Ok((MeetingDetectionRegistration::Active, None));
+        }
+
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.detection.detection_id == detection.detection_id)
+            || state.decisions.contains_key(&detection.detection_id)
+        {
+            return Ok((MeetingDetectionRegistration::Duplicate, None));
+        }
+        let key = (detection.provider, detection.meeting_key.clone());
+        if state.seen.contains_key(&key) {
+            return Ok((MeetingDetectionRegistration::Duplicate, None));
+        }
+        if state.seen.len() >= MAX_MEETING_DETECTION_ENTRIES {
+            if let Some((oldest_key, _)) = state.seen.iter().min_by_key(|(_, seen_at)| *seen_at) {
+                let oldest_key = oldest_key.clone();
+                state.seen.remove(&oldest_key);
+            }
+        }
+        state.seen.insert(key, now);
+        if state.pending.is_some() {
+            return Ok((MeetingDetectionRegistration::Pending, None));
+        }
+
+        let expires_at = now
+            .checked_add(MEETING_DETECTION_TTL)
+            .ok_or_else(|| "meeting detection expiry overflow".to_string())?;
+        let expires_at_ms = detection
+            .detected_at_ms
+            .checked_add(MEETING_DETECTION_TTL_MS)
+            .ok_or_else(|| "meeting detection expiry overflow".to_string())?;
+        let payload = MeetingDetectionPendingPayload::from_detection(&detection, expires_at_ms);
+        state.pending = Some(PendingMeetingDetection {
+            detection,
+            expires_at,
+        });
+        Ok((MeetingDetectionRegistration::Prompt, Some(payload)))
+    }
+
+    pub(crate) async fn claim_meeting_accept(&self, detection_id: &str) -> MeetingAcceptClaim {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        if let Some(pending) = state.pending.take() {
+            if pending.detection.detection_id == detection_id {
+                state
+                    .decisions
+                    .insert(detection_id.to_string(), (now, MeetingDecision::InFlight));
+                return MeetingAcceptClaim::Claimed(pending.detection, pending.expires_at);
+            }
+            state.pending = Some(pending);
+            return MeetingAcceptClaim::Failed("meeting detection is not pending".to_string());
+        }
+        match state
+            .decisions
+            .get(detection_id)
+            .map(|(_, decision)| decision)
+        {
+            Some(MeetingDecision::Accepted(recording_id)) => {
+                MeetingAcceptClaim::AlreadyAccepted(recording_id.clone())
+            }
+            Some(MeetingDecision::Declined) => MeetingAcceptClaim::AlreadyDeclined,
+            Some(MeetingDecision::InFlight) => MeetingAcceptClaim::InFlight,
+            None => MeetingAcceptClaim::Failed("meeting detection is not pending".to_string()),
+        }
+    }
+
+    pub(crate) async fn complete_meeting_accept(&self, detection_id: &str, recording_id: String) {
+        self.meeting_detection.lock().await.decisions.insert(
+            detection_id.to_string(),
+            (Instant::now(), MeetingDecision::Accepted(recording_id)),
+        );
+    }
+
+    pub(crate) async fn release_meeting_accept(
+        &self,
+        detection: MeetingDetection,
+        expires_at: Instant,
+        restore_allowed: bool,
+        _error: String,
+    ) -> bool {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        Self::release_meeting_accept_state(&mut state, detection, expires_at, restore_allowed, now)
+    }
+
+    pub(crate) async fn rollback_meeting_detection(&self, detection: &MeetingDetection) {
+        let mut state = self.meeting_detection.lock().await;
+        state.pending = state
+            .pending
+            .take()
+            .filter(|pending| pending.detection.detection_id != detection.detection_id);
+        state.decisions.remove(&detection.detection_id);
+        state
+            .seen
+            .remove(&(detection.provider, detection.meeting_key.clone()));
+    }
+
+    pub(crate) async fn pending_meeting_detection(&self) -> Option<MeetingDetectionPendingPayload> {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        state.pending.as_ref().map(|pending| {
+            MeetingDetectionPendingPayload::from_detection(
+                &pending.detection,
+                pending
+                    .detection
+                    .detected_at_ms
+                    .saturating_add(MEETING_DETECTION_TTL_MS),
+            )
+        })
+    }
+
+    pub(crate) async fn decline_meeting_detection(
+        &self,
+        detection_id: &str,
+    ) -> MeetingDeclineResult {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        if let Some(pending) = state.pending.as_ref() {
+            if pending.detection.detection_id == detection_id {
+                state.pending = None;
+                state
+                    .decisions
+                    .insert(detection_id.to_string(), (now, MeetingDecision::Declined));
+                return MeetingDeclineResult::Declined;
+            }
+            return MeetingDeclineResult::NotFound;
+        }
+        match state
+            .decisions
+            .get(detection_id)
+            .map(|(_, decision)| decision)
+        {
+            Some(MeetingDecision::Declined) => MeetingDeclineResult::AlreadyDeclined,
+            Some(MeetingDecision::Accepted(_)) => MeetingDeclineResult::AlreadyAccepted,
+            Some(MeetingDecision::InFlight) => MeetingDeclineResult::InFlight,
+            None => MeetingDeclineResult::NotFound,
+        }
+    }
+
+    pub(crate) async fn expire_meeting_detection(&self, detection_id: &str) -> bool {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        let expired = state.pending.as_ref().is_some_and(|pending| {
+            pending.detection.detection_id == detection_id && pending.expires_at <= now
+        });
+        if expired {
+            state.pending = None;
+            state
+                .decisions
+                .insert(detection_id.to_string(), (now, MeetingDecision::Declined));
+        }
+        expired
+    }
+
+    pub(crate) async fn clear_pending_meeting_detection(&self) {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if let Some(pending) = state.pending.take() {
+            state.decisions.insert(
+                pending.detection.detection_id,
+                (now, MeetingDecision::Declined),
+            );
+        }
+    }
+
     pub fn emit_url_import_progress(
         &self,
         progress: f32,
@@ -387,6 +701,9 @@ impl AppState {
             recording: recording.clone(),
             started_at: Instant::now(),
         });
+        drop(session);
+        self.clear_pending_meeting_detection().await;
+        crate::close_meeting_reminder(&self.app);
         self.emit_recording_started(&recording)?;
         Ok(id.to_string())
     }
@@ -1060,6 +1377,125 @@ mod tests {
     use super::*;
     use tokio::time::{sleep, Duration};
     use uuid::Uuid;
+
+    fn meeting_detection(id: &str, key: char) -> MeetingDetection {
+        MeetingDetection {
+            version: 1,
+            detection_id: id.to_string(),
+            provider: crate::events::MeetingProvider::GoogleMeet,
+            meeting_key: key.to_string().repeat(64),
+            detected_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn pruning_an_expired_prompt_records_a_terminal_decision() {
+        let now = Instant::now();
+        let detection = meeting_detection("expired", 'a');
+        let mut state = MeetingDetectionState {
+            pending: Some(PendingMeetingDetection {
+                detection,
+                expires_at: now.checked_sub(Duration::from_millis(1)).unwrap(),
+            }),
+            ..MeetingDetectionState::default()
+        };
+
+        assert!(AppState::prune_meeting_detection_state(&mut state, now));
+        assert!(state.pending.is_none());
+        assert!(matches!(
+            state.decisions.get("expired"),
+            Some((_, MeetingDecision::Declined))
+        ));
+    }
+
+    #[test]
+    fn failed_accept_never_overwrites_a_newer_or_expired_prompt() {
+        let now = Instant::now();
+        let newer = meeting_detection("newer", 'b');
+        let mut superseded = MeetingDetectionState {
+            pending: Some(PendingMeetingDetection {
+                detection: newer,
+                expires_at: now + Duration::from_secs(30),
+            }),
+            ..MeetingDetectionState::default()
+        };
+
+        assert!(!AppState::release_meeting_accept_state(
+            &mut superseded,
+            meeting_detection("old", 'a'),
+            now + Duration::from_secs(30),
+            true,
+            now,
+        ));
+        assert_eq!(
+            superseded
+                .pending
+                .as_ref()
+                .map(|pending| pending.detection.detection_id.as_str()),
+            Some("newer")
+        );
+        assert!(matches!(
+            superseded.decisions.get("old"),
+            Some((_, MeetingDecision::Declined))
+        ));
+
+        let mut expired = MeetingDetectionState::default();
+        assert!(!AppState::release_meeting_accept_state(
+            &mut expired,
+            meeting_detection("expired", 'c'),
+            now.checked_sub(Duration::from_millis(1)).unwrap(),
+            true,
+            now,
+        ));
+        assert!(expired.pending.is_none());
+    }
+
+    #[test]
+    fn failed_accept_restores_the_current_unexpired_prompt() {
+        let now = Instant::now();
+        let mut state = MeetingDetectionState::default();
+        state
+            .decisions
+            .insert("current".to_string(), (now, MeetingDecision::InFlight));
+
+        assert!(AppState::release_meeting_accept_state(
+            &mut state,
+            meeting_detection("current", 'd'),
+            now + Duration::from_secs(30),
+            true,
+            now,
+        ));
+        assert_eq!(
+            state
+                .pending
+                .as_ref()
+                .map(|pending| pending.detection.detection_id.as_str()),
+            Some("current")
+        );
+        assert!(!state.decisions.contains_key("current"));
+    }
+
+    #[test]
+    fn failed_accept_is_terminal_while_other_activity_blocks_meeting_mode() {
+        let now = Instant::now();
+        let mut state = MeetingDetectionState::default();
+        state
+            .decisions
+            .insert("blocked".to_string(), (now, MeetingDecision::InFlight));
+
+        assert!(!AppState::release_meeting_accept_state(
+            &mut state,
+            meeting_detection("blocked", 'e'),
+            now + Duration::from_secs(30),
+            false,
+            now,
+        ));
+        assert!(state.pending.is_none());
+        assert!(matches!(
+            state.decisions.get("blocked"),
+            Some((_, MeetingDecision::Declined))
+        ));
+    }
 
     #[tokio::test]
     async fn active_transcription_abort_handle_cancels_underlying_task() {

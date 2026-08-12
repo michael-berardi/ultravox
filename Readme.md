@@ -13,6 +13,7 @@ UltraVox is a private, on-device macOS transcription app for microphone recordin
 - Microphone recording with configurable global shortcuts.
 - Hold-to-record mode: hold the shortcut to record, then release to stop.
 - Meeting mode for repeated capture, with each segment queued for transcription.
+- Optional Google Meet and Zoom reminders from the local [OverSeer Browser](https://github.com/michael-berardi/overseer-browser) extension. UltraVox receives a minimized local event containing a schema version, random detection ID, provider name, opaque meeting key, and millisecond detection time, then waits for explicit recording consent.
 - Supported media URL import and queued processing.
 - Language auto-detection for supported models.
 
@@ -107,3 +108,5 @@ All third-party licenses and notices remain the property of their respective own
 ## Privacy and models
 
 Transcription runs on-device. After the selected model is downloaded from Hugging Face, microphone recording and meeting capture can be transcribed offline. Media URL import still requires network access to download the source.
+
+Browser meeting reminders are opt-in and local. The extension does not send UltraVox meeting URLs, titles, participants, or page contents, and UltraVox never starts recording until **Start recording** is selected in its visible reminder.
