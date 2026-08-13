@@ -6,6 +6,7 @@ APP_PATH="./target/release/bundle/macos/UltraVox.app"
 ZIP_PATH="./target/release/bundle/macos/UltraVox.zip"
 DMG_PATH="./UltraVox.dmg"
 KEYCHAIN_PROFILE="${NOTARYTOOL_PROFILE:-}"
+ENTITLEMENTS_PATH="./apps/desktop/src-tauri/Entitlements.plist"
 CODE_SIGN_IDENTITY="${1:-}"
 
 if [[ -z "${CODE_SIGN_IDENTITY}" ]]; then
@@ -34,9 +35,20 @@ codesign \
   --force \
   --deep \
   --options runtime \
+  --entitlements "${ENTITLEMENTS_PATH}" \
   --timestamp \
   --sign "${CODE_SIGN_IDENTITY}" \
   "${APP_PATH}"
+codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+AUDIO_INPUT_ENTITLEMENT="$(
+  codesign -d --entitlements - --xml "${APP_PATH}" 2>/dev/null \
+    | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null \
+    || true
+)"
+if [[ "${AUDIO_INPUT_ENTITLEMENT}" != "true" ]]; then
+  echo "Signed UltraVox.app is missing the required audio-input entitlement." >&2
+  exit 1
+fi
 
 rm -f "${ZIP_PATH}" "${DMG_PATH}"
 ditto -c -k --keepParent "${APP_PATH}" "${ZIP_PATH}"

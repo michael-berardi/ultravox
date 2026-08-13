@@ -40,6 +40,12 @@ if [[ -n "$INSTALLED_APP" ]]; then
   INSTALLED_ID="$(codesign -dv "$INSTALLED_APP" 2>&1 | sed -n 's/^Identifier=//p')"
   test "$INSTALLED_ID" = "$BUNDLE_ID"
   codesign --verify --deep --strict --verbose=2 "$INSTALLED_APP"
+  AUDIO_INPUT_ENTITLEMENT="$(
+    codesign -d --entitlements - --xml "$INSTALLED_APP" 2>/dev/null \
+      | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null \
+      || true
+  )"
+  test "$AUDIO_INPUT_ENTITLEMENT" = "true"
 fi
 
 echo "Verified ${PKG_PATH}"

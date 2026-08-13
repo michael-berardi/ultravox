@@ -8,6 +8,7 @@ VERSION="${VERSION:-$(node -p "require('${ROOT_DIR}/apps/desktop/package.json').
 ARCH="${PACKAGE_ARCH:-$(uname -m)}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/release}"
 PKG_PATH="${OUTPUT_DIR}/${PRODUCT_NAME}-${VERSION}-${ARCH}.pkg"
+ENTITLEMENTS_PATH="${ROOT_DIR}/apps/desktop/src-tauri/Entitlements.plist"
 
 if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
   TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -45,16 +46,32 @@ if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$ENTITLEMENTS_PATH" ]]; then
+  echo "Missing UltraVox entitlements: $ENTITLEMENTS_PATH" >&2
+  exit 1
+fi
+
 if [[ "${REQUIRE_SIGNED:-0}" == "1" && -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   echo "APPLE_SIGNING_IDENTITY is required for a distributable package." >&2
   exit 1
 fi
 if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
-  codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS_PATH" \
+    --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
 else
-  codesign --force --deep --sign - "$APP_PATH"
+  codesign --force --deep --entitlements "$ENTITLEMENTS_PATH" --sign - "$APP_PATH"
 fi
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+AUDIO_INPUT_ENTITLEMENT="$(
+  codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null \
+    | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null \
+    || true
+)"
+if [[ "$AUDIO_INPUT_ENTITLEMENT" != "true" ]]; then
+  echo "Signed UltraVox.app is missing the required audio-input entitlement." >&2
+  exit 1
+fi
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$PKG_PATH"
