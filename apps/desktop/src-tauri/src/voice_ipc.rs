@@ -122,6 +122,22 @@ fn ensure_managed_socket_dir(path: &std::path::Path) -> Result<(), String> {
     if !is_managed_socket_dir(path) {
         return Ok(());
     }
+    prepare_managed_socket_dir(path)
+}
+
+fn prepare_managed_socket_dir(path: &std::path::Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("managed voice socket directory is not a real directory".to_string());
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err("managed voice socket directory has the wrong owner".to_string());
+    }
+    if metadata.mode() & 0o077 != 0 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
+    }
+
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("managed voice socket directory is not a real directory".to_string());
@@ -134,6 +150,7 @@ fn ensure_managed_socket_dir(path: &std::path::Path) -> Result<(), String> {
     }
     Ok(())
 }
+
 fn ensure_managed_entry(path: &std::path::Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink()
@@ -176,15 +193,8 @@ async fn serve(app: AppHandle) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "voice socket path has no parent directory".to_string())?;
     let managed_dir = is_managed_socket_dir(parent);
-    let parent_existed = std::fs::symlink_metadata(parent).is_ok();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    if managed_dir && !parent_existed {
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
-    }
-    if managed_dir {
-        ensure_managed_socket_dir(parent)?;
-    }
+    ensure_managed_socket_dir(parent)?;
     if managed_dir && path.exists() {
         ensure_managed_entry(&path)?;
     }
@@ -487,6 +497,42 @@ mod tests {
     fn managed_directory_is_recognized() {
         assert!(is_managed_socket_dir(&app_socket_dir()));
         assert!(!is_managed_socket_dir(std::path::Path::new("/tmp")));
+    }
+
+    fn isolated_test_dir() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "ultravox-voice-ipc-test-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn managed_directory_tightens_existing_permissions() {
+        let path = isolated_test_dir();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        prepare_managed_socket_dir(&path).unwrap();
+
+        let mode = std::fs::symlink_metadata(&path).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        std::fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
+    fn managed_directory_rejects_unsafe_path_types() {
+        let root = isolated_test_dir();
+        let file = root.join("file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        assert!(prepare_managed_socket_dir(&file).is_err());
+
+        let symlink = root.join("symlink");
+        std::os::unix::fs::symlink(&file, &symlink).unwrap();
+        assert!(prepare_managed_socket_dir(&symlink).is_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

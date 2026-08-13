@@ -21,6 +21,11 @@ UltraVox is a private, on-device macOS transcription app for microphone recordin
 
 The canonical app is a Rust/Tauri v2 desktop application backed by the shared `ultravox-core` crate. The original SwiftUI implementation remains in `UltraVox/` as a reference during the migration. Current development, build, and release workflows target the Tauri app.
 
+UltraTerm connects through UltraVox's per-user Unix socket. Both apps use
+`$TMPDIR/com.imploselabs.ultravox/voice-v1.sock` by default. Set
+`ULTRAVOX_VOICE_SOCKET` in both app environments only when a custom path is
+required.
+
 ## Installation
 
 Prebuilt Apple Silicon releases include both `UltraVox.app` and the
