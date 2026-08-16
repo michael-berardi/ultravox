@@ -37,7 +37,7 @@ if [[ "${REQUIRE_SIGNED:-0}" == "1" ]]; then
     echo "Signing team mismatch: ${SIGNED_TEAM:-<ad-hoc>} (expected $TEAM_ID)" >&2
     exit 1
   }
-elif [[ "$SIGNED_TEAM" != "" && "$SIGNED_TEAM" != "$TEAM_ID" ]]; then
+elif [[ -n "$SIGNED_TEAM" && "$SIGNED_TEAM" != "not set" && "$SIGNED_TEAM" != "$TEAM_ID" ]]; then
   echo "Unexpected signing team: $SIGNED_TEAM (expected $TEAM_ID or ad-hoc)." >&2
   exit 1
 fi
@@ -51,7 +51,7 @@ if [[ "$REQUIRE_SIGNED" == "1" ]]; then
     echo "Production app must be Developer ID Application signed." >&2
     exit 1
   }
-  printf '%s\n' "$CODESIGN_DETAILS" | grep -Eq '^Flags=.*runtime' || {
+  printf '%s\n' "$CODESIGN_DETAILS" | grep -Eiq 'flags=.*runtime' || {
     echo "Production app must use the hardened runtime." >&2
     exit 1
   }

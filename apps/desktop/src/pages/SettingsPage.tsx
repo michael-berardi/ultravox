@@ -725,12 +725,18 @@ function PrivacySettings({ config, onChange }: SettingsSectionProps) {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([getUpdatePreferences(), checkForUpdate(), getAppTelemetryStatus()])
-      .then(([preferences, candidate, telemetry]) => {
+    void getAppTelemetryStatus()
+      .then((telemetry) => {
+        if (!cancelled) setTelemetryEnabled(telemetry.enabled);
+      })
+      .catch((error) => {
+        if (!cancelled) setUpdateMessage(`Telemetry status unavailable: ${String(error)}`);
+      });
+    void Promise.all([getUpdatePreferences(), checkForUpdate()])
+      .then(([preferences, candidate]) => {
         if (!cancelled) {
           setAutomatic(preferences.automatic);
           setUpdate(candidate);
-          setTelemetryEnabled(telemetry.enabled);
         }
       })
       .catch((error) => {
@@ -749,8 +755,15 @@ function PrivacySettings({ config, onChange }: SettingsSectionProps) {
 
 
   const updateAutomatic = async (enabled: boolean) => {
+    const previous = automatic;
     setAutomatic(enabled);
-    await setUpdatePreferences({ automatic: enabled });
+    try {
+      await setUpdatePreferences({ automatic: enabled });
+    } catch (error) {
+      setAutomatic(previous);
+      setUpdateMessage(`Could not update automatic updates: ${String(error)}`);
+      return;
+    }
     if (enabled && update) {
       setUpdateBusy(true);
       try {

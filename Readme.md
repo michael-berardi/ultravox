@@ -42,7 +42,10 @@ UltraVox has one canonical install and update location:
 curl -fL -o UltraVox.pkg https://github.com/michael-berardi/ultravox/releases/latest/download/UltraVox-macos-arm64.pkg
 curl -fL -o UltraVox.pkg.sha256 https://github.com/michael-berardi/ultravox/releases/latest/download/UltraVox-macos-arm64.pkg.sha256
 shasum -a 256 -c UltraVox.pkg.sha256
-./Scripts/verify-pkg.sh UltraVox.pkg --install
+pkgutil --check-signature UltraVox.pkg
+spctl --assess --type install --verbose=2 UltraVox.pkg
+sudo installer -pkg UltraVox.pkg -target /
+codesign --verify --deep --strict --verbose=2 "/Applications/UltraVox.app"
 ```
 
 Per-user app installs are intentionally unsupported. Updates replace only the

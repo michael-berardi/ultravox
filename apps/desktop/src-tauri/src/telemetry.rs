@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -98,8 +100,7 @@ struct StoredState {
     consent: ConsentState,
     install_id: Option<Uuid>,
     last_heartbeat_day: Option<String>,
-    last_usage_day: Option<String>,
-    pending_usage: UsageCounters,
+    pending_usage_by_day: BTreeMap<String, UsageCounters>,
 }
 
 fn sanitize_loaded_state(state: &mut StoredState) -> bool {
@@ -113,26 +114,17 @@ fn sanitize_loaded_state(state: &mut StoredState) -> bool {
     } else {
         state.install_id = None;
         state.last_heartbeat_day = None;
-        state.last_usage_day = None;
-        state.pending_usage = UsageCounters::default();
+        state.pending_usage_by_day.clear();
     }
-    state.pending_usage.recordings_started =
-        state.pending_usage.recordings_started.min(MAX_COUNTER);
-    state.pending_usage.recordings_completed =
-        state.pending_usage.recordings_completed.min(MAX_COUNTER);
-    state.pending_usage.recordings_failed = state.pending_usage.recordings_failed.min(MAX_COUNTER);
-    state.pending_usage.transcriptions_completed = state
-        .pending_usage
-        .transcriptions_completed
-        .min(MAX_COUNTER);
-    state.pending_usage.transcriptions_failed =
-        state.pending_usage.transcriptions_failed.min(MAX_COUNTER);
-    state.pending_usage.model_downloads_completed = state
-        .pending_usage
-        .model_downloads_completed
-        .min(MAX_COUNTER);
-    state.pending_usage.model_downloads_failed =
-        state.pending_usage.model_downloads_failed.min(MAX_COUNTER);
+    for usage in state.pending_usage_by_day.values_mut() {
+        usage.recordings_started = usage.recordings_started.min(MAX_COUNTER);
+        usage.recordings_completed = usage.recordings_completed.min(MAX_COUNTER);
+        usage.recordings_failed = usage.recordings_failed.min(MAX_COUNTER);
+        usage.transcriptions_completed = usage.transcriptions_completed.min(MAX_COUNTER);
+        usage.transcriptions_failed = usage.transcriptions_failed.min(MAX_COUNTER);
+        usage.model_downloads_completed = usage.model_downloads_completed.min(MAX_COUNTER);
+        usage.model_downloads_failed = usage.model_downloads_failed.min(MAX_COUNTER);
+    }
     original != serde_json::to_vec(state).ok()
 }
 
@@ -155,6 +147,7 @@ struct Event<'a> {
 pub struct Telemetry {
     state: Mutex<StoredState>,
     path: PathBuf,
+    launch_sent_this_run: AtomicBool,
 }
 
 impl Telemetry {
@@ -174,6 +167,7 @@ impl Telemetry {
         let telemetry = Self {
             state: Mutex::new(state),
             path,
+            launch_sent_this_run: AtomicBool::new(false),
         };
         if let Some(persisted_state) = persisted_state.as_ref() {
             telemetry.persist(persisted_state)?;
@@ -212,8 +206,7 @@ impl Telemetry {
             state.consent = ConsentState::Declined;
             state.install_id = None;
             state.last_heartbeat_day = None;
-            state.last_usage_day = None;
-            state.pending_usage = UsageCounters::default();
+            state.pending_usage_by_day.clear();
         }
         self.persist(&state)?;
         Ok(status(&state))
@@ -221,11 +214,13 @@ impl Telemetry {
 
     pub async fn launch(&self) -> Result<(), String> {
         let state = self.state.lock().await;
-        if !enabled(&state) {
+        if !enabled(&state) || self.launch_sent_this_run.load(Ordering::Relaxed) {
             return Ok(());
         }
         let today = utc_day();
-        let _ = post(&state, "launch", &today, None).await;
+        if post(&state, "launch", &today, None).await {
+            self.launch_sent_this_run.store(true, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -250,24 +245,37 @@ impl Telemetry {
         if !enabled(&state) {
             return Ok(());
         }
-        state.pending_usage.add(counters);
-        self.persist(&state)?;
-        let today = utc_day();
-        self.send_pending_usage(&mut state, &today).await
+        add_pending_usage(&mut state, &utc_day(), counters);
+        self.persist(&state)
     }
 
     async fn send_pending_usage(&self, state: &mut StoredState, today: &str) -> Result<(), String> {
-        if state.pending_usage.is_zero() || state.last_usage_day.as_deref() == Some(today) {
-            return Ok(());
+        let completed_days = state
+            .pending_usage_by_day
+            .iter()
+            .filter(|(day, usage)| day.as_str() < today && !usage.is_zero())
+            .map(|(day, usage)| (day.clone(), *usage))
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for (day, usage) in completed_days {
+            if post(state, "usage", &day, Some(usage)).await {
+                state.pending_usage_by_day.remove(&day);
+                changed = true;
+            }
         }
-        let usage = state.pending_usage;
-        if post(state, "usage", today, Some(usage)).await {
-            state.pending_usage = UsageCounters::default();
-            state.last_usage_day = Some(today.to_string());
+        if changed {
             self.persist(state)?;
         }
         Ok(())
     }
+}
+
+fn add_pending_usage(state: &mut StoredState, day: &str, counters: UsageCounters) {
+    state
+        .pending_usage_by_day
+        .entry(day.to_string())
+        .or_default()
+        .add(counters);
 }
 
 fn status(state: &StoredState) -> TelemetryStatus {
@@ -418,42 +426,79 @@ mod tests {
     }
 
     #[test]
+    fn pending_usage_remains_attributed_to_its_utc_day() {
+        let mut state = StoredState::default();
+        add_pending_usage(
+            &mut state,
+            "2026-08-16",
+            UsageCounters {
+                recordings_started: 1,
+                ..UsageCounters::default()
+            },
+        );
+        add_pending_usage(
+            &mut state,
+            "2026-08-17",
+            UsageCounters {
+                recordings_completed: 1,
+                ..UsageCounters::default()
+            },
+        );
+        assert_eq!(state.pending_usage_by_day.len(), 2);
+        assert_eq!(
+            state.pending_usage_by_day["2026-08-16"].recordings_started,
+            1
+        );
+        assert_eq!(
+            state.pending_usage_by_day["2026-08-17"].recordings_completed,
+            1
+        );
+    }
+
+    #[test]
     fn disabling_erases_identifier_and_pending_state() {
+        let mut pending_usage_by_day = BTreeMap::new();
+        pending_usage_by_day.insert(
+            "2026-08-16".to_string(),
+            UsageCounters {
+                recordings_started: 1,
+                ..UsageCounters::default()
+            },
+        );
         let mut state = StoredState {
             consent: ConsentState::Accepted,
             install_id: Some(Uuid::new_v4()),
             last_heartbeat_day: Some("2026-08-16".to_string()),
-            last_usage_day: Some("2026-08-16".to_string()),
-            pending_usage: UsageCounters {
-                recordings_started: 1,
-                ..UsageCounters::default()
-            },
+            pending_usage_by_day,
         };
         state.consent = ConsentState::Declined;
         state.install_id = None;
         state.last_heartbeat_day = None;
-
-        state.last_usage_day = None;
-        state.pending_usage = UsageCounters::default();
+        state.pending_usage_by_day.clear();
         assert!(!enabled(&state));
         assert!(state.install_id.is_none());
-        assert!(state.pending_usage.is_zero());
+        assert!(state.pending_usage_by_day.is_empty());
     }
     #[test]
     fn loaded_state_preserves_consent_but_repairs_private_state() {
-        let mut declined = StoredState {
-            consent: ConsentState::Declined,
-            install_id: Some(Uuid::new_v4()),
-            pending_usage: UsageCounters {
+        let mut pending_usage_by_day = BTreeMap::new();
+        pending_usage_by_day.insert(
+            "2026-08-16".to_string(),
+            UsageCounters {
                 recordings_started: 3,
                 ..UsageCounters::default()
             },
+        );
+        let mut declined = StoredState {
+            consent: ConsentState::Declined,
+            install_id: Some(Uuid::new_v4()),
+            pending_usage_by_day,
             ..StoredState::default()
         };
         assert!(sanitize_loaded_state(&mut declined));
         assert_eq!(declined.consent, ConsentState::Declined);
         assert!(declined.install_id.is_none());
-        assert!(declined.pending_usage.is_zero());
+        assert!(declined.pending_usage_by_day.is_empty());
 
         let mut accepted = StoredState {
             consent: ConsentState::Accepted,

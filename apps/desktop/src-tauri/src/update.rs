@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ const EXPECTED_BUNDLE_ID: &str = "com.imploselabs.ultravox";
 const EXPECTED_TEAM_ID: &str = "T63VT9UAY2";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+static INSTALL_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct UpdatePreferences {
@@ -388,11 +390,21 @@ if ! verify_identity "$target_app"; then
   exit 1
 fi
 /usr/bin/xattr -dr com.apple.quarantine "$target_app" 2>/dev/null || true
-/usr/bin/open -n "$target_app"
+if ! /usr/bin/open -n "$target_app"; then
+  /bin/rm -rf "$target_app"
+  /bin/mv "$backup_app" "$target_app" || exit 1
+  /usr/bin/open -n "$target_app" || true
+  /bin/rm -rf "$staging"
+  exit 1
+fi
 /bin/rm -rf "$backup_app" "$staging"
 "#;
 
 pub async fn install(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
+    let _install_guard = INSTALL_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .try_lock()
+        .map_err(|_| "An UltraVox update is already being installed.".to_string())?;
     if info.current_version != env!("CARGO_PKG_VERSION") {
         return Err("Update was checked against a different app version.".to_string());
     }
@@ -405,9 +417,9 @@ pub async fn install(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
     }
     let bundle = current_bundle()?;
     verify_app(&bundle, &info.current_version)?;
-    let staging = std::env::temp_dir().join(format!("ultravox-update-{}", process::id()));
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)
+    let staging =
+        std::env::temp_dir().join(format!("ultravox-update-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&staging)
         .map_err(|error| format!("Failed to create update staging directory: {error}"))?;
     let candidate = match stage_update(&staging, &info.latest_version).await {
         Ok(candidate) => candidate,

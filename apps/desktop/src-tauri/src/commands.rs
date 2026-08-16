@@ -1150,6 +1150,10 @@ pub async fn stop_meeting(state: State<'_, AppState>) -> Result<AudioRecording, 
         let audio_path = match capture_result {
             Ok(path) => path,
             Err(error) => {
+                state.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    recordings_failed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
                 let _ = tokio::fs::remove_file(&session.output_path).await;
                 clear_meeting_session(state.inner(), session.id).await?;
                 return Err(error);
@@ -1168,7 +1172,13 @@ pub async fn stop_meeting(state: State<'_, AppState>) -> Result<AudioRecording, 
             let _ = tokio::fs::remove_file(&recording.output_path).await;
         }
         clear_meeting_session(state.inner(), session.id).await?;
-        queued?;
+        if let Err(error) = queued {
+            state.record_telemetry_usage(crate::telemetry::UsageCounters {
+                recordings_failed: 1,
+                ..crate::telemetry::UsageCounters::default()
+            });
+            return Err(error);
+        }
         state.record_telemetry_usage(crate::telemetry::UsageCounters {
             recordings_completed: 1,
             ..crate::telemetry::UsageCounters::default()
