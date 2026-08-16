@@ -116,7 +116,7 @@ fi
 
 codesign --verify --strict "$CLI_PATH"
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
-  codesign -dv --verbose=4 "$CLI_PATH" 2>&1 | grep -Eq '^TeamIdentifier=T63VT9UAY2$' || {
+  codesign -dv --verbose=4 "$CLI_PATH" 2>&1 | grep -E '^TeamIdentifier=T63VT9UAY2$' >/dev/null || {
     echo "Production CLI must be signed by Developer ID team T63VT9UAY2." >&2
     exit 1
   }
