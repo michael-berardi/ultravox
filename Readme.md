@@ -39,13 +39,23 @@ UltraVox has one canonical install and update location:
 [GitHub Releases](https://github.com/michael-berardi/ultravox/releases):
 
 ```bash
-curl -fL -o UltraVox.pkg https://github.com/michael-berardi/ultravox/releases/latest/download/UltraVox-macos-arm64.pkg
-curl -fL -o UltraVox.pkg.sha256 https://github.com/michael-berardi/ultravox/releases/latest/download/UltraVox-macos-arm64.pkg.sha256
-shasum -a 256 -c UltraVox.pkg.sha256
-pkgutil --check-signature UltraVox.pkg
-spctl --assess --type install --verbose=2 UltraVox.pkg
-sudo installer -pkg UltraVox.pkg -target /
-codesign --verify --deep --strict --verbose=2 "/Applications/UltraVox.app"
+pkg=UltraVox-macos-arm64.pkg
+curl -fL -w '%{url_effective}\n' -o "$pkg" "https://github.com/michael-berardi/ultravox/releases/latest/download/$pkg" |
+  sed -E 's#^.*/download/v?([^/]+)/.*$#\1#' > UltraVox.expected-version
+curl -fLO "https://github.com/michael-berardi/ultravox/releases/latest/download/$pkg.sha256"
+shasum -a 256 -c "$pkg.sha256"
+pkgutil --check-signature "$pkg" | grep -F "Developer ID Installer: Michael Berardi (T63VT9UAY2)"
+spctl --assess --type install --verbose=2 "$pkg"
+sudo installer -pkg "$pkg" -target /
+
+app=/Applications/UltraVox.app
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.imploselabs.ultravox
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$(cat UltraVox.expected-version)"
+codesign --verify --deep --strict --verbose=2 "$app"
+codesign -dvv "$app" 2>&1 | grep -F "TeamIdentifier=T63VT9UAY2"
+codesign -d -r- "$app" 2>&1 | grep -F 'identifier "com.imploselabs.ultravox" and anchor apple generic'
+codesign -d -r- "$app" 2>&1 | grep -E 'certificate leaf\[subject\.OU\] = "?T63VT9UAY2"?'
+spctl --assess --type execute --verbose=2 "$app"
 ```
 
 Per-user app installs are intentionally unsupported. Updates replace only the

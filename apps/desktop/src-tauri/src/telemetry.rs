@@ -194,21 +194,22 @@ impl Telemetry {
         let state = self.state.lock().await;
         status(&state)
     }
-
     pub async fn set_enabled(&self, enabled: bool) -> Result<TelemetryStatus, String> {
         let mut state = self.state.lock().await;
+        let mut next = state.clone();
         if enabled {
-            state.consent = ConsentState::Accepted;
-            if state.install_id.is_none() {
-                state.install_id = Some(Uuid::new_v4());
+            next.consent = ConsentState::Accepted;
+            if next.install_id.is_none() {
+                next.install_id = Some(Uuid::new_v4());
             }
         } else {
-            state.consent = ConsentState::Declined;
-            state.install_id = None;
-            state.last_heartbeat_day = None;
-            state.pending_usage_by_day.clear();
+            next.consent = ConsentState::Declined;
+            next.install_id = None;
+            next.last_heartbeat_day = None;
+            next.pending_usage_by_day.clear();
         }
-        self.persist(&state)?;
+        self.persist(&next)?;
+        *state = next;
         Ok(status(&state))
     }
 

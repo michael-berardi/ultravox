@@ -64,7 +64,7 @@ if [[ "$REQUIRE_SIGNED" == "1" ]]; then
     echo "Designated requirement is missing the Apple trust anchor." >&2
     exit 1
   }
-  printf '%s\n' "$DESIGNATED_REQUIREMENT" | grep -Eq "certificate.*OU.*\"${TEAM_ID}\"" || {
+  printf '%s\n' "$DESIGNATED_REQUIREMENT" | grep -Eq "certificate leaf\\[subject\\.OU\\] = \"?${TEAM_ID}\"?" || {
     echo "Designated requirement is missing Developer Team $TEAM_ID." >&2
     exit 1
   }
