@@ -530,7 +530,7 @@ export function MainWindow({
   let statusKind: AppStatus | "recording" | "meeting" | "transcribing" = status;
   if (recording) {
     statusKind = "recording";
-  } else if (meeting) {
+  } else if (meeting || meetingPending) {
     statusKind = "meeting";
   } else if (transcribing) {
     statusKind = "transcribing";
@@ -541,6 +541,8 @@ export function MainWindow({
   let statusText = "Unavailable";
   if (recording) {
     statusText = "Recording";
+  } else if (meetingPending) {
+    statusText = meeting ? "Finishing meeting…" : "Starting meeting…";
   } else if (meeting) {
     statusText = "Meeting mode";
   } else if (transcribing) {
@@ -637,46 +639,51 @@ export function MainWindow({
             </div>
 
             <button
-              className={`record-button ${recording ? "recording" : ""}`}
-              onClick={() => void toggleRecording()}
-              aria-label={recording ? "Stop recording" : "Start recording"}
-              disabled={!recording && (meeting || modelStatusLoading || status !== "ready" || transcribing)}
+              className={`record-button ${recording || meeting ? "recording" : ""}`}
+              onClick={() => void (meeting ? toggleMeeting() : toggleRecording())}
+              aria-label={meeting ? "Stop meeting" : recording ? "Stop recording" : "Start recording"}
+              disabled={
+                meetingPending ||
+                (!recording &&
+                  !meeting &&
+                  (modelStatusLoading || status !== "ready" || transcribing))
+              }
               aria-describedby={activityError ? "activity-error" : undefined}
             >
-              {recording ? <StopIcon /> : <MicIcon />}
+              {recording || meeting ? <StopIcon /> : <MicIcon />}
             </button>
 
             <div className="secondary-actions">
-              <button
-                type="button"
-                className={`secondary-action ${meeting ? "meeting-active" : ""}`}
-                onClick={() => void toggleMeeting()}
-                disabled={
-                  meetingPending ||
-                  recording ||
-                  transcribing ||
-                  modelStatusLoading ||
-                  status !== "ready"
-                }
-                aria-pressed={meeting}
-              >
-                {meetingPending
-                  ? meeting
-                    ? "Finishing…"
-                    : "Starting…"
-                  : meeting
-                    ? "Stop meeting"
-                    : "Meeting mode"}
-              </button>
-              <button
-                type="button"
-                className="secondary-action"
-                ref={transcribeUrlRef}
-                onClick={openUrlImport}
-                disabled={recording || meeting || meetingPending || transcribing}
-              >
-                Transcribe URL
-              </button>
+              {meeting ? (
+                <span className="capture-note">System audio + microphone</span>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => void toggleMeeting()}
+                    disabled={
+                      meetingPending ||
+                      recording ||
+                      transcribing ||
+                      modelStatusLoading ||
+                      status !== "ready"
+                    }
+                    aria-pressed={false}
+                  >
+                    {meetingPending ? "Starting…" : "Meeting mode"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    ref={transcribeUrlRef}
+                    onClick={openUrlImport}
+                    disabled={recording || meetingPending || transcribing}
+                  >
+                    Transcribe URL
+                  </button>
+                </>
+              )}
             </div>
             {activityError && <p id="activity-error" className="activity-error" role="alert">{activityError}</p>}
           </section>

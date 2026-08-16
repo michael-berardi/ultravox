@@ -390,7 +390,53 @@ if ! verify_identity "$target_app"; then
   exit 1
 fi
 /usr/bin/xattr -dr com.apple.quarantine "$target_app" 2>/dev/null || true
+existing_pids="$(/usr/bin/pgrep -x "ultravox" 2>/dev/null || true)"
 if ! /usr/bin/open -n "$target_app"; then
+  /bin/rm -rf "$target_app"
+  /bin/mv "$backup_app" "$target_app" || exit 1
+  /usr/bin/open -n "$target_app" || true
+  /bin/rm -rf "$staging"
+  exit 1
+fi
+# LaunchServices can accept an app launch while the process immediately fails.
+launched=0
+attempt=0
+while [ "$attempt" -lt 50 ]; do
+  current_pids="$(/usr/bin/pgrep -x "ultravox" 2>/dev/null || true)"
+  launched_pid=""
+  for pid in $current_pids; do
+    is_existing=0
+    for old_pid in $existing_pids; do
+      if [ "$old_pid" = "$pid" ]; then
+        is_existing=1
+        break
+      fi
+    done
+    if [ "$is_existing" -eq 0 ] && /bin/kill -0 "$pid" 2>/dev/null; then
+      launched_pid="$pid"
+      break
+    fi
+  done
+  if [ -n "$launched_pid" ]; then
+    healthy=1
+    health_attempt=0
+    while [ "$health_attempt" -lt 10 ]; do
+      if ! /bin/kill -0 "$launched_pid" 2>/dev/null; then
+        healthy=0
+        break
+      fi
+      /bin/sleep 0.2
+      health_attempt=$((health_attempt + 1))
+    done
+    if [ "$healthy" -eq 1 ]; then
+      launched=1
+      break
+    fi
+  fi
+  /bin/sleep 0.2
+  attempt=$((attempt + 1))
+done
+if [ "$launched" -ne 1 ]; then
   /bin/rm -rf "$target_app"
   /bin/mv "$backup_app" "$target_app" || exit 1
   /usr/bin/open -n "$target_app" || true
@@ -464,6 +510,11 @@ mod tests {
     }
 
     #[test]
+    fn automatic_updates_are_opt_in() {
+        assert!(!UpdatePreferences::default().automatic);
+    }
+
+    #[test]
     fn signature_validation_requires_stable_identity() {
         let details = "Identifier=com.imploselabs.ultravox\nAuthority=Developer ID Application: Michael Berardi (T63VT9UAY2)\nTeamIdentifier=T63VT9UAY2\n";
         let requirement = "designated => identifier \"com.imploselabs.ultravox\" and anchor apple generic and certificate leaf[subject.OU] = \"T63VT9UAY2\"";
@@ -482,5 +533,21 @@ mod tests {
     fn update_bundle_name_must_be_exact() {
         assert!(validate_bundle_name(Path::new("/tmp/UltraVox.app")).is_ok());
         assert!(validate_bundle_name(Path::new("/tmp/Impostor.app")).is_err());
+    }
+
+    #[test]
+    fn update_helper_requires_new_process_health_before_cleanup() {
+        let cleanup = INSTALL_HELPER
+            .rfind(r#"/bin/rm -rf "$backup_app" "$staging""#)
+            .expect("helper must clean up only after launch");
+        let process_snapshot = INSTALL_HELPER
+            .find("existing_pids=")
+            .expect("helper must snapshot existing processes");
+        let health_probe = INSTALL_HELPER
+            .find(r#"/bin/kill -0 "$launched_pid""#)
+            .expect("helper must probe the new process");
+        assert!(process_snapshot < health_probe);
+        assert!(health_probe < cleanup);
+        assert!(INSTALL_HELPER.contains(r#"if [ "$launched" -ne 1 ]; then"#));
     }
 }

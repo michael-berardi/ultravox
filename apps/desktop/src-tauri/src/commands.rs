@@ -124,6 +124,11 @@ pub enum PermissionKind {
     ScreenRecording,
 }
 
+fn screen_recording_permission_error() -> String {
+    "Screen Recording access is disabled for UltraVox. Enable UltraVox in System Settings > Privacy & Security > Screen Recording, then choose Recheck permissions."
+        .to_string()
+}
+
 fn permission_status() -> PermissionStatus {
     #[cfg(target_os = "macos")]
     {
@@ -181,15 +186,19 @@ pub fn request_permission(kind: PermissionKind) -> Result<PermissionStatus, Stri
     Ok(permission_status())
 }
 
+fn permission_settings_pane(kind: &PermissionKind) -> &'static str {
+    match kind {
+        PermissionKind::Microphone => "Privacy_Microphone",
+        PermissionKind::Accessibility => "Privacy_Accessibility",
+        PermissionKind::ScreenRecording => "Privacy_ScreenCapture",
+    }
+}
+
 #[tauri::command]
 pub fn open_permission_settings(kind: PermissionKind) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let pane = match kind {
-            PermissionKind::Microphone => "Privacy_Microphone",
-            PermissionKind::Accessibility => "Privacy_Accessibility",
-            PermissionKind::ScreenRecording => "Privacy_ScreenCapture",
-        };
+        let pane = permission_settings_pane(&kind);
         std::process::Command::new("open")
             .arg(format!(
                 "x-apple.systempreferences:com.apple.preference.security?{pane}"
@@ -1001,12 +1010,14 @@ pub(crate) async fn start_meeting_impl(state: &AppState) -> Result<String, Strin
             bridge::MicrophoneAuthorizationStatus::Denied
             | bridge::MicrophoneAuthorizationStatus::Restricted => {
                 return Err(
-                    "Microphone access is disabled for UltraVox. Enable it in System Settings > Privacy & Security > Microphone."
+                    "Microphone access is disabled for UltraVox. Enable UltraVox in System Settings > Privacy & Security > Microphone."
                         .to_string(),
                 );
             }
         }
-
+        if !bridge::screen_recording_authorized() {
+            return Err(screen_recording_permission_error());
+        }
         let id = Uuid::new_v4();
         let recordings_dir = state.recordings_dir()?;
         tokio::fs::create_dir_all(&recordings_dir)
@@ -1015,10 +1026,23 @@ pub(crate) async fn start_meeting_impl(state: &AppState) -> Result<String, Strin
         let output_path = recordings_dir.join(format!("{id}.mp4"));
         let native_path = output_path.clone();
         let capture_result =
-            tokio::task::spawn_blocking(move || bridge::start_meeting_capture(&native_path))
+            match tokio::task::spawn_blocking(move || bridge::start_meeting_capture(&native_path))
                 .await
-                .map_err(|error| format!("meeting capture task failed: {error}"))?;
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    state.record_telemetry_usage(crate::telemetry::UsageCounters {
+                        recordings_failed: 1,
+                        ..crate::telemetry::UsageCounters::default()
+                    });
+                    return Err(format!("meeting capture task failed: {error}"));
+                }
+            };
         if let Err(error) = capture_result {
+            state.record_telemetry_usage(crate::telemetry::UsageCounters {
+                recordings_failed: 1,
+                ..crate::telemetry::UsageCounters::default()
+            });
             let _ = tokio::fs::remove_file(&output_path).await;
             return Err(error);
         }
@@ -1323,7 +1347,10 @@ pub fn export_recording(
 
 #[cfg(test)]
 mod tests {
-    use super::{modifier_conflicts_with_combination, validate_remote_url};
+    use super::{
+        modifier_conflicts_with_combination, permission_settings_pane,
+        screen_recording_permission_error, validate_remote_url, PermissionKind,
+    };
 
     #[test]
     fn media_url_requires_http_or_https() {
@@ -1350,5 +1377,21 @@ mod tests {
             "Control+M"
         ));
         assert!(!modifier_conflicts_with_combination("none", "Option+M"));
+    }
+
+    #[test]
+    fn screen_recording_errors_identify_ultravox_as_the_owner() {
+        assert_eq!(
+            screen_recording_permission_error(),
+            "Screen Recording access is disabled for UltraVox. Enable UltraVox in System Settings > Privacy & Security > Screen Recording, then choose Recheck permissions."
+        );
+    }
+
+    #[test]
+    fn screen_recording_settings_open_the_macos_capture_privacy_pane() {
+        assert_eq!(
+            permission_settings_pane(&PermissionKind::ScreenRecording),
+            "Privacy_ScreenCapture"
+        );
     }
 }

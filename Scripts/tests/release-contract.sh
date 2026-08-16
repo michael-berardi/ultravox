@@ -29,6 +29,13 @@ done
 for file in "$VERIFY_APP" "$VERIFY_PKG" "$BUILD_PKG"; do
   assert_contains "$file" 'com.imploselabs.ultravox'
 done
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" 'UltraVox uses Screen &amp; System Audio Recording'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" '<string>UltraVox</string>'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" 'CFBundleDisplayName'
+assert_not_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" 'UltraTerm'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'Screen Recording access is disabled for UltraVox'
+assert_not_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'Screen Recording access is disabled for UltraTerm'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'Privacy_ScreenCapture'
 assert_contains "$PACKAGE_RELEASE" 'verify-app.sh'
 for file in "$VERIFY_APP" "$VERIFY_PKG" "$PACKAGE_RELEASE"; do
   assert_contains "$file" 'T63VT9UAY2'

@@ -46,8 +46,8 @@ expected_version="${release_url#*/download/}"
 expected_version="${expected_version%%/*}"
 expected_version="${expected_version#v}"
 [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-curl -fLO "$base/$pkg"
-curl -fLO "$base/$pkg.sha256"
+curl -fL -o "$pkg" "$base/$pkg"
+curl -fL -o "$pkg.sha256" "$base/$pkg.sha256"
 shasum -a 256 -c "$pkg.sha256"
 pkgutil --check-signature "$pkg" | grep -F "Developer ID Installer: Michael Berardi (T63VT9UAY2)"
 spctl --assess --type install --verbose=2 "$pkg"
@@ -141,13 +141,20 @@ Telemetry is off by default and is requested in a first-run consent dialog
 before model onboarding. If enabled, UltraVox sends only coarse launch,
 heartbeat, and usage aggregates to
 `https://analytics.libertydesign.studio/api/app-telemetry/event` using schema
-`lds.app-telemetry.event.v1`. Payloads contain the app version, platform,
-architecture, UTC day, and bounded integer counters. They never contain
+`lds.app-telemetry.event.v2`. Payloads contain a random installation UUID
+created after acceptance, the app version, coarse platform and architecture,
+the UTC day, and fixed bounded integer counters. They never contain
 transcripts, audio, prompts, recordings, meeting IDs, URLs, titles, providers,
 participants, paths, keys, shortcuts, errors, stacks, or host/user/device IDs.
 Disabling telemetry clears the random install identifier and queued events;
-declining does not create an identifier. Raw events are retained for 35 days
-and identifier-free aggregates for 13 months.
+declining persists without creating an identifier. Raw identifier-bearing
+events are retained for 34 days and identifier-free daily aggregates for 360
+days.
+
+Offline queued counters are merged into the next successful current-day
+heartbeat. Each usage delivery carries a lowercase UUIDv4 `batchId`; retries
+reuse the same batch identifier and counters, while launch and heartbeat
+events never include `batchId`. Counters remain bounded by the same allowlist.
 
 ### Updates
 

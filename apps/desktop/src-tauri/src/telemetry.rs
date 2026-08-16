@@ -96,11 +96,19 @@ fn bounded_add(current: u64, delta: u64) -> u64 {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
+struct InFlightUsage {
+    batch_id: Uuid,
+    counters: UsageCounters,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
 struct StoredState {
     consent: ConsentState,
     install_id: Option<Uuid>,
     last_heartbeat_day: Option<String>,
     pending_usage_by_day: BTreeMap<String, UsageCounters>,
+    in_flight_usage: Option<InFlightUsage>,
 }
 
 fn sanitize_loaded_state(state: &mut StoredState) -> bool {
@@ -115,6 +123,7 @@ fn sanitize_loaded_state(state: &mut StoredState) -> bool {
         state.install_id = None;
         state.last_heartbeat_day = None;
         state.pending_usage_by_day.clear();
+        state.in_flight_usage = None;
     }
     for usage in state.pending_usage_by_day.values_mut() {
         usage.recordings_started = usage.recordings_started.min(MAX_COUNTER);
@@ -124,6 +133,28 @@ fn sanitize_loaded_state(state: &mut StoredState) -> bool {
         usage.transcriptions_failed = usage.transcriptions_failed.min(MAX_COUNTER);
         usage.model_downloads_completed = usage.model_downloads_completed.min(MAX_COUNTER);
         usage.model_downloads_failed = usage.model_downloads_failed.min(MAX_COUNTER);
+    }
+    let invalid_in_flight = state.in_flight_usage.as_ref().is_some_and(|in_flight| {
+        in_flight.batch_id.get_version_num() != 4
+            || in_flight.batch_id.get_variant() != uuid::Variant::RFC4122
+    });
+    if invalid_in_flight {
+        state.in_flight_usage = None;
+    } else if let Some(in_flight) = state.in_flight_usage.as_mut() {
+        in_flight.counters.recordings_started =
+            in_flight.counters.recordings_started.min(MAX_COUNTER);
+        in_flight.counters.recordings_completed =
+            in_flight.counters.recordings_completed.min(MAX_COUNTER);
+        in_flight.counters.recordings_failed =
+            in_flight.counters.recordings_failed.min(MAX_COUNTER);
+        in_flight.counters.transcriptions_completed =
+            in_flight.counters.transcriptions_completed.min(MAX_COUNTER);
+        in_flight.counters.transcriptions_failed =
+            in_flight.counters.transcriptions_failed.min(MAX_COUNTER);
+        in_flight.counters.model_downloads_completed =
+            in_flight.counters.model_downloads_completed.min(MAX_COUNTER);
+        in_flight.counters.model_downloads_failed =
+            in_flight.counters.model_downloads_failed.min(MAX_COUNTER);
     }
     original != serde_json::to_vec(state).ok()
 }
@@ -139,6 +170,8 @@ struct Event<'a> {
     platform: &'static str,
     arch: &'static str,
     day: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    batch_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     usage: Option<UsageCounters>,
 }
@@ -220,6 +253,7 @@ impl Telemetry {
             next.install_id = None;
             next.last_heartbeat_day = None;
             next.pending_usage_by_day.clear();
+            next.in_flight_usage = None;
         }
         self.persist(&next)?;
         *state = next;
@@ -243,6 +277,7 @@ impl Telemetry {
             &state,
             "launch",
             &today,
+            None,
             None,
             self.runtime_enabled.subscribe(),
         )
@@ -268,6 +303,7 @@ impl Telemetry {
                 "heartbeat",
                 &today,
                 None,
+                None,
                 self.runtime_enabled.subscribe(),
             )
             .await
@@ -292,31 +328,39 @@ impl Telemetry {
     }
 
     async fn send_pending_usage(&self, state: &mut StoredState, today: &str) -> Result<(), String> {
-        let completed_days = state
-            .pending_usage_by_day
-            .iter()
-            .filter(|(day, usage)| day.as_str() < today && !usage.is_zero())
-            .map(|(day, usage)| (day.clone(), *usage))
-            .collect::<Vec<_>>();
-        let mut changed = false;
-        for (day, usage) in completed_days {
-            if !self.runtime_enabled() {
-                break;
-            }
-            if post(
-                state,
-                "usage",
-                &day,
-                Some(usage),
-                self.runtime_enabled.subscribe(),
-            )
-            .await
-            {
-                state.pending_usage_by_day.remove(&day);
-                changed = true;
-            }
+        if !self.runtime_enabled() {
+            return Ok(());
         }
-        if changed {
+        if state.in_flight_usage.is_none() {
+            let (completed_days, counters) = completed_usage(state, today);
+            if counters.is_zero() {
+                return Ok(());
+            }
+            let mut next = state.clone();
+            for day in completed_days {
+                next.pending_usage_by_day.remove(&day);
+            }
+            next.in_flight_usage = Some(InFlightUsage {
+                batch_id: Uuid::new_v4(),
+                counters,
+            });
+            self.persist(&next)?;
+            *state = next;
+        }
+        let Some(in_flight) = state.in_flight_usage.clone() else {
+            return Ok(());
+        };
+        if post(
+            state,
+            "usage",
+            today,
+            Some(in_flight.batch_id),
+            Some(in_flight.counters),
+            self.runtime_enabled.subscribe(),
+        )
+        .await
+        {
+            state.in_flight_usage = None;
             self.persist(state)?;
         }
         Ok(())
@@ -329,6 +373,24 @@ fn add_pending_usage(state: &mut StoredState, day: &str, counters: UsageCounters
         .entry(day.to_string())
         .or_default()
         .add(counters);
+}
+
+// Canonical v2 accepts only the current UTC day; delayed local counters are
+// merged and sent once when the next heartbeat succeeds.
+fn completed_usage(state: &StoredState, today: &str) -> (Vec<String>, UsageCounters) {
+    let completed_days = state
+        .pending_usage_by_day
+        .keys()
+        .filter(|day| day.as_str() < today)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut usage = UsageCounters::default();
+    for day in &completed_days {
+        if let Some(counters) = state.pending_usage_by_day.get(day) {
+            usage.add(*counters);
+        }
+    }
+    (completed_days, usage)
 }
 
 fn status(state: &StoredState) -> TelemetryStatus {
@@ -350,6 +412,7 @@ async fn post(
     state: &StoredState,
     event: &str,
     day: &str,
+    batch_id: Option<Uuid>,
     usage: Option<UsageCounters>,
     mut runtime_enabled: watch::Receiver<bool>,
 ) -> bool {
@@ -365,6 +428,7 @@ async fn post(
         platform: platform(),
         arch: arch(),
         day,
+        batch_id,
         usage,
     };
     let Ok(client) = reqwest::Client::builder()
@@ -415,7 +479,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn consent_is_undecided_and_disabled_until_explicit_acceptance() {
+        let state = StoredState::default();
+        assert_eq!(state.consent, ConsentState::Undecided);
+        assert!(state.install_id.is_none());
+        assert!(!enabled(&state));
+
+        let declined = StoredState {
+            consent: ConsentState::Declined,
+            ..StoredState::default()
+        };
+        assert!(!enabled(&declined));
+    }
+
+    #[test]
     fn usage_payload_has_only_the_v2_allowlist() {
+
         let payload = Event {
             schema: SCHEMA,
             app: APP,
@@ -425,6 +504,7 @@ mod tests {
             platform: "macos",
             arch: "arm64",
             day: "2026-08-16",
+            batch_id: Some(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap()),
             usage: Some(UsageCounters {
                 recordings_started: 2,
                 transcriptions_completed: 1,
@@ -443,6 +523,7 @@ mod tests {
             [
                 "app",
                 "arch",
+                "batchId",
                 "day",
                 "event",
                 "installId",
@@ -453,8 +534,81 @@ mod tests {
             ]
         );
         assert!(value.get("timestamp").is_none());
+
         assert!(value.get("osVersion").is_none());
     }
+    #[test]
+    fn batch_id_is_usage_only_and_lowercase_uuid_v4() {
+        let batch_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
+        let usage = Event {
+            schema: SCHEMA,
+            app: APP,
+            event: "usage",
+            install_id: Uuid::new_v4(),
+            version: "0.2.2",
+            platform: "macos",
+            arch: "arm64",
+            day: "2026-08-16",
+            batch_id: Some(batch_id),
+            usage: Some(UsageCounters::default()),
+        };
+        let usage_value = serde_json::to_value(usage).unwrap();
+        assert_eq!(
+            usage_value.get("batchId").and_then(serde_json::Value::as_str),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
+
+        let heartbeat = Event {
+            schema: SCHEMA,
+            app: APP,
+            event: "heartbeat",
+            install_id: Uuid::new_v4(),
+            version: "0.2.2",
+            platform: "macos",
+            arch: "arm64",
+            day: "2026-08-16",
+            batch_id: None,
+            usage: None,
+        };
+        assert!(serde_json::to_value(heartbeat)
+            .unwrap()
+            .get("batchId")
+            .is_none());
+    }
+    #[test]
+    fn in_flight_usage_state_is_immutable_and_requires_uuid_v4() {
+        let batch_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
+        let mut state = StoredState {
+            consent: ConsentState::Accepted,
+            install_id: Some(Uuid::new_v4()),
+            in_flight_usage: Some(InFlightUsage {
+                batch_id,
+                counters: UsageCounters {
+                    recordings_started: 2,
+                    ..UsageCounters::default()
+                },
+            }),
+            ..StoredState::default()
+        };
+        let encoded = serde_json::to_vec(&state).unwrap();
+        let decoded: StoredState = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            decoded.in_flight_usage.as_ref().map(|batch| batch.batch_id),
+            Some(batch_id)
+        );
+        assert_eq!(
+            decoded
+                .in_flight_usage
+                .as_ref()
+                .map(|batch| batch.counters.recordings_started),
+            Some(2)
+        );
+
+        state.in_flight_usage.as_mut().unwrap().batch_id = Uuid::nil();
+        assert!(sanitize_loaded_state(&mut state));
+        assert!(state.in_flight_usage.is_none());
+    }
+
 
     #[test]
     fn counters_reject_unknown_fields_and_out_of_range_values() {
@@ -487,9 +641,8 @@ mod tests {
         assert_eq!(counters.recordings_started, MAX_COUNTER);
         assert_eq!(counters.transcriptions_completed, 2);
     }
-
     #[test]
-    fn pending_usage_remains_attributed_to_its_utc_day() {
+    fn pending_usage_keeps_local_buckets_until_successful_delivery() {
         let mut state = StoredState::default();
         add_pending_usage(
             &mut state,
@@ -508,6 +661,14 @@ mod tests {
             },
         );
         assert_eq!(state.pending_usage_by_day.len(), 2);
+        let (completed_days, aggregate) = completed_usage(&state, "2026-08-18");
+        assert_eq!(
+            completed_days,
+            vec!["2026-08-16".to_string(), "2026-08-17".to_string()]
+        );
+        assert_eq!(aggregate.recordings_started, 1);
+        assert_eq!(aggregate.recordings_completed, 1);
+        assert_eq!(completed_usage(&state, "2026-08-16").1, UsageCounters::default());
         assert_eq!(
             state.pending_usage_by_day["2026-08-16"].recordings_started,
             1
@@ -532,6 +693,7 @@ mod tests {
             consent: ConsentState::Accepted,
             install_id: Some(Uuid::new_v4()),
             last_heartbeat_day: Some("2026-08-16".to_string()),
+            in_flight_usage: None,
             pending_usage_by_day,
         };
         state.consent = ConsentState::Declined;

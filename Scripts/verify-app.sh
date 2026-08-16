@@ -20,7 +20,21 @@ INFO_PLIST="$APP_PATH/Contents/Info.plist"
 EXECUTABLE="$APP_PATH/Contents/MacOS/ultravox"
 [[ -f "$INFO_PLIST" ]] || { echo "Missing Info.plist" >&2; exit 1; }
 [[ -x "$EXECUTABLE" ]] || { echo "Missing executable: $EXECUTABLE" >&2; exit 1; }
+SCREEN_CAPTURE_USAGE="$(/usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "$INFO_PLIST" 2>/dev/null || true)"
+[[ "$SCREEN_CAPTURE_USAGE" == *"UltraVox"* ]] || {
+  echo "Screen Recording usage description must identify UltraVox." >&2
+  exit 1
+}
+[[ "$SCREEN_CAPTURE_USAGE" != *"UltraTerm"* ]] || {
+  echo "Screen Recording usage description must not identify UltraTerm." >&2
+  exit 1
+}
 
+DISPLAY_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST" 2>/dev/null || true)"
+[[ "$DISPLAY_NAME" == "UltraVox" ]] || {
+  echo "Bundle display name mismatch: $DISPLAY_NAME" >&2
+  exit 1
+}
 IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST" 2>/dev/null || true)"
 [[ "$IDENTIFIER" == "$BUNDLE_ID" ]] || { echo "Bundle identifier mismatch: $IDENTIFIER" >&2; exit 1; }
 if [[ -n "$EXPECTED_VERSION" ]]; then

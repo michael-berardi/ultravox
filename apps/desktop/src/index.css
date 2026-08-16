@@ -352,10 +352,16 @@ body {
 }
 
 .record-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-  transform: none;
+  border-color: var(--border-subtle);
+  background: var(--panel);
   box-shadow: none;
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.record-button:disabled svg {
+  opacity: 0.58;
 }
 
 
@@ -373,6 +379,13 @@ body {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+}
+.capture-note {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  color: var(--text-secondary);
+  font: 600 11px/1 var(--font);
 }
 
 .secondary-action {
@@ -401,7 +414,7 @@ body {
 
 .secondary-action:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.62;
 }
 
 .compact-modal-backdrop {
