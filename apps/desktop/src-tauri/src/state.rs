@@ -130,6 +130,7 @@ pub struct AppState {
     pub meeting_session: AsyncMutex<Option<MeetingSession>>,
     meeting_detection: AsyncMutex<MeetingDetectionState>,
     pub audio: AsyncMutex<CpalAudioBackend>,
+    pub telemetry: crate::telemetry::Telemetry,
 }
 
 fn recording_id_for(recording: &AudioRecording) -> Uuid {
@@ -189,6 +190,7 @@ impl AppState {
             .clone()
             .unwrap_or_else(|| app_dir.join("models"));
         let _ = std::fs::remove_dir_all(app_dir.join("recordings").join(".imports"));
+        let telemetry = crate::telemetry::Telemetry::new(app.clone())?;
         Ok(Self {
             app: app.clone(),
             config: Mutex::new(config),
@@ -201,7 +203,15 @@ impl AppState {
             meeting_session: AsyncMutex::new(None),
             meeting_detection: AsyncMutex::new(MeetingDetectionState::default()),
             audio: AsyncMutex::new(CpalAudioBackend::new()),
+            telemetry,
         })
+    }
+    pub fn record_telemetry_usage(&self, counters: crate::telemetry::UsageCounters) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _ = state.telemetry.usage(counters).await;
+        });
     }
 
     /// Path to the configured directory for cached model files.
@@ -705,6 +715,10 @@ impl AppState {
         self.clear_pending_meeting_detection().await;
         crate::close_meeting_reminder(&self.app);
         self.emit_recording_started(&recording)?;
+        self.record_telemetry_usage(crate::telemetry::UsageCounters {
+            recordings_started: 1,
+            ..crate::telemetry::UsageCounters::default()
+        });
         Ok(id.to_string())
     }
 
@@ -738,6 +752,10 @@ impl AppState {
                     .map_err(|emit_error| {
                         format!("{error}; failed to notify recording stop: {emit_error}")
                     })?;
+                self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    recordings_failed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
                 return Err(error.to_string());
             }
         };
@@ -774,6 +792,10 @@ impl AppState {
             self.emit_recording_added(&row)?;
             self.emit_recording_stopped(&recording)?;
         }
+        self.record_telemetry_usage(crate::telemetry::UsageCounters {
+            recordings_completed: 1,
+            ..crate::telemetry::UsageCounters::default()
+        });
 
         let app = self.app.clone();
         let recording_for_task = recording.clone();
@@ -1289,6 +1311,10 @@ impl AppState {
                             row.transcription.clone(),
                             Some(language.clone()),
                         )?;
+                        self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                            transcriptions_failed: 1,
+                            ..crate::telemetry::UsageCounters::default()
+                        });
                         return Err(row.transcription);
                     }
                 }
@@ -1298,6 +1324,10 @@ impl AppState {
                     final_text.clone(),
                     Some(language.clone()),
                 )?;
+                self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    transcriptions_completed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
 
                 // Auto-copy to the system clipboard if enabled.
                 if auto_copy {
@@ -1361,6 +1391,10 @@ impl AppState {
                     failure_text.clone(),
                     Some(language.clone()),
                 )?;
+                self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    transcriptions_failed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
                 #[cfg(target_os = "macos")]
                 {
                     bridge::set_indicator_state("failed");

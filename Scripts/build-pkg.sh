@@ -60,18 +60,14 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     --entitlements "$ENTITLEMENTS_PATH" \
     --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
 else
+  if [[ "${REQUIRE_SIGNED:-0}" == "1" ]]; then
+    echo "Refusing to produce an unsigned production package." >&2
+    exit 1
+  fi
   codesign --force --deep --entitlements "$ENTITLEMENTS_PATH" --sign - "$APP_PATH"
 fi
-codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-AUDIO_INPUT_ENTITLEMENT="$(
-  codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null \
-    | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null \
-    || true
-)"
-if [[ "$AUDIO_INPUT_ENTITLEMENT" != "true" ]]; then
-  echo "Signed UltraVox.app is missing the required audio-input entitlement." >&2
-  exit 1
-fi
+EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED="${REQUIRE_SIGNED:-0}" \
+  ALLOW_ADHOC="${ALLOW_ADHOC:-0}" "${ROOT_DIR}/Scripts/verify-app.sh" "$APP_PATH"
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$PKG_PATH"

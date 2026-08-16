@@ -28,6 +28,9 @@ void ultravox_macos_bridge_free_string(char *s);
 
 /* Microphone authorization: 0 not determined, 1 authorized, 2 denied, 3 restricted. */
 int32_t ultravox_macos_bridge_microphone_authorization_status(void);
+/* Screen Recording preflight: 0 unavailable/not granted, 1 granted. */
+int32_t ultravox_macos_bridge_screen_recording_authorization_status(void);
+int32_t ultravox_macos_bridge_request_screen_recording_access(void);
 int32_t ultravox_macos_bridge_request_microphone_access(void);
 
 /* Captures system and microphone audio through ScreenCaptureKit. */

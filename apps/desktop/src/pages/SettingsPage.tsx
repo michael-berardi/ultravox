@@ -8,11 +8,18 @@ import {
   isModelDownloaded,
   getModelProgress,
   setShortcutSettings,
+  checkForUpdate,
+  getUpdatePreferences,
+  installUpdate,
+  setUpdatePreferences,
+  getAppTelemetryStatus,
+  setAppTelemetryEnabled,
   onSettingsChanged,
   type AppConfig,
   type ModelEntry,
   type ModifierKey,
   type ShortcutSettings as ShortcutSettingsPayload,
+  type UpdateInfo,
 } from "../ipc";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -710,8 +717,105 @@ function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
 }
 
 function PrivacySettings({ config, onChange }: SettingsSectionProps) {
+  const [automatic, setAutomatic] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([getUpdatePreferences(), checkForUpdate(), getAppTelemetryStatus()])
+      .then(([preferences, candidate, telemetry]) => {
+        if (!cancelled) {
+          setAutomatic(preferences.automatic);
+          setUpdate(candidate);
+          setTelemetryEnabled(telemetry.enabled);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setUpdateMessage(`Update check unavailable: ${String(error)}`);
+      });
+    return () => { cancelled = true; };
+  }, []);
+  const updateTelemetry = async (enabled: boolean) => {
+    try {
+      const next = await setAppTelemetryEnabled(enabled);
+      setTelemetryEnabled(next.enabled);
+    } catch (error) {
+      setUpdateMessage(`Could not update telemetry preference: ${String(error)}`);
+    }
+  };
+
+
+  const updateAutomatic = async (enabled: boolean) => {
+    setAutomatic(enabled);
+    await setUpdatePreferences({ automatic: enabled });
+    if (enabled && update) {
+      setUpdateBusy(true);
+      try {
+        await installUpdate(update);
+        setUpdateMessage("Update installed. UltraVox is relaunching.");
+      } catch (error) {
+        setUpdateMessage(`Update was not installed: ${String(error)}`);
+      } finally {
+        setUpdateBusy(false);
+      }
+    }
+  };
+
+  const installCandidate = async () => {
+    if (!update) return;
+    setUpdateBusy(true);
+    try {
+      await installUpdate(update);
+      setUpdateMessage("Update installed. UltraVox is relaunching.");
+    } catch (error) {
+      setUpdateMessage(`Update was not installed: ${String(error)}`);
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
   return (
     <div className="settings-group" role="tabpanel" id="panel-privacy" aria-labelledby="tab-privacy">
+      <div className="settings-card">
+        <h3>Privacy</h3>
+        <p className="description">
+          Optional telemetry is off until you explicitly accept it. It contains a random
+          app-install ID, coarse platform details, and daily feature counts—never transcripts,
+          audio, prompts, URLs, paths, errors, or hardware identifiers. Identifier rows expire
+          within 34 UTC days; ID-free daily totals within 360 days.
+        </p>
+        <ToggleRow
+          label="Share anonymous usage aggregates"
+          description="You can disable this at any time; disabling clears the install identifier and queued events."
+          checked={telemetryEnabled}
+          onChange={(checked) => void updateTelemetry(checked)}
+        />
+      </div>
+      <div className="settings-card">
+        <h3>Updates</h3>
+        <p className="description">Stable releases are checked at launch and daily. Updates are staged and verified before /Applications/UltraVox.app is touched.</p>
+        <ToggleRow
+          label="Install updates automatically"
+          description="Opt in to automatic installation after checksum, identity, sealed-code, and notarization checks."
+          checked={automatic}
+          onChange={(checked) => void updateAutomatic(checked)}
+        />
+        {update && (
+          <div className="settings-row">
+            <div className="settings-row-label">
+              <label>UltraVox {update.latest_version} is available</label>
+              <p className="description">Choose Update now or Later. A failed check leaves the current app untouched.</p>
+            </div>
+            <button className="btn btn-primary" type="button" disabled={updateBusy} onClick={() => void installCandidate()}>
+              {updateBusy ? "Verifying…" : "Update now"}
+            </button>
+          </div>
+        )}
+        {updateMessage && <p className="description" role="status">{updateMessage}</p>}
+      </div>
       <div className="settings-card">
         <h3>Meeting detection</h3>
         <p className="description">

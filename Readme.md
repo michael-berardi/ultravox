@@ -28,25 +28,26 @@ required.
 
 ## Installation
 
-Prebuilt Apple Silicon releases include both `UltraVox.app` and the
-`ultravox-control` CLI. The installer verifies the published SHA-256 checksum
-and macOS code signature before replacing anything.
+Prebuilt Apple Silicon releases include `UltraVox.app` and the
+`ultravox-control` CLI. Every release is Developer ID signed for team
+`T63VT9UAY2`, notarized, and published with SHA-256 checksums. The package
+installer verifies the bundle identifier, designated requirement, sealed code,
+signature team, and checksum before installing.
 
-For an AI agent or a user account install (no compiler or `sudo` required):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/michael-berardi/ultravox/master/install.sh | bash
-```
-
-This installs the app to `~/Applications/UltraVox.app` and the CLI to
-`~/.local/bin/ultravox-control`. For a machine-wide install:
+UltraVox has one canonical install and update location:
+`/Applications/UltraVox.app`. Use the signed `.pkg` from
+[GitHub Releases](https://github.com/michael-berardi/ultravox/releases):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/michael-berardi/ultravox/master/install.sh | bash -s -- --system
+curl -fL -o UltraVox.pkg https://github.com/michael-berardi/ultravox/releases/latest/download/UltraVox-macos-arm64.pkg
+curl -fL -o UltraVox.pkg.sha256 https://github.com/michael-berardi/ultravox/releases/latest/download/UltraVox-macos-arm64.pkg.sha256
+shasum -a 256 -c UltraVox.pkg.sha256
+./Scripts/verify-pkg.sh UltraVox.pkg --install
 ```
 
-Release assets are also available from
-[GitHub Releases](https://github.com/michael-berardi/ultravox/releases).
+Per-user app installs are intentionally unsupported. Updates replace only the
+verified `/Applications/UltraVox.app` candidate; failed verification leaves the
+existing app untouched.
 
 ## Requirements
 
@@ -115,3 +116,26 @@ All third-party licenses and notices remain the property of their respective own
 Transcription runs on-device. After the selected model is downloaded from Hugging Face, microphone recording and meeting capture can be transcribed offline. Media URL import still requires network access to download the source.
 
 Browser meeting reminders are opt-in and local. The extension does not send UltraVox meeting URLs, titles, participants, or page contents, and UltraVox never starts recording until **Start recording** is selected in its visible reminder.
+
+### Optional telemetry
+
+Telemetry is off by default and is requested in a first-run consent dialog
+before model onboarding. If enabled, UltraVox sends only coarse launch,
+heartbeat, and usage aggregates to
+`https://analytics.libertydesign.studio/api/app-telemetry/event` using schema
+`lds.app-telemetry.event.v1`. Payloads contain the app version, platform,
+architecture, UTC day, and bounded integer counters. They never contain
+transcripts, audio, prompts, recordings, meeting IDs, URLs, titles, providers,
+participants, paths, keys, shortcuts, errors, stacks, or host/user/device IDs.
+Disabling telemetry clears the random install identifier and queued events;
+declining does not create an identifier. Raw events are retained for 35 days
+and identifier-free aggregates for 13 months.
+
+### Updates
+
+UltraVox checks the latest stable GitHub release at launch and approximately
+once per day. Updates are offered as **Update now**, **Later**, or
+**Install automatically**. Automatic installation is opt-in. Candidates are
+staged atomically and must pass checksum, Developer ID team,
+bundle/designated-requirement, sealed-code, and notarization checks before the
+existing `/Applications/UltraVox.app` is touched.

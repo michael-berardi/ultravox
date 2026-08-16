@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use uuid::Uuid;
 
@@ -19,6 +19,7 @@ use ultravox_core::{
 use ultravox_macos_bridge as bridge;
 
 use crate::state::{AppState, MeetingSession};
+use crate::update::{self, UpdateInfo, UpdatePreferences};
 
 pub const APP_NAME: &str = "UltraVox";
 pub const APP_IDENTIFIER: &str = "com.imploselabs.ultravox";
@@ -96,6 +97,168 @@ pub struct AppStatus {
     pub recording: bool,
     pub meeting: bool,
     pub transcription: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PermissionStatus {
+    pub microphone: PermissionState,
+    pub accessibility: PermissionState,
+    pub screen_recording: PermissionState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionState {
+    Granted,
+    Denied,
+    NotDetermined,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionKind {
+    Microphone,
+    Accessibility,
+    ScreenRecording,
+}
+
+fn permission_status() -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let microphone = match bridge::microphone_authorization_status() {
+            bridge::MicrophoneAuthorizationStatus::Authorized => PermissionState::Granted,
+            bridge::MicrophoneAuthorizationStatus::NotDetermined => PermissionState::NotDetermined,
+            bridge::MicrophoneAuthorizationStatus::Denied
+            | bridge::MicrophoneAuthorizationStatus::Restricted => PermissionState::Denied,
+        };
+        return PermissionStatus {
+            microphone,
+            accessibility: if bridge::is_accessibility_trusted(false) {
+                PermissionState::Granted
+            } else {
+                PermissionState::Denied
+            },
+            screen_recording: if bridge::screen_recording_authorized() {
+                PermissionState::Granted
+            } else {
+                PermissionState::Denied
+            },
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionStatus {
+            microphone: PermissionState::Unavailable,
+            accessibility: PermissionState::Unavailable,
+            screen_recording: PermissionState::Unavailable,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_permission_status() -> PermissionStatus {
+    permission_status()
+}
+
+#[tauri::command]
+pub fn request_permission(kind: PermissionKind) -> Result<PermissionStatus, String> {
+    #[cfg(target_os = "macos")]
+    match kind {
+        PermissionKind::Microphone => {
+            let _ = bridge::request_microphone_access();
+        }
+        PermissionKind::Accessibility => {
+            let _ = bridge::is_accessibility_trusted(true);
+        }
+        PermissionKind::ScreenRecording => {
+            let _ = bridge::request_screen_recording_access();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = kind;
+    Ok(permission_status())
+}
+
+#[tauri::command]
+pub fn open_permission_settings(kind: PermissionKind) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let pane = match kind {
+            PermissionKind::Microphone => "Privacy_Microphone",
+            PermissionKind::Accessibility => "Privacy_Accessibility",
+            PermissionKind::ScreenRecording => "Privacy_ScreenCapture",
+        };
+        std::process::Command::new("open")
+            .arg(format!(
+                "x-apple.systempreferences:com.apple.preference.security?{pane}"
+            ))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("failed to open macOS Privacy settings: {error}"))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = kind;
+        Err("macOS permission settings are unavailable on this platform".to_string())
+    }
+}
+#[tauri::command]
+pub fn get_update_preferences(state: State<'_, AppState>) -> Result<UpdatePreferences, String> {
+    update::read_preferences(&state.app)
+}
+
+#[tauri::command]
+pub fn set_update_preferences(
+    state: State<'_, AppState>,
+    preferences: UpdatePreferences,
+) -> Result<(), String> {
+    update::write_preferences(&state.app, &preferences)
+}
+
+#[tauri::command]
+pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
+    update::check(APP_VERSION).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
+    update::install(app, info).await
+}
+#[tauri::command]
+pub async fn get_app_telemetry_status(
+    state: State<'_, AppState>,
+) -> Result<crate::telemetry::TelemetryStatus, String> {
+    Ok(state.telemetry.status().await)
+}
+
+#[tauri::command]
+pub async fn set_app_telemetry_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<crate::telemetry::TelemetryStatus, String> {
+    let status = state.telemetry.set_enabled(enabled).await?;
+    if enabled {
+        let app = state.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _ = state.telemetry.launch().await;
+            let _ = state.telemetry.heartbeat().await;
+        });
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn record_app_telemetry_usage(
+    state: State<'_, AppState>,
+    counters: crate::telemetry::UsageCounters,
+) -> Result<(), String> {
+    state.telemetry.usage(counters).await
 }
 
 #[tauri::command]
@@ -379,7 +542,16 @@ pub async fn prepare_model(state: State<'_, AppState>, model_id: String) -> Resu
             .get()
             .models_directory
             .clone();
-        return Ok(bridge::prepare_model(version, directory.as_deref()));
+        let was_downloaded = bridge::is_model_downloaded(version, directory.as_deref());
+        let prepared = bridge::prepare_model(version, directory.as_deref());
+        if !was_downloaded {
+            state.record_telemetry_usage(crate::telemetry::UsageCounters {
+                model_downloads_completed: u64::from(prepared),
+                model_downloads_failed: u64::from(!prepared),
+                ..crate::telemetry::UsageCounters::default()
+            });
+        }
+        return Ok(prepared);
     }
 
     let request = ModelDownload {
@@ -860,6 +1032,10 @@ pub(crate) async fn start_meeting_impl(state: &AppState) -> Result<String, Strin
         });
         drop(meeting);
         state.emit_meeting_state_changed(true)?;
+        state.record_telemetry_usage(crate::telemetry::UsageCounters {
+            recordings_started: 1,
+            ..crate::telemetry::UsageCounters::default()
+        });
         state.clear_pending_meeting_detection().await;
         crate::close_meeting_reminder(&state.app);
         Ok(id.to_string())
@@ -993,6 +1169,10 @@ pub async fn stop_meeting(state: State<'_, AppState>) -> Result<AudioRecording, 
         }
         clear_meeting_session(state.inner(), session.id).await?;
         queued?;
+        state.record_telemetry_usage(crate::telemetry::UsageCounters {
+            recordings_completed: 1,
+            ..crate::telemetry::UsageCounters::default()
+        });
         Ok(recording)
     }
 }
@@ -1012,7 +1192,6 @@ pub async fn start_recording(state: State<'_, AppState>) -> Result<String, Strin
 pub async fn stop_recording(state: State<'_, AppState>) -> Result<AudioRecording, String> {
     state.finish_recording(true).await
 }
-
 #[tauri::command]
 pub fn get_transcription_status() -> Result<String, String> {
     Ok("idle".to_string())

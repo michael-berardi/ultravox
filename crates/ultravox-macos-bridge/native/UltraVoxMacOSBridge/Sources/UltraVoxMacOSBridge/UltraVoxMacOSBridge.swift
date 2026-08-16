@@ -623,6 +623,18 @@ public func ultravox_macos_bridge_request_microphone_access() -> Int32 {
     return granted.load() ? 1 : 0
 }
 
+/// Uses Apple's runtime preflight rather than stale TCC database rows.
+@_cdecl("ultravox_macos_bridge_screen_recording_authorization_status")
+public func ultravox_macos_bridge_screen_recording_authorization_status() -> Int32 {
+    CGPreflightScreenCaptureAccess() ? 1 : 0
+}
+
+/// Requests Screen Recording access only when the user explicitly asks.
+@_cdecl("ultravox_macos_bridge_request_screen_recording_access")
+public func ultravox_macos_bridge_request_screen_recording_access() -> Int32 {
+    CGRequestScreenCaptureAccess() ? 1 : 0
+}
+
 // MARK: - Meeting capture
 
 @_cdecl("ultravox_macos_bridge_start_meeting_capture")

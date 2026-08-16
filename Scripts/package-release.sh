@@ -62,6 +62,9 @@ if [[ "$AUDIO_INPUT_ENTITLEMENT" != "true" ]]; then
   echo "UltraVox.app is missing the required audio-input entitlement." >&2
   exit 1
 fi
+EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED=0 ALLOW_ADHOC=1 \
+  "${ROOT_DIR}/Scripts/verify-app.sh" "$APP_PATH"
+
 
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
   codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$CLI_PATH"
@@ -75,17 +78,21 @@ STABLE_PKG="${OUTPUT_DIR}/${PRODUCT}-macos-${ARCH}.pkg"
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 mkdir -p "$OUTPUT_DIR"
 rm -f "$VERSIONED_PKG" "${VERSIONED_PKG}.sha256" \
-  "$STABLE_PKG" "${STABLE_PKG}.sha256" \
-  "$ARCHIVE_PATH" "${ARCHIVE_PATH}.sha256"
+  "$STABLE_PKG" "${STABLE_PKG}.sha256" "$ARCHIVE_PATH" "${ARCHIVE_PATH}.sha256"
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
-  SKIP_BUILD=1 OUTPUT_DIR="$OUTPUT_DIR" REQUIRE_SIGNED=1 NOTARIZE=1 \
+  SKIP_BUILD=1 OUTPUT_DIR="$OUTPUT_DIR" APP_PATH="$APP_PATH" EXPECTED_VERSION="$VERSION" \
+    REQUIRE_SIGNED=1 NOTARIZE=1 ALLOW_ADHOC=0 \
     APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
     APPLE_INSTALLER_SIGNING_IDENTITY="$APPLE_INSTALLER_SIGNING_IDENTITY" \
     NOTARYTOOL_PROFILE="$NOTARYTOOL_PROFILE" \
     "${ROOT_DIR}/Scripts/build-pkg.sh"
 else
-  SKIP_BUILD=1 OUTPUT_DIR="$OUTPUT_DIR" "${ROOT_DIR}/Scripts/build-pkg.sh"
+  SKIP_BUILD=1 OUTPUT_DIR="$OUTPUT_DIR" APP_PATH="$APP_PATH" EXPECTED_VERSION="$VERSION" \
+    ALLOW_ADHOC=1 "${ROOT_DIR}/Scripts/build-pkg.sh"
 fi
+EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED="$SIGNED_RELEASE" REQUIRE_NOTARIZED="$SIGNED_RELEASE" \
+  ALLOW_ADHOC="$ALLOW_ADHOC" "${ROOT_DIR}/Scripts/verify-pkg.sh" "$VERSIONED_PKG"
+
 
 mv "$VERSIONED_PKG" "$STABLE_PKG"
 rm -f "${VERSIONED_PKG}.sha256"
@@ -102,12 +109,25 @@ ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
   xcrun notarytool submit "$ARCHIVE_PATH" --keychain-profile "$NOTARYTOOL_PROFILE" --wait
   xcrun stapler staple "${PAYLOAD_DIR}/${PRODUCT}.app"
+
   rm -f "$ARCHIVE_PATH"
   ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
 fi
 
-codesign --verify --deep --strict "${PAYLOAD_DIR}/${PRODUCT}.app"
-codesign --verify --strict "${PAYLOAD_DIR}/bin/ultravox-control"
+codesign --verify --strict "$CLI_PATH"
+if [[ "$SIGNED_RELEASE" == "1" ]]; then
+  codesign -dv --verbose=4 "$CLI_PATH" 2>&1 | grep -Eq '^TeamIdentifier=T63VT9UAY2$' || {
+    echo "Production CLI must be signed by Developer ID team T63VT9UAY2." >&2
+    exit 1
+  }
+fi
+ARCHIVE_CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-archive-check.XXXXXX")"
+trap 'rm -rf "$STAGING_DIR" "$ARCHIVE_CHECK_DIR"' EXIT
+ditto -x -k "$ARCHIVE_PATH" "$ARCHIVE_CHECK_DIR"
+EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED="$SIGNED_RELEASE" \
+  REQUIRE_NOTARIZED="$SIGNED_RELEASE" ALLOW_ADHOC="$ALLOW_ADHOC" \
+  "${ROOT_DIR}/Scripts/verify-app.sh" "$ARCHIVE_CHECK_DIR/${PAYLOAD_NAME}/${PRODUCT}.app"
+
 (
   cd "$OUTPUT_DIR"
   shasum -a 256 "$(basename "$STABLE_PKG")" > "$(basename "$STABLE_PKG").sha256"

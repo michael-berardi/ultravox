@@ -8,6 +8,8 @@ use tauri::{AppHandle, Manager, Wry};
 mod commands;
 mod events;
 mod state;
+mod telemetry;
+mod update;
 pub mod voice_ipc;
 
 use commands::*;
@@ -16,16 +18,19 @@ use state::AppState;
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 pub use commands::{
-    bridge_version, copy_to_clipboard, delete_recording, export_recording, get_app_info,
-    get_app_status, get_audio_devices, get_audio_input_config, get_caret_position,
-    get_download_progress, get_downloads, get_model_catalog, get_pending_meeting_detection,
-    get_recording, get_settings, get_shortcut_settings, hide_indicator, import_url,
-    is_model_downloaded, list_recordings, paste_text, prepare_model, respond_meeting_detection,
-    retry_transcription, search_recordings, set_settings, set_shortcut_settings, show_indicator,
-    start_download, start_key_combination_hotkey, start_meeting, start_modifier_hotkey,
-    start_recording, stop_key_combination_hotkey, stop_meeting, stop_modifier_hotkey,
-    stop_recording, transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion,
-    CaretPosition, TranscriptionResult,
+    bridge_version, check_for_update, copy_to_clipboard, delete_recording, export_recording,
+    get_app_info, get_app_status, get_app_telemetry_status, get_audio_devices,
+    get_audio_input_config, get_caret_position, get_download_progress, get_downloads,
+    get_model_catalog, get_pending_meeting_detection, get_permission_status, get_recording,
+    get_settings, get_shortcut_settings, get_update_preferences, hide_indicator, import_url,
+    install_update, is_model_downloaded, list_recordings, open_permission_settings, paste_text,
+    prepare_model, record_app_telemetry_usage, request_permission, respond_meeting_detection,
+    retry_transcription, search_recordings, set_app_telemetry_enabled, set_settings,
+    set_shortcut_settings, set_update_preferences, show_indicator, start_download,
+    start_key_combination_hotkey, start_meeting, start_modifier_hotkey, start_recording,
+    stop_key_combination_hotkey, stop_meeting, stop_modifier_hotkey, stop_recording,
+    transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion, CaretPosition,
+    TranscriptionResult,
 };
 
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<Wry>, Box<dyn std::error::Error>> {
@@ -374,6 +379,16 @@ pub fn run() {
             get_app_info,
             get_app_status,
             bridge_version,
+            get_permission_status,
+            request_permission,
+            open_permission_settings,
+            get_update_preferences,
+            set_update_preferences,
+            check_for_update,
+            install_update,
+            get_app_telemetry_status,
+            set_app_telemetry_enabled,
+            record_app_telemetry_usage,
             get_caret_position,
             paste_text,
             copy_to_clipboard,
@@ -433,6 +448,19 @@ pub fn run() {
                 Box::<dyn std::error::Error>::from(format!("failed to initialize app state: {e}"))
             })?;
             app.manage(state);
+            let telemetry_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                {
+                    let state = telemetry_app.state::<AppState>();
+                    let _ = state.telemetry.launch().await;
+                    let _ = state.telemetry.heartbeat().await;
+                }
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+                    let state = telemetry_app.state::<AppState>();
+                    let _ = state.telemetry.heartbeat().await;
+                }
+            });
             app.state::<AppState>().warm_transcription_model();
             voice_ipc::start(app.handle().clone());
 

@@ -47,6 +47,25 @@ export type AppStatusResponse = {
   transcription: string;
 };
 
+export type PermissionState = "granted" | "denied" | "not_determined" | "unavailable";
+
+export type PermissionStatus = {
+  microphone: PermissionState;
+  accessibility: PermissionState;
+  screen_recording: PermissionState;
+};
+
+export type PermissionKind = "microphone" | "accessibility" | "screen_recording";
+
+export type UpdatePreferences = { automatic: boolean };
+export type UpdateInfo = {
+  current_version: string;
+  latest_version: string;
+  release_url: string;
+};
+
+export type TelemetryStatus = { consent: "undecided" | "accepted" | "declined"; enabled: boolean };
+
 export type CaretPosition = {
   x: number;
   y: number;
@@ -257,6 +276,41 @@ export async function getAppInfo(): Promise<AppInfoResponse> {
 export async function getAppStatus(): Promise<AppStatusResponse> {
   return await invoke<AppStatusResponse>("get_app_status");
 }
+
+export async function getPermissionStatus(): Promise<PermissionStatus> {
+  return await invoke<PermissionStatus>("get_permission_status");
+}
+
+export async function requestPermission(kind: PermissionKind): Promise<PermissionStatus> {
+  return await invoke<PermissionStatus>("request_permission", { kind });
+}
+
+export async function openPermissionSettings(kind: PermissionKind): Promise<void> {
+  return await invoke("open_permission_settings", { kind });
+}
+export async function getUpdatePreferences(): Promise<UpdatePreferences> {
+  return await invoke<UpdatePreferences>("get_update_preferences");
+}
+
+export async function setUpdatePreferences(preferences: UpdatePreferences): Promise<void> {
+  return await invoke("set_update_preferences", { preferences });
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  return await invoke<UpdateInfo | null>("check_for_update");
+}
+
+export async function installUpdate(info: UpdateInfo): Promise<void> {
+  return await invoke("install_update", { info });
+}
+export async function getAppTelemetryStatus(): Promise<TelemetryStatus> {
+  return await invoke<TelemetryStatus>("get_app_telemetry_status");
+}
+
+export async function setAppTelemetryEnabled(enabled: boolean): Promise<TelemetryStatus> {
+  return await invoke<TelemetryStatus>("set_app_telemetry_enabled", { enabled });
+}
+
 
 export async function getSettings(): Promise<AppConfig> {
   return await invoke<AppConfig>("get_settings");

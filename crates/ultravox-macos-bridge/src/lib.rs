@@ -22,6 +22,8 @@ extern "C" {
     fn ultravox_macos_bridge_is_accessibility_trusted(prompt: c_int) -> c_int;
     fn ultravox_macos_bridge_microphone_authorization_status() -> c_int;
     fn ultravox_macos_bridge_request_microphone_access() -> c_int;
+    fn ultravox_macos_bridge_screen_recording_authorization_status() -> c_int;
+    fn ultravox_macos_bridge_request_screen_recording_access() -> c_int;
     fn ultravox_macos_bridge_start_meeting_capture(
         path: *const c_char,
         error: *mut *mut c_char,
@@ -110,6 +112,16 @@ pub fn microphone_authorization_status() -> MicrophoneAuthorizationStatus {
 /// Requests microphone access when authorization has not yet been decided.
 pub fn request_microphone_access() -> bool {
     unsafe { ultravox_macos_bridge_request_microphone_access() != 0 }
+}
+
+/// Runtime Screen Recording preflight; TCC database rows are not authoritative.
+pub fn screen_recording_authorized() -> bool {
+    unsafe { ultravox_macos_bridge_screen_recording_authorization_status() != 0 }
+}
+
+/// Requests Screen Recording access after an explicit user action.
+pub fn request_screen_recording_access() -> bool {
+    unsafe { ultravox_macos_bridge_request_screen_recording_access() != 0 }
 }
 
 /// Starts a ScreenCaptureKit meeting recording containing system and microphone audio.
