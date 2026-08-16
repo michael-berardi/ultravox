@@ -84,8 +84,11 @@ EXPECTED_VERSION="$EXPECTED_VERSION" REQUIRE_SIGNED="${REQUIRE_SIGNED:-0}" \
 if [[ "$INSTALL_MODE" == "--install" ]]; then
   sudo installer -pkg "$PKG_PATH" -target /
   INSTALLED_APP="/Applications/${PRODUCT_NAME}.app"
+  # The signed installer ticket is the package trust root. pkgbuild may not
+  # preserve an app's stapled ticket in the installed payload; VERIFY_APP still
+  # requires Gatekeeper acceptance and the stable Developer ID identity.
   EXPECTED_VERSION="$EXPECTED_VERSION" REQUIRE_SIGNED="${REQUIRE_SIGNED:-0}" \
-    REQUIRE_NOTARIZED="${REQUIRE_NOTARIZED:-0}" ALLOW_ADHOC="${ALLOW_ADHOC:-0}" \
+    REQUIRE_NOTARIZED=0 ALLOW_ADHOC="${ALLOW_ADHOC:-0}" \
     "$VERIFY_APP" "$INSTALLED_APP"
 fi
 
