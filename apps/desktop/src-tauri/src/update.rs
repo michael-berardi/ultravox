@@ -235,12 +235,28 @@ fn validate_signature(details: &str, requirements: &str) -> Result<(), String> {
     if identity.ad_hoc || !identity.developer_id {
         return Err("Update must use a non-ad-hoc Developer ID signature.".to_string());
     }
-    if !requirements.contains("designated =>")
-        || !requirements.contains(&format!("identifier \"{EXPECTED_BUNDLE_ID}\""))
-        || !requirements.contains("anchor apple generic")
-        || !requirements.contains("certificate")
-        || !requirements.contains(&format!("OU] = \"{EXPECTED_TEAM_ID}\""))
-    {
+    let Some(designated) = requirements
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("designated =>"))
+    else {
+        return Err("Update designated requirement does not match UltraVox.".to_string());
+    };
+    let identifier_quoted = format!("designated => identifier \"{EXPECTED_BUNDLE_ID}\"");
+    let identifier_unquoted = format!("designated => identifier {EXPECTED_BUNDLE_ID}");
+    let team_quoted = format!("certificate leaf[subject.OU] = \"{EXPECTED_TEAM_ID}\"");
+    let team_unquoted = format!("certificate leaf[subject.OU] = {EXPECTED_TEAM_ID}");
+    let identifier_matches = designated
+        .split(" and ")
+        .next()
+        .is_some_and(|clause| clause == identifier_quoted || clause == identifier_unquoted);
+    let anchor_matches = designated
+        .split(" and ")
+        .any(|clause| clause == "anchor apple generic");
+    let team_matches = designated
+        .split(" and ")
+        .any(|clause| clause == team_quoted || clause == team_unquoted);
+    if !identifier_matches || !anchor_matches || !team_matches {
         return Err("Update designated requirement does not match UltraVox.".to_string());
     }
     Ok(())
@@ -519,6 +535,21 @@ mod tests {
         let details = "Identifier=com.imploselabs.ultravox\nAuthority=Developer ID Application: Michael Berardi (T63VT9UAY2)\nTeamIdentifier=T63VT9UAY2\n";
         let requirement = "designated => identifier \"com.imploselabs.ultravox\" and anchor apple generic and certificate leaf[subject.OU] = \"T63VT9UAY2\"";
         assert!(validate_signature(details, requirement).is_ok());
+        let codesign_requirement = "designated => identifier \"com.imploselabs.ultravox\" and anchor apple generic and certificate leaf[subject.OU] = T63VT9UAY2";
+        assert!(validate_signature(details, codesign_requirement).is_ok());
+        assert!(validate_signature(
+            details,
+            &codesign_requirement.replace(
+                "identifier \"com.imploselabs.ultravox\"",
+                "identifier \"com.imploselabs.ultravox.attacker\""
+            )
+        )
+        .is_err());
+        assert!(validate_signature(
+            details,
+            &codesign_requirement.replace("OU] = T63VT9UAY2", "OU] = T63VT9UAY2ATTACKER")
+        )
+        .is_err());
         assert!(
             validate_signature(&details.replace("T63VT9UAY2", "OTHERTEAM"), requirement).is_err()
         );
