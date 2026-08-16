@@ -745,11 +745,17 @@ function PrivacySettings({ config, onChange }: SettingsSectionProps) {
     return () => { cancelled = true; };
   }, []);
   const updateTelemetry = async (enabled: boolean) => {
+    const previous = telemetryEnabled;
+    setTelemetryEnabled(enabled);
     try {
       const next = await setAppTelemetryEnabled(enabled);
       setTelemetryEnabled(next.enabled);
     } catch (error) {
-      setUpdateMessage(`Could not update telemetry preference: ${String(error)}`);
+      setTelemetryEnabled(enabled ? previous : false);
+      const prefix = enabled
+        ? 'Could not enable telemetry'
+        : 'Telemetry is disabled for this run, but the preference could not be saved';
+      setUpdateMessage(`${prefix}: ${String(error)}`);
     }
   };
 

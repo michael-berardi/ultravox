@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use uuid::Uuid;
 
 const ENDPOINT: &str = "https://analytics.libertydesign.studio/api/app-telemetry/event";
@@ -148,6 +148,7 @@ pub struct Telemetry {
     state: Mutex<StoredState>,
     path: PathBuf,
     launch_sent_this_run: AtomicBool,
+    runtime_enabled: watch::Sender<bool>,
 }
 
 impl Telemetry {
@@ -164,10 +165,13 @@ impl Telemetry {
         };
         let changed = sanitize_loaded_state(&mut state);
         let persisted_state = changed.then(|| state.clone());
+        let runtime_enabled = enabled(&state);
+        let (runtime_enabled_tx, _) = watch::channel(runtime_enabled);
         let telemetry = Self {
             state: Mutex::new(state),
             path,
             launch_sent_this_run: AtomicBool::new(false),
+            runtime_enabled: runtime_enabled_tx,
         };
         if let Some(persisted_state) = persisted_state.as_ref() {
             telemetry.persist(persisted_state)?;
@@ -190,11 +194,20 @@ impl Telemetry {
         fs::rename(temporary, &self.path).map_err(|error| error.to_string())
     }
 
+    fn runtime_enabled(&self) -> bool {
+        *self.runtime_enabled.borrow()
+    }
+
     pub async fn status(&self) -> TelemetryStatus {
         let state = self.state.lock().await;
-        status(&state)
+        let mut current = status(&state);
+        current.enabled &= self.runtime_enabled();
+        current
     }
     pub async fn set_enabled(&self, enabled: bool) -> Result<TelemetryStatus, String> {
+        if !enabled {
+            self.runtime_enabled.send_replace(false);
+        }
         let mut state = self.state.lock().await;
         let mut next = state.clone();
         if enabled {
@@ -210,29 +223,54 @@ impl Telemetry {
         }
         self.persist(&next)?;
         *state = next;
+        self.runtime_enabled.send_replace(enabled);
         Ok(status(&state))
     }
 
     pub async fn launch(&self) -> Result<(), String> {
+        if !self.runtime_enabled() {
+            return Ok(());
+        }
         let state = self.state.lock().await;
-        if !enabled(&state) || self.launch_sent_this_run.load(Ordering::Relaxed) {
+        if !enabled(&state)
+            || !self.runtime_enabled()
+            || self.launch_sent_this_run.load(Ordering::Relaxed)
+        {
             return Ok(());
         }
         let today = utc_day();
-        if post(&state, "launch", &today, None).await {
+        if post(
+            &state,
+            "launch",
+            &today,
+            None,
+            self.runtime_enabled.subscribe(),
+        )
+        .await
+        {
             self.launch_sent_this_run.store(true, Ordering::Relaxed);
         }
         Ok(())
     }
 
     pub async fn heartbeat(&self) -> Result<(), String> {
+        if !self.runtime_enabled() {
+            return Ok(());
+        }
         let mut state = self.state.lock().await;
-        if !enabled(&state) {
+        if !enabled(&state) || !self.runtime_enabled() {
             return Ok(());
         }
         let today = utc_day();
         if state.last_heartbeat_day.as_deref() != Some(&today)
-            && post(&state, "heartbeat", &today, None).await
+            && post(
+                &state,
+                "heartbeat",
+                &today,
+                None,
+                self.runtime_enabled.subscribe(),
+            )
+            .await
         {
             state.last_heartbeat_day = Some(today.clone());
             self.persist(&state)?;
@@ -242,8 +280,11 @@ impl Telemetry {
 
     pub async fn usage(&self, counters: UsageCounters) -> Result<(), String> {
         let counters = counters.checked()?;
+        if !self.runtime_enabled() {
+            return Ok(());
+        }
         let mut state = self.state.lock().await;
-        if !enabled(&state) {
+        if !enabled(&state) || !self.runtime_enabled() {
             return Ok(());
         }
         add_pending_usage(&mut state, &utc_day(), counters);
@@ -259,7 +300,18 @@ impl Telemetry {
             .collect::<Vec<_>>();
         let mut changed = false;
         for (day, usage) in completed_days {
-            if post(state, "usage", &day, Some(usage)).await {
+            if !self.runtime_enabled() {
+                break;
+            }
+            if post(
+                state,
+                "usage",
+                &day,
+                Some(usage),
+                self.runtime_enabled.subscribe(),
+            )
+            .await
+            {
                 state.pending_usage_by_day.remove(&day);
                 changed = true;
             }
@@ -294,7 +346,13 @@ fn utc_day() -> String {
     Utc::now().format("%Y-%m-%d").to_string()
 }
 
-async fn post(state: &StoredState, event: &str, day: &str, usage: Option<UsageCounters>) -> bool {
+async fn post(
+    state: &StoredState,
+    event: &str,
+    day: &str,
+    usage: Option<UsageCounters>,
+    mut runtime_enabled: watch::Receiver<bool>,
+) -> bool {
     let Some(install_id) = state.install_id else {
         return false;
     };
@@ -316,12 +374,16 @@ async fn post(state: &StoredState, event: &str, day: &str, usage: Option<UsageCo
     else {
         return false;
     };
-    client
-        .post(ENDPOINT)
-        .json(&payload)
-        .send()
-        .await
-        .is_ok_and(|response| response.status().is_success())
+    if !*runtime_enabled.borrow() {
+        return false;
+    }
+    let request = client.post(ENDPOINT).json(&payload).send();
+    tokio::pin!(request);
+    tokio::select! {
+        biased;
+        _ = runtime_enabled.changed() => false,
+        response = &mut request => response.is_ok_and(|response| response.status().is_success()),
+    }
 }
 
 fn platform() -> &'static str {
@@ -479,6 +541,25 @@ mod tests {
         assert!(!enabled(&state));
         assert!(state.install_id.is_none());
         assert!(state.pending_usage_by_day.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_disable_remains_fail_closed_for_the_running_process() {
+        let (runtime_enabled, _) = watch::channel(true);
+        let telemetry = Telemetry {
+            state: Mutex::new(StoredState {
+                consent: ConsentState::Accepted,
+                install_id: Some(Uuid::new_v4()),
+                ..StoredState::default()
+            }),
+            path: PathBuf::new(),
+            launch_sent_this_run: AtomicBool::new(false),
+            runtime_enabled,
+        };
+
+        assert!(telemetry.set_enabled(false).await.is_err());
+        assert!(!telemetry.runtime_enabled());
+        assert!(!telemetry.status().await.enabled);
     }
     #[test]
     fn loaded_state_preserves_consent_but_repairs_private_state() {

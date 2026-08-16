@@ -58,7 +58,13 @@ const root = process.argv[2];
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const desktopJson = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/package.json'), 'utf8'));
 const tauri = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
-if (packageJson.version !== '0.2.2' || desktopJson.version !== '0.2.2') throw new Error('version metadata is not 0.2.2');
+const cargo = fs.readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.toml'), 'utf8');
+const cargoVersion = cargo.match(/^version = "([^"]+)"$/m)?.[1];
+const version = packageJson.version;
+if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`invalid release version ${version}`);
+if (desktopJson.version !== version || tauri.version !== version || cargoVersion !== version) {
+  throw new Error(`version metadata drift: root=${version} desktop=${desktopJson.version} tauri=${tauri.version} cargo=${cargoVersion}`);
+}
 if (tauri.productName !== 'UltraVox' || tauri.identifier !== 'com.imploselabs.ultravox') throw new Error('Tauri identity drift');
 NODE
 
