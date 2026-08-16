@@ -40,9 +40,14 @@ UltraVox has one canonical install and update location:
 
 ```bash
 pkg=UltraVox-macos-arm64.pkg
-curl -fL -w '%{url_effective}\n' -o "$pkg" "https://github.com/michael-berardi/ultravox/releases/latest/download/$pkg" |
-  sed -E 's#^.*/download/v?([^/]+)/.*$#\1#' > UltraVox.expected-version
-curl -fLO "https://github.com/michael-berardi/ultravox/releases/latest/download/$pkg.sha256"
+base=https://github.com/michael-berardi/ultravox/releases/latest/download
+release_url="$(curl -fsSI "$base/$pkg" | awk 'tolower($1) == "location:" { sub(/\r$/, "", $2); print $2; exit }')"
+expected_version="${release_url#*/download/}"
+expected_version="${expected_version%%/*}"
+expected_version="${expected_version#v}"
+[[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+curl -fLO "$base/$pkg"
+curl -fLO "$base/$pkg.sha256"
 shasum -a 256 -c "$pkg.sha256"
 pkgutil --check-signature "$pkg" | grep -F "Developer ID Installer: Michael Berardi (T63VT9UAY2)"
 spctl --assess --type install --verbose=2 "$pkg"
@@ -50,7 +55,7 @@ sudo installer -pkg "$pkg" -target /
 
 app=/Applications/UltraVox.app
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.imploselabs.ultravox
-test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$(cat UltraVox.expected-version)"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$expected_version"
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign -dvv "$app" 2>&1 | grep -F "TeamIdentifier=T63VT9UAY2"
 codesign -d -r- "$app" 2>&1 | grep -F 'identifier "com.imploselabs.ultravox" and anchor apple generic'
