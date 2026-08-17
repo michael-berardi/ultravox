@@ -1178,9 +1178,16 @@ pub async fn stop_meeting(state: State<'_, AppState>) -> Result<AudioRecording, 
                     recordings_failed: 1,
                     ..crate::telemetry::UsageCounters::default()
                 });
-                let _ = tokio::fs::remove_file(&session.output_path).await;
+                // Never delete the capture on an error path: ScreenCaptureKit may
+                // still be finalizing the file, and even a partial capture is the
+                // user's only copy of the meeting. Preserve it and surface the
+                // path so the audio can be recovered.
+                let preserved_path = session.output_path.clone();
                 clear_meeting_session(state.inner(), session.id).await?;
-                return Err(error);
+                return Err(format!(
+                    "{error} (capture preserved at {})",
+                    preserved_path.display()
+                ));
             }
         };
         let recording = AudioRecording {

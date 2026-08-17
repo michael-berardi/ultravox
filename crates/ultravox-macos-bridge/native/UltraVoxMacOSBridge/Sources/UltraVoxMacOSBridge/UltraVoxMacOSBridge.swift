@@ -299,6 +299,7 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
     private var finishSignal: DispatchSemaphore?
     private var finishError: Error?
     private var recordingStarted = false
+    private var recordingFinished = false
     private var startContinuation: CheckedContinuation<Void, Error>?
     private var failureCallback: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
 
@@ -391,6 +392,7 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
             self.videoURL = outputURL
             finishError = nil
             recordingStarted = false
+            recordingFinished = false
             startContinuation = nil
         }
 
@@ -406,6 +408,7 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
                 finishSignal = nil
                 finishError = nil
                 recordingStarted = false
+                recordingFinished = false
                 startContinuation = nil
             }
             try? FileManager.default.removeItem(at: outputURL)
@@ -415,13 +418,13 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
 
     func stop() async throws -> URL {
         let activeCapture = lock.withLock {
-            () -> (SCStream, URL, DispatchSemaphore, Error?)? in
+            () -> (SCStream, URL, DispatchSemaphore, Bool, Error?)? in
             guard let stream, let videoURL else { return nil }
             let signal = DispatchSemaphore(value: 0)
             finishSignal = signal
-            return (stream, videoURL, signal, finishError)
+            return (stream, videoURL, signal, recordingFinished, finishError)
         }
-        guard let (stream, videoURL, signal, existingRecordingError) = activeCapture else {
+        guard let (stream, videoURL, signal, alreadyFinished, existingRecordingError) = activeCapture else {
             throw MeetingCaptureError.notRecording
         }
 
@@ -431,12 +434,20 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
         } catch {
             stopError = error
         }
-        let didFinish = if stopError == nil && existingRecordingError == nil {
+        // A successful stopCapture() is always answered by either
+        // recordingOutputDidFinishRecording or didFailWithError, and both signal
+        // this semaphore. Long recordings can take tens of seconds to finalize
+        // after stopCapture returns, so wait without an arbitrary timeout. The
+        // finish callback may also have fired before stop() was called; the
+        // recordingFinished flag covers that case so a retry can still succeed.
+        let didFinish: Bool
+        if alreadyFinished || stopError != nil || existingRecordingError != nil {
+            didFinish = alreadyFinished
+        } else {
             await Task.detached {
                 Self.waitForFinish(signal)
             }.value
-        } else {
-            false
+            didFinish = true
         }
 
         let recordingError = lock.withLock { () -> Error? in
@@ -447,6 +458,7 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
                 finishSignal = nil
                 finishError = nil
                 recordingStarted = false
+                recordingFinished = false
                 startContinuation = nil
             }
             return finishError
@@ -464,8 +476,8 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
         return try await exportAudio(from: videoURL)
     }
 
-    private static func waitForFinish(_ signal: DispatchSemaphore) -> Bool {
-        signal.wait(timeout: .now() + 15) == .success
+    private static func waitForFinish(_ signal: DispatchSemaphore) {
+        signal.wait()
     }
 
     private func exportAudio(from videoURL: URL) async throws -> URL {
@@ -527,6 +539,7 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
 
     func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
         lock.lock()
+        recordingFinished = true
         let signal = finishSignal
         lock.unlock()
         signal?.signal()
