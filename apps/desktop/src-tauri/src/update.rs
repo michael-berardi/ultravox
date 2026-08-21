@@ -170,17 +170,39 @@ async fn download(url: &str, target: &Path) -> Result<(), String> {
 }
 
 fn run_checked(program: &str, args: &[&str], action: &str) -> Result<(), String> {
-    let status = Command::new(program)
+    let output = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
         .map_err(|error| format!("Failed to {action}: {error}"))?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(format!("Failed to {action} (exit {status})."))
+        Err(format_command_failure(action, &output))
+    }
+}
+
+/// Format a failed command with its exit code and a bounded tail of its
+/// output, so update failures are diagnosable from the error alone.
+fn format_command_failure(action: &str, output: &std::process::Output) -> String {
+    let code = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "terminated by signal".to_string());
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let trimmed = text.trim();
+    const MAX_TAIL: usize = 300;
+    let tail = if trimmed.len() > MAX_TAIL {
+        &trimmed[trimmed.len() - MAX_TAIL..]
+    } else {
+        trimmed
+    };
+    if tail.is_empty() {
+        format!("Failed to {action} (exit {code}).")
+    } else {
+        format!("Failed to {action} (exit {code}): {tail}")
     }
 }
 
@@ -195,7 +217,7 @@ fn command_output(program: &str, args: &[&str], action: &str) -> Result<String, 
     if output.status.success() {
         Ok(text)
     } else {
-        Err(format!("Failed to {action} (exit {}).", output.status))
+        Err(format_command_failure(action, &output))
     }
 }
 
@@ -313,11 +335,55 @@ fn verify_app(app: &Path, expected_version: &str) -> Result<(), String> {
         "inspect the update designated requirement",
     )?;
     validate_signature(&details, &requirements)?;
-    run_checked(
-        "/usr/sbin/spctl",
-        &["--assess", "--type", "execute", app_arg.as_str()],
-        "verify the update's notarization",
-    )
+    verify_notarization(app)
+}
+
+/// Verify the update is notarized. `spctl --assess` is tried first with
+/// retries because syspolicyd intermittently errors on freshly unpacked
+/// bundles. On machines where Gatekeeper assessment is disabled or
+/// unreachable, `spctl` fails persistently even for valid notarized apps, so
+/// fall back to validating the stapled notarization ticket — Apple's own
+/// offline proof embedded in the bundle by the release pipeline.
+fn verify_notarization(app: &Path) -> Result<(), String> {
+    let app_arg = app.to_string_lossy().into_owned();
+    let mut last_error = String::new();
+    for attempt in 0..4 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        match command_output(
+            "/usr/sbin/spctl",
+            &["--assess", "--type", "execute", app_arg.as_str()],
+            "assess the update's notarization",
+        ) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    if let Ok(status) = command_output("/usr/sbin/spctl", &["--status"], "check Gatekeeper status")
+    {
+        if status.contains("disabled") {
+            // Gatekeeper assessment is disabled system-wide, so macOS would
+            // never enforce notarization on launch either. The codesign and
+            // designated-requirement checks above still bind the update to the
+            // UltraVox Developer ID identity.
+            return Ok(());
+        }
+    }
+    if Command::new("/usr/bin/xcrun")
+        .args(["stapler", "validate", app_arg.as_str()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "Failed to verify the update's notarization. {last_error} No valid stapled ticket found either."
+    ))
 }
 fn verify_checksum(archive: &Path, checksum: &Path) -> Result<(), String> {
     let expected = fs::read_to_string(checksum)
@@ -374,6 +440,21 @@ backup_app="$4"
 staging="$5"
 bundle_id="com.imploselabs.ultravox"
 team_id="T63VT9UAY2"
+verify_notarized() {
+  attempt=0
+  while [ "$attempt" -lt 4 ]; do
+    if /usr/sbin/spctl --assess --type execute "$1" >/dev/null 2>&1; then return 0; fi
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 4 ] && /bin/sleep 1.5
+  done
+  # Gatekeeper assessment can be disabled or unreachable on some machines even
+  # for valid notarized apps. When assessment is disabled system-wide, macOS
+  # would not enforce notarization on launch either, so the identity checks
+  # above are sufficient.
+  if /usr/sbin/spctl --status 2>/dev/null | /usr/bin/grep -q "disabled"; then return 0; fi
+  # A stapled ticket is Apple's offline notarization proof.
+  /usr/bin/xcrun stapler validate "$1" >/dev/null 2>&1
+}
 verify_identity() {
   /usr/bin/codesign --verify --deep --strict "$1" >/dev/null 2>&1 || return 1
   details="$(/usr/bin/codesign -dv --verbose=4 "$1" 2>&1)" || return 1
@@ -385,7 +466,7 @@ verify_identity() {
   case "$requirements" in *'identifier "com.imploselabs.ultravox"'*) ;; *) return 1 ;; esac
   case "$requirements" in *'anchor apple generic'*) ;; *) return 1 ;; esac
   case "$requirements" in *certificate*OU*"${team_id}"*) ;; *) return 1 ;; esac
-  /usr/sbin/spctl --assess --type execute "$1" >/dev/null 2>&1 || return 1
+  verify_notarized "$1" || return 1
 }
 while /bin/kill -0 "$pid" 2>/dev/null; do /bin/sleep 0.2; done
 if ! verify_identity "$source_app"; then /bin/rm -rf "$staging"; exit 1; fi
@@ -567,8 +648,34 @@ mod tests {
     }
 
     #[test]
-    fn update_helper_requires_new_process_health_before_cleanup() {
-        let cleanup = INSTALL_HELPER
+    fn update_helper_retries_notarization_and_falls_back_safely() {
+        let retry_loop = INSTALL_HELPER
+            .find(r#"while [ "$attempt" -lt 4 ]"#)
+            .expect("helper must retry spctl assessment");
+        let status_fallback = INSTALL_HELPER
+            .find("spctl --status")
+            .expect("helper must accept updates when Gatekeeper is disabled");
+        let stapler_fallback = INSTALL_HELPER
+            .find("stapler validate")
+            .expect("helper must validate stapled tickets as a fallback");
+        assert!(retry_loop < status_fallback);
+        assert!(status_fallback < stapler_fallback);
+    }
+
+    #[test]
+    fn command_failures_include_exit_code_and_output_tail() {
+        let output = Command::new("/bin/sh")
+            .args(["-c", "echo gatekeeper says no >&2; exit 3"])
+            .output()
+            .expect("spawn sh");
+        let message = format_command_failure("assess the update's notarization", &output);
+        assert!(message.contains("exit 3"), "{message}");
+        assert!(message.contains("gatekeeper says no"), "{message}");
+        assert!(!message.contains("exit exit"), "{message}");
+    }
+
+    #[test]
+    fn update_helper_requires_new_process_health_before_cleanup() {        let cleanup = INSTALL_HELPER
             .rfind(r#"/bin/rm -rf "$backup_app" "$staging""#)
             .expect("helper must clean up only after launch");
         let process_snapshot = INSTALL_HELPER
