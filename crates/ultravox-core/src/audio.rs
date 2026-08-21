@@ -735,6 +735,158 @@ impl AudioBackend for CpalAudioBackend {
     }
 }
 
+/// Sample rate of WAV files produced by media imports, matching recorded audio.
+pub const IMPORT_SAMPLE_RATE: u32 = 16_000;
+
+/// Maximum size of a media file accepted for import (2 GB, matching the URL
+/// download limit).
+pub const IMPORT_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Build the codec registry used for media imports: all enabled Symphonia
+/// codecs plus the libopus-backed Opus decoder (WhatsApp voice notes, WebM).
+fn import_codec_registry() -> symphonia::core::codecs::registry::CodecRegistry {
+    let mut registry = symphonia::core::codecs::registry::CodecRegistry::new();
+    symphonia::default::register_enabled_codecs(&mut registry);
+    registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
+    registry
+}
+
+/// Decode a media file (wav, mp3, m4a/aac, flac, ogg, opus, webm, mp4 audio,
+/// aiff, caf, alac, …) into a 16 kHz mono f32 WAV at `dest`, returning the
+/// decoded duration in milliseconds. On failure, any partial `dest` file is
+/// removed.
+pub fn decode_media_file_to_wav(
+    source: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<u64, AudioError> {
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+
+    let result = (|| {
+        let file = std::fs::File::open(source)?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(extension) = source.extension().and_then(|ext| ext.to_str()) {
+            hint.with_extension(extension);
+        }
+        let mut format = symphonia::default::get_probe()
+            .probe(
+                &hint,
+                mss,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .map_err(|e| {
+                AudioError::Format(format!("unsupported or unreadable media file: {e}"))
+            })?;
+        let track = format
+            .default_track(TrackType::Audio)
+            .ok_or_else(|| AudioError::Format("media file has no audio track".to_string()))?;
+        let track_id = track.id;
+        let codec_params = track
+            .codec_params
+            .as_ref()
+            .ok_or_else(|| AudioError::Format("audio track is missing codec parameters".into()))?
+            .audio()
+            .ok_or_else(|| AudioError::Format("track is not a supported audio codec".into()))?;
+        let source_rate = codec_params
+            .sample_rate
+            .ok_or_else(|| AudioError::Format("audio track has no sample rate".to_string()))?;
+        let channels = codec_params
+            .channels
+            .as_ref()
+            .map(|c| c.count() as u16)
+            .filter(|c| *c > 0)
+            .ok_or_else(|| AudioError::Format("audio track has no channels".to_string()))?;
+        let mut decoder = import_codec_registry()
+            .make_audio_decoder(codec_params, &AudioDecoderOptions::default())
+            .map_err(|e| {
+                AudioError::Format(format!("no decoder for this audio codec: {e}"))
+            })?;
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: IMPORT_SAMPLE_RATE,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(dest, spec)
+            .map_err(|e| AudioError::Format(format!("wav writer: {e}")))?;
+        let mut resampler = StreamingResampler::new(source_rate, IMPORT_SAMPLE_RATE)?;
+        let mut frames = 0u64;
+        let mut interleaved: Vec<f32> = Vec::new();
+
+        loop {
+            let packet = match format.next_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) => break,
+                Err(SymphoniaError::ResetRequired) => {
+                    return Err(AudioError::Format(
+                        "chained audio streams are not supported".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    return Err(AudioError::Format(format!("could not read media: {e}")));
+                }
+            };
+            if packet.track_id != track_id {
+                continue;
+            }
+            let decoded = match decoder.decode_ref(&packet.as_packet_ref()) {
+                Ok(decoded) => decoded,
+                Err(SymphoniaError::IoError(_) | SymphoniaError::DecodeError(_)) => continue,
+                Err(e) => {
+                    return Err(AudioError::Format(format!("audio decode failed: {e}")));
+                }
+            };
+            if decoded.frames() == 0 {
+                continue;
+            }
+            let spec = decoded.spec();
+            if spec.rate() != source_rate || spec.channels().count() as u16 != channels {
+                return Err(AudioError::Format(
+                    "media file changes audio format mid-stream".to_string(),
+                ));
+            }
+            interleaved.clear();
+            decoded.copy_to_vec_interleaved(&mut interleaved);
+            resampler.push_interleaved(&interleaved, channels, |sample| {
+                writer
+                    .write_sample(sample.clamp(-1.0, 1.0))
+                    .map_err(|_| AudioError::Format("wav write failed".to_string()))?;
+                frames += 1;
+                Ok(())
+            })?;
+        }
+
+        resampler.finish(|sample| {
+            writer
+                .write_sample(sample.clamp(-1.0, 1.0))
+                .map_err(|_| AudioError::Format("wav write failed".to_string()))?;
+            frames += 1;
+            Ok(())
+        })?;
+        writer
+            .finalize()
+            .map_err(|e| AudioError::Format(format!("wav finalize: {e}")))?;
+        if frames == 0 {
+            return Err(AudioError::Format(
+                "media file decoded to no audio samples".to_string(),
+            ));
+        }
+        Ok(frames.saturating_mul(1_000) / IMPORT_SAMPLE_RATE as u64)
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

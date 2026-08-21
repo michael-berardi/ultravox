@@ -388,6 +388,10 @@ export async function importUrl(url: string): Promise<string> {
   return await invoke<string>("import_url", { url });
 }
 
+export async function importFile(path: string): Promise<string> {
+  return await invoke<string>("import_file", { path });
+}
+
 export async function startMeeting(): Promise<string> {
   return await invoke<string>("start_meeting");
 }

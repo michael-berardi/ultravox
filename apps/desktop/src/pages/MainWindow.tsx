@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { AppStatus } from "../App";
 import {
   listRecordings,
@@ -9,6 +10,7 @@ import {
   startRecording,
   stopRecording,
   importUrl,
+  importFile,
   startMeeting,
   stopMeeting,
   exportRecording,
@@ -40,6 +42,19 @@ interface MainWindowProps {
   onOpenSettings: () => void;
 }
 
+// Keep in sync with IMPORTABLE_EXTENSIONS in src-tauri/src/commands.rs.
+const IMPORTABLE_EXTENSIONS: Record<string, true> = {
+  wav: true, wave: true, mp3: true, m4a: true, m4b: true, mp4: true, m4v: true, mov: true,
+  aac: true, flac: true, ogg: true, oga: true, opus: true, webm: true, aif: true, aiff: true,
+  caf: true, alac: true,
+};
+
+function importablePaths(paths: string[]): string[] {
+  return paths.filter(
+    (path) => IMPORTABLE_EXTENSIONS[path.split(".").pop()?.toLowerCase() ?? ""],
+  );
+}
+
 export function MainWindow({
   status,
   initialRecording,
@@ -55,6 +70,8 @@ export function MainWindow({
   const [urlProgress, setUrlProgress] = useState(0);
   const [urlStatus, setUrlStatus] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [fileImporting, setFileImporting] = useState(0);
   const [recordings, setRecordings] = useState<RecordingRow[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -215,6 +232,58 @@ export function MainWindow({
       unlisten.forEach((stopListening) => stopListening());
     };
   }, [refreshCatalog, refreshRecordings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    const importDroppedFiles = async (paths: string[]) => {
+      setActivityError(null);
+      setFileImporting(paths.length);
+      const failures: string[] = [];
+      for (const path of paths) {
+        try {
+          await importFile(path);
+        } catch (importError) {
+          failures.push(`${path.split("/").pop() ?? path}: ${String(importError)}`);
+        }
+        setFileImporting((remaining) => Math.max(0, remaining - 1));
+      }
+      await refreshRecordings();
+      if (failures.length > 0) {
+        setActivityError(`Could not import ${failures.join("; ")}`);
+      }
+    };
+
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter") {
+          setDropActive(importablePaths(payload.paths).length > 0);
+        } else if (payload.type === "leave") {
+          setDropActive(false);
+        } else if (payload.type === "drop") {
+          setDropActive(false);
+          const paths = importablePaths(payload.paths);
+          if (paths.length > 0) void importDroppedFiles(paths);
+        }
+      })
+      .then((stop) => {
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // Drag-drop events are unavailable outside the desktop webview.
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refreshRecordings]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -731,6 +800,22 @@ export function MainWindow({
           )}
         </section>
       </main>
+
+      {dropActive && (
+        <div className="drop-overlay" role="status" aria-live="polite">
+          <div className="drop-overlay-card">
+            <WaveIcon />
+            <p>Drop audio to transcribe</p>
+            <span>MP3, M4A, WAV, OPUS, OGG, WebM, FLAC…</span>
+          </div>
+        </div>
+      )}
+
+      {fileImporting > 0 && (
+        <div className="file-import-status" role="status" aria-live="polite">
+          Importing {fileImporting} {fileImporting === 1 ? "file" : "files"}…
+        </div>
+      )}
 
       {historyOpen && (
         <div

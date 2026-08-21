@@ -14,8 +14,8 @@ pub mod shortcuts;
 pub mod transcription;
 
 pub use audio::{
-    AudioBackend, AudioDeviceInfo, AudioError, AudioInputConfig, AudioRecording, CpalAudioBackend,
-    StubAudioBackend,
+    decode_media_file_to_wav, AudioBackend, AudioDeviceInfo, AudioError, AudioInputConfig,
+    AudioRecording, CpalAudioBackend, StubAudioBackend, IMPORT_MAX_BYTES, IMPORT_SAMPLE_RATE,
 };
 pub use config::{AppConfig, ConfigError, ConfigManager, Engine, Language};
 pub use download::{

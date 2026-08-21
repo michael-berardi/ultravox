@@ -79,6 +79,11 @@ for package_path in (Path("package.json"), Path("apps/desktop/package.json")):
     package = json.loads(package_path.read_text())
     package["version"] = version
     package_path.write_text(json.dumps(package, indent=2) + "\n")
+
+tauri_path = Path("apps/desktop/src-tauri/tauri.conf.json")
+tauri_config = json.loads(tauri_path.read_text())
+tauri_config["version"] = version
+tauri_path.write_text(json.dumps(tauri_config, indent=2) + "\n")
 PY
 echo "✅ Updated UltraVox package versions to ${NEW_VERSION}"
 
@@ -135,7 +140,7 @@ echo "SHA256: $SHA256"
 
 # Commit version changes
 echo "📝 Committing version changes..."
-git add package.json apps/desktop/package.json apps/desktop/src-tauri/Cargo.toml Cargo.lock
+git add package.json apps/desktop/package.json apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/tauri.conf.json Cargo.lock
 git commit -m "Bump version to ${NEW_VERSION}" || echo "No changes to commit"
 
 # Create git tag

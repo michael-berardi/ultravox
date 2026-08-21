@@ -44,6 +44,27 @@ run_heavy() {
   fi
 }
 
+# The updater compares the git tag, the release metadata, and the built app's
+# CFBundleShortVersionString, and rejects any mismatch. Every version source
+# must agree before building or the published update fails to install.
+node - "$ROOT_DIR" "$VERSION" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const [root, expected] = process.argv.slice(2);
+const read = (rel) => path.join(root, rel);
+const pkgRoot = JSON.parse(fs.readFileSync(read("package.json"), "utf8")).version;
+const pkgDesktop = JSON.parse(fs.readFileSync(read("apps/desktop/package.json"), "utf8")).version;
+const tauri = JSON.parse(fs.readFileSync(read("apps/desktop/src-tauri/tauri.conf.json"), "utf8")).version;
+const cargo = fs.readFileSync(read("apps/desktop/src-tauri/Cargo.toml"), "utf8")
+  .match(/^\[package\]\nname = "ultravox"\nversion = "([^"]+)"/m)?.[1];
+const versions = { "package.json": pkgRoot, "apps/desktop/package.json": pkgDesktop, "tauri.conf.json": tauri, "Cargo.toml": cargo };
+const mismatched = Object.entries(versions).filter(([, v]) => v !== expected);
+if (mismatched.length > 0) {
+  console.error(`Version drift: expected ${expected} everywhere, but ${mismatched.map(([f, v]) => `${f}=${v}`).join(", ")}.`);
+  process.exit(1);
+}
+NODE
+
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   run_heavy env CI=false pnpm --filter ultravox-desktop tauri build --bundles app
   run_heavy cargo build --release -p ultravox --features cli --bin ultravox-control

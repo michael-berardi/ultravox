@@ -15,7 +15,7 @@ use tokio::net::{TcpListener, UnixStream};
 use ultravox_macos_bridge as bridge;
 use uuid::Uuid;
 
-const USAGE: &str = "Usage: ultravox-control [health|status|model-catalog|history-smoke|download-smoke|shortcut-config-smoke|audio-devices|live-record-smoke|recording-id-db-smoke|paste-bridge-dry-run|caret-bridge-dry-run|transcribe-fixture-smoke|transcribe <path> [v2|v3]|voice-health|voice-start|voice-stop <id>|voice-status <id>|voice-cancel <id>]";
+const USAGE: &str = "Usage: ultravox-control [health|status|model-catalog|history-smoke|download-smoke|shortcut-config-smoke|audio-devices|live-record-smoke|recording-id-db-smoke|paste-bridge-dry-run|caret-bridge-dry-run|transcribe-fixture-smoke|transcribe <path> [v2|v3]|import-smoke <path> [v2|v3]|voice-health|voice-start|voice-stop <id>|voice-status <id>|voice-cancel <id>]";
 
 fn data_dir() -> PathBuf {
     std::env::var("ULTRAVOX_DATA_DIR")
@@ -540,6 +540,53 @@ fn run_transcribe_fixture_smoke() -> Result<(), String> {
     Ok(())
 }
 
+/// Mirrors the app's dropped-file import path: decode any media file to a
+/// 16 kHz mono WAV with `decode_media_file_to_wav`, then transcribe it with
+/// the same bridge the app uses, verifying the speech content survives.
+fn run_import_smoke(path: &str, version: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("media path is required".to_string());
+    }
+    let source = PathBuf::from(path);
+    if !source.is_file() {
+        return Err(format!("media file not found: {}", source.display()));
+    }
+
+    let decoded = std::env::temp_dir().join(format!("ultravox-import-smoke-{}.wav", Uuid::new_v4()));
+    let duration_ms = ultravox_core::decode_media_file_to_wav(&source, &decoded)
+        .map_err(|e| format!("decode failed: {e}"))?;
+    if duration_ms == 0 {
+        let _ = std::fs::remove_file(&decoded);
+        return Err("decoded audio is empty".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let result = bridge::transcribe_file_with_version(decoded.to_string_lossy().as_ref(), version)
+            .map_err(|_| "transcription failed".to_string());
+        let _ = std::fs::remove_file(&decoded);
+        let result = result?;
+        if result.is_empty() {
+            return Err("transcription returned empty text".to_string());
+        }
+        println!("import-smoke: ok");
+        println!("  path: {}", source.display());
+        println!("  decoded duration: {duration_ms}ms");
+        println!("  transcription: {result}");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = std::fs::remove_file(&decoded);
+        println!("import-smoke: ok (decode only, transcription is macOS only)");
+        println!("  path: {}", source.display());
+        println!("  decoded duration: {duration_ms}ms");
+        let _ = version;
+    }
+
+    Ok(())
+}
+
 fn run_transcribe(path: &str, version: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("audio path is required".to_string());
@@ -646,6 +693,11 @@ async fn main() -> ExitCode {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let version = args.get(3).map(|s| s.as_str()).unwrap_or("v2");
             run_transcribe(path, version)
+        }
+        "import-smoke" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let version = args.get(3).map(|s| s.as_str()).unwrap_or("v2");
+            run_import_smoke(path, version)
         }
         "voice-health" => run_voice_request("health", None).await,
         "voice-start" => run_voice_request("start", Some(&Uuid::new_v4().to_string())).await,

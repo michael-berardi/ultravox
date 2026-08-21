@@ -127,6 +127,9 @@ pub struct AppState {
     pub activity_transition: AsyncMutex<()>,
     pub session: AsyncMutex<Option<RecordingSession>>,
     pub active_transcription: AsyncMutex<Option<ActiveTranscription>>,
+    /// Serializes dropped-file imports so each file waits for the previous
+    /// transcription to start (and finish) in drop order.
+    pub file_import: AsyncMutex<()>,
     pub meeting_session: AsyncMutex<Option<MeetingSession>>,
     meeting_detection: AsyncMutex<MeetingDetectionState>,
     pub audio: AsyncMutex<CpalAudioBackend>,
@@ -200,6 +203,7 @@ impl AppState {
             activity_transition: AsyncMutex::new(()),
             session: AsyncMutex::new(None),
             active_transcription: AsyncMutex::new(None),
+            file_import: AsyncMutex::new(()),
             meeting_session: AsyncMutex::new(None),
             meeting_detection: AsyncMutex::new(MeetingDetectionState::default()),
             audio: AsyncMutex::new(CpalAudioBackend::new()),

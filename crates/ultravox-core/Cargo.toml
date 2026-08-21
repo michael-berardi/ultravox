@@ -19,6 +19,21 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time", "fs", "io-util"] }
 cpal = "0.15"
 hound = "3.5"
+symphonia = { version = "0.6", default-features = false, features = [
+    "aac",
+    "aiff",
+    "alac",
+    "caf",
+    "flac",
+    "isomp4",
+    "mkv",
+    "mp3",
+    "ogg",
+    "pcm",
+    "vorbis",
+    "wav",
+] }
+symphonia-adapter-libopus = { version = "0.3", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["stream"] }
 
 [lib]

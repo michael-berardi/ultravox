@@ -429,6 +429,67 @@ body {
   backdrop-filter: blur(10px);
 }
 
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background: rgba(8, 9, 13, 0.72);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-6);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-xl);
+  background: var(--accent-muted);
+  text-align: center;
+}
+
+.drop-overlay-card svg {
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+}
+
+.drop-overlay-card p {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.drop-overlay-card span {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+.file-import-status {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-5);
+  transform: translateX(-50%);
+  z-index: 65;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius);
+  background: var(--material-elevated);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--material-shadow-md);
+  font-size: 13px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
 .compact-modal {
   width: min(100%, 390px);
   padding: var(--space-5);

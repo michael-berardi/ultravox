@@ -11,8 +11,9 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use uuid::Uuid;
 
 use ultravox_core::{
-    AppConfig, AudioBackend, AudioDeviceInfo, AudioInputConfig, AudioRecording, DownloadManager,
-    DownloadProgress, ModelCatalog, ModelDownload, RecordingRow,
+    decode_media_file_to_wav, AppConfig, AudioBackend, AudioDeviceInfo, AudioInputConfig,
+    AudioRecording, DownloadManager, DownloadProgress, ModelCatalog, ModelDownload, RecordingRow,
+    IMPORT_MAX_BYTES,
 };
 
 #[cfg(target_os = "macos")]
@@ -936,6 +937,99 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
         }
     } else {
         state.emit_url_import_progress(1.0, "Queued for transcription")?;
+    }
+    result
+}
+
+/// Media containers/codecs the in-app decoder (Symphonia + libopus) accepts.
+/// Extensions are matched case-insensitively against the dropped file name.
+const IMPORTABLE_EXTENSIONS: &[&str] = &[
+    "wav", "wave", "mp3", "m4a", "m4b", "mp4", "m4v", "mov", "aac", "flac", "ogg", "oga", "opus",
+    "webm", "aif", "aiff", "caf", "alac",
+];
+
+#[tauri::command]
+pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let source = PathBuf::from(path.trim());
+    if !source.is_absolute() {
+        return Err("file import requires an absolute path".to_string());
+    }
+    let metadata = tokio::fs::metadata(&source)
+        .await
+        .map_err(|_| format!("file not found: {}", source.display()))?;
+    if !metadata.is_file() {
+        return Err("dropped item is not a file".to_string());
+    }
+    if metadata.len() == 0 {
+        return Err("the dropped file is empty".to_string());
+    }
+    if metadata.len() > IMPORT_MAX_BYTES {
+        return Err("the dropped file is larger than 2 GB".to_string());
+    }
+    let extension = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !IMPORTABLE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(format!(
+            ".{extension} files are not supported; drop an audio or media file instead"
+        ));
+    }
+    if state.session.lock().await.is_some() {
+        return Err("stop dictation before importing a file".to_string());
+    }
+    if state.meeting_session.lock().await.is_some() {
+        return Err("stop meeting mode before importing a file".to_string());
+    }
+
+    let id = Uuid::new_v4();
+    let recordings_dir = state.recordings_dir()?;
+    tokio::fs::create_dir_all(&recordings_dir)
+        .await
+        .map_err(|error| format!("could not create recordings directory: {error}"))?;
+    let output_path = recordings_dir.join(format!("{id}.wav"));
+
+    let decode_source = source.clone();
+    let decode_dest = output_path.clone();
+    let duration_ms = tokio::task::spawn_blocking(move || {
+        decode_media_file_to_wav(&decode_source, &decode_dest)
+    })
+    .await
+    .map_err(|error| format!("could not decode the dropped file: {error}"))?
+    .map_err(|error| {
+        let name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("the dropped file");
+        format!("could not import {name}: {error}")
+    })?;
+
+    let recording = AudioRecording {
+        id: id.to_string(),
+        output_path: output_path.clone(),
+        start_time_ms: 0,
+        duration_ms: Some(duration_ms),
+    };
+    if state.meeting_session.lock().await.is_some() {
+        let _ = tokio::fs::remove_file(&output_path).await;
+        return Err("meeting mode started before the import finished".to_string());
+    }
+    // Only one transcription runs at a time. Serialize dropped-file imports so
+    // each file waits for the previous transcription to finish and is queued in
+    // drop order instead of failing.
+    let _import_guard = state.file_import.lock().await;
+    let wait_started = std::time::Instant::now();
+    while state.active_transcription.lock().await.is_some() {
+        if wait_started.elapsed() > std::time::Duration::from_secs(600) {
+            let _ = tokio::fs::remove_file(&output_path).await;
+            return Err("timed out waiting for the active transcription to finish".to_string());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    let result = state.queue_managed_audio(recording, false, false).await;
+    if result.is_err() && !recording_is_tracked(state.inner(), id) {
+        let _ = tokio::fs::remove_file(&output_path).await;
     }
     result
 }
