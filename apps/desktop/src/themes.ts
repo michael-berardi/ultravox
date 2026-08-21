@@ -18,8 +18,8 @@ export const THEMES: ThemeDefinition[] = [
     swatch: ["#0b0d12", "#8eb7ff", "#b794ff"],
   },
   {
-    id: "frutiger-arrow",
-    name: "Frutiger Arrow",
+    id: "frutiger-aero",
+    name: "Frutiger Aero",
     tagline: "Vista-era glass: aqua skies, gloss, and aurora light.",
     swatch: ["#d6ecf8", "#2f9bff", "#6ee87a"],
   },
@@ -66,7 +66,9 @@ const KNOWN_THEME_IDS: Record<string, true> = Object.fromEntries(
 );
 
 export function applyTheme(themeId: string | null | undefined): void {
-  const id = themeId && KNOWN_THEME_IDS[themeId] ? themeId : DEFAULT_THEME;
+  // "frutiger-arrow" was the pre-release id of Frutiger Aero.
+  const normalized = themeId === "frutiger-arrow" ? "frutiger-aero" : themeId;
+  const id = normalized && KNOWN_THEME_IDS[normalized] ? normalized : DEFAULT_THEME;
   document.documentElement.dataset.theme = id;
   void setThemeMaterial(id).catch((error) =>
     console.error("Failed to set window material:", error),

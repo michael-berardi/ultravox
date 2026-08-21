@@ -1529,7 +1529,7 @@ pub fn set_theme_material(app: tauri::AppHandle, theme: String) -> Result<(), St
 fn theme_material(theme: &str) -> Option<window_vibrancy::NSVisualEffectMaterial> {
     use window_vibrancy::NSVisualEffectMaterial;
     match theme {
-        "frutiger-arrow" | "nord-frost" => Some(NSVisualEffectMaterial::Menu),
+        "frutiger-aero" | "nord-frost" => Some(NSVisualEffectMaterial::UnderWindowBackground),
         "frutiger-dark" | "vapor" => Some(NSVisualEffectMaterial::FullScreenUI),
         "olive" => Some(NSVisualEffectMaterial::WindowBackground),
         _ => Some(NSVisualEffectMaterial::HudWindow),
