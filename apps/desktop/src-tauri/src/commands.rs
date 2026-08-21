@@ -1496,3 +1496,60 @@ mod tests {
         );
     }
 }
+
+/// Re-applies the native window material for the given UI theme.
+#[tauri::command]
+pub fn set_theme_material(app: tauri::AppHandle, theme: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // NSVisualEffectView must be touched on the main thread; Tauri commands
+        // run on a worker, so hop over and surface failures to the caller.
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.clone().run_on_main_thread(move || {
+            use tauri::Manager;
+            let result = match app.get_webview_window("main") {
+                Some(window) => {
+                    apply_theme_material(&window, &theme).map_err(|e| e.to_string())
+                }
+                None => Err("main window not found".to_string()),
+            };
+            let _ = tx.send(result);
+        })
+        .map_err(|e| e.to_string())?;
+        rx.recv().map_err(|e| e.to_string())??;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, theme);
+    Ok(())
+}
+
+/// Maps a UI theme to the native window material behind the transparent webview.
+/// Light/glass themes need a pale frosted material; HudWindow is dark HUD glass.
+#[cfg(target_os = "macos")]
+fn theme_material(theme: &str) -> Option<window_vibrancy::NSVisualEffectMaterial> {
+    use window_vibrancy::NSVisualEffectMaterial;
+    match theme {
+        "frutiger-arrow" | "nord-frost" => Some(NSVisualEffectMaterial::Menu),
+        "frutiger-dark" | "vapor" => Some(NSVisualEffectMaterial::FullScreenUI),
+        "olive" => Some(NSVisualEffectMaterial::WindowBackground),
+        _ => Some(NSVisualEffectMaterial::HudWindow),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn apply_theme_material(
+    window: &tauri::WebviewWindow,
+    theme: &str,
+) -> Result<(), window_vibrancy::Error> {
+    // apply_vibrancy stacks a new NSVisualEffectView per call — clear first.
+    let _ = window_vibrancy::clear_vibrancy(window);
+    match theme_material(theme) {
+        Some(material) => window_vibrancy::apply_vibrancy(
+            window,
+            material,
+            Some(window_vibrancy::NSVisualEffectState::Active),
+            Some(16.0),
+        ),
+        None => Ok(()),
+    }
+}

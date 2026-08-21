@@ -317,6 +317,10 @@ export async function getSettings(): Promise<AppConfig> {
   return await invoke<AppConfig>("get_settings");
 }
 
+export async function setThemeMaterial(theme: string): Promise<void> {
+  return await invoke("set_theme_material", { theme });
+}
+
 export async function setSettings(config: AppConfig): Promise<void> {
   return await invoke("set_settings", { config });
 }

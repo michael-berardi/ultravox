@@ -1,4 +1,4 @@
-import { getSettings, onSettingsChanged } from "./ipc";
+import { getSettings, onSettingsChanged, setThemeMaterial } from "./ipc";
 
 export type ThemeDefinition = {
   id: string;
@@ -68,6 +68,9 @@ const KNOWN_THEME_IDS: Record<string, true> = Object.fromEntries(
 export function applyTheme(themeId: string | null | undefined): void {
   const id = themeId && KNOWN_THEME_IDS[themeId] ? themeId : DEFAULT_THEME;
   document.documentElement.dataset.theme = id;
+  void setThemeMaterial(id).catch((error) =>
+    console.error("Failed to set window material:", error),
+  );
 }
 
 /**

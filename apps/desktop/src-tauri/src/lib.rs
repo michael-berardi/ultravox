@@ -431,6 +431,7 @@ pub fn run() {
             get_audio_devices,
             get_audio_input_config,
             export_recording,
+            set_theme_material,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -438,12 +439,7 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window_vibrancy::apply_vibrancy(
-                    &window,
-                    window_vibrancy::NSVisualEffectMaterial::HudWindow,
-                    Some(window_vibrancy::NSVisualEffectState::FollowsWindowActiveState),
-                    Some(16.0),
-                );
+                let _ = apply_theme_material(&window, "midnight");
             }
 
             let state = AppState::new(app.handle().clone()).map_err(|e| {
