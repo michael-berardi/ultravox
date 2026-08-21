@@ -22,8 +22,9 @@ import {
   type UpdateInfo,
 } from "../ipc";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { THEMES } from "../themes";
 
-type TabId = "shortcut" | "model" | "transcription" | "privacy";
+type TabId = "shortcut" | "model" | "transcription" | "privacy" | "appearance";
 
 interface SettingsPageProps {
   initialConfig: AppConfig;
@@ -161,6 +162,7 @@ export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
         <TabButton id="model" label="Model" active={activeTab} onClick={setActiveTab} />
         <TabButton id="transcription" label="Transcription" active={activeTab} onClick={setActiveTab} />
         <TabButton id="privacy" label="Privacy" active={activeTab} onClick={setActiveTab} />
+        <TabButton id="appearance" label="Appearance" active={activeTab} onClick={setActiveTab} />
       </div>
       {error && <div className="settings-error" role="alert">{error}</div>}
 
@@ -169,6 +171,7 @@ export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
         {activeTab === "model" && <ModelSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "transcription" && <TranscriptionSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "privacy" && <PrivacySettings config={cfg} onChange={updateConfig} />}
+        {activeTab === "appearance" && <AppearanceSettings config={cfg} onChange={updateConfig} />}
       </div>
 
     </div>
@@ -900,6 +903,41 @@ function ToggleRow({
           <span className="toggle-thumb" />
         </span>
       </label>
+    </div>
+  );
+}
+
+function AppearanceSettings({ config, onChange }: SettingsSectionProps) {
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-appearance" aria-labelledby="tab-appearance">
+      <div className="settings-card">
+        <div className="settings-card-heading">
+          <div>
+            <h3>Theme</h3>
+          </div>
+        </div>
+        <ul className="theme-grid">
+          {THEMES.map((theme) => (
+            <li key={theme.id}>
+              <button
+                type="button"
+                className={`theme-card ${config.theme === theme.id ? "selected" : ""}`}
+                onClick={() => onChange({ theme: theme.id })}
+                aria-pressed={config.theme === theme.id}
+              >
+                <span
+                  className="theme-card-preview"
+                  style={{
+                    background: `linear-gradient(135deg, ${theme.swatch[1]}, ${theme.swatch[2]}) bottom / 100% 12px no-repeat, ${theme.swatch[0]}`,
+                  }}
+                />
+                <span className="theme-card-name">{theme.name}</span>
+                <span className="theme-card-tagline">{theme.tagline}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

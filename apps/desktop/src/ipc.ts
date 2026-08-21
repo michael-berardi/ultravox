@@ -32,6 +32,7 @@ export type AppConfig = {
   auto_paste_transcription: boolean;
   onboarding_completed: boolean;
   model_language: string;
+  theme: string;
 };
 
 export type AppInfoResponse = {

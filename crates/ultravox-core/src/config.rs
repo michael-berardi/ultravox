@@ -73,6 +73,12 @@ pub struct AppConfig {
     pub onboarding_completed: bool,
     #[serde(default = "default_model_language")]
     pub model_language: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    "midnight".to_string()
 }
 
 fn default_model_language() -> String {
@@ -115,6 +121,7 @@ impl Default for AppConfig {
             auto_paste_transcription: true,
             onboarding_completed: false,
             model_language: default_model_language(),
+            theme: default_theme(),
         }
     }
 }
@@ -225,6 +232,7 @@ mod tests {
             auto_paste_transcription: false,
             onboarding_completed: true,
             model_language: "multilingual".to_string(),
+            theme: "winamp".to_string(),
         };
         let serialized = toml::to_string(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&serialized).unwrap();
