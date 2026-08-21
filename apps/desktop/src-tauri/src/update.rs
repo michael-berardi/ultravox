@@ -292,7 +292,7 @@ fn validate_bundle_name(app: &Path) -> Result<(), String> {
     }
 }
 
-fn verify_app(app: &Path, expected_version: &str) -> Result<(), String> {
+fn verify_app(app: &Path, expected_version: &str, require_notarization: bool) -> Result<(), String> {
     if !app.is_dir() {
         return Err(format!("Expected UltraVox.app at {}.", app.display()));
     }
@@ -335,7 +335,10 @@ fn verify_app(app: &Path, expected_version: &str) -> Result<(), String> {
         "inspect the update designated requirement",
     )?;
     validate_signature(&details, &requirements)?;
-    verify_notarization(app)
+    if require_notarization {
+        verify_notarization(app)?;
+    }
+    Ok(())
 }
 
 /// Verify the update is notarized. `spctl --assess` is tried first with
@@ -427,7 +430,7 @@ async fn stage_update(staging: &Path, expected_version: &str) -> Result<PathBuf,
         "unpack the update archive",
     )?;
     let candidate = unpacked.join(PAYLOAD_NAME).join("UltraVox.app");
-    verify_app(&candidate, expected_version)?;
+    verify_app(&candidate, expected_version, true)?;
     Ok(candidate)
 }
 
@@ -559,7 +562,13 @@ pub async fn install(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
         return Err("Update is not newer than the running app.".to_string());
     }
     let bundle = current_bundle()?;
-    verify_app(&bundle, &info.current_version)?;
+    // The running app was already assessed by Gatekeeper when it was
+    // installed and launched. Re-requiring notarization here permanently
+    // blocks updates for installs whose stapled ticket is missing (e.g. apps
+    // installed from a .pkg, where only the package carried the ticket), so
+    // the installed bundle is checked for identity and version only. The
+    // downloaded candidate below still gets full notarization verification.
+    verify_app(&bundle, &info.current_version, false)?;
     let staging =
         std::env::temp_dir().join(format!("ultravox-update-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&staging)

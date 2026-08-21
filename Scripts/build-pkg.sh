@@ -55,7 +55,12 @@ if [[ "${REQUIRE_SIGNED:-0}" == "1" && -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   echo "APPLE_SIGNING_IDENTITY is required for a distributable package." >&2
   exit 1
 fi
-if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+if [[ "${SKIP_RESIGN:-0}" == "1" ]]; then
+  # The caller already signed (and, for notarized releases, stapled) the app.
+  # Re-signing here would rewrite the code signature and drop the stapled
+  # notarization ticket, leaving .pkg-installed apps unable to auto-update.
+  echo "Using existing app signature (SKIP_RESIGN=1)."
+elif [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   codesign --force --deep --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS_PATH" \
     --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"

@@ -88,11 +88,19 @@ EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED=0 ALLOW_ADHOC=1 \
 
 
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
+  # Sign the app once, up front. Every artifact (zip and pkg payload) must be
+  # produced from this exact signed bundle; re-signing after stapling would
+  # drop the notarization ticket.
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements "${ROOT_DIR}/apps/desktop/src-tauri/Entitlements.plist" \
+    --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
   codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$CLI_PATH"
 else
   codesign --force --sign - "$CLI_PATH"
 fi
 codesign --verify --strict "$CLI_PATH"
+EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED="$SIGNED_RELEASE" ALLOW_ADHOC="$ALLOW_ADHOC" \
+  "${ROOT_DIR}/Scripts/verify-app.sh" "$APP_PATH"
 
 VERSIONED_PKG="${OUTPUT_DIR}/${PRODUCT}-${VERSION}-${ARCH}.pkg"
 STABLE_PKG="${OUTPUT_DIR}/${PRODUCT}-macos-${ARCH}.pkg"
@@ -100,8 +108,32 @@ ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 mkdir -p "$OUTPUT_DIR"
 rm -f "$VERSIONED_PKG" "${VERSIONED_PKG}.sha256" \
   "$STABLE_PKG" "${STABLE_PKG}.sha256" "$ARCHIVE_PATH" "${ARCHIVE_PATH}.sha256"
+
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-release.XXXXXX")"
+trap 'rm -rf "$STAGING_DIR"' EXIT
+PAYLOAD_DIR="${STAGING_DIR}/${PAYLOAD_NAME}"
+mkdir -p "${PAYLOAD_DIR}/bin"
+ditto "$APP_PATH" "${PAYLOAD_DIR}/${PRODUCT}.app"
+install -m 0755 "$CLI_PATH" "${PAYLOAD_DIR}/bin/ultravox-control"
+
+ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
-  SKIP_BUILD=1 OUTPUT_DIR="$OUTPUT_DIR" APP_PATH="$APP_PATH" EXPECTED_VERSION="$VERSION" \
+  # Notarize the app (via the zip submission), then staple the ticket into the
+  # canonical bundle. The pkg below is built from this stapled bundle so
+  # .pkg-installed apps carry the ticket and can pass the updater's
+  # notarization checks — unstapled installs were permanently unable to
+  # auto-update.
+  xcrun notarytool submit "$ARCHIVE_PATH" --keychain-profile "$NOTARYTOOL_PROFILE" --wait
+  xcrun stapler staple "$APP_PATH"
+
+  rm -rf "${PAYLOAD_DIR}/${PRODUCT}.app"
+  ditto "$APP_PATH" "${PAYLOAD_DIR}/${PRODUCT}.app"
+  rm -f "$ARCHIVE_PATH"
+  ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
+fi
+
+if [[ "$SIGNED_RELEASE" == "1" ]]; then
+  SKIP_BUILD=1 SKIP_RESIGN=1 OUTPUT_DIR="$OUTPUT_DIR" APP_PATH="$APP_PATH" EXPECTED_VERSION="$VERSION" \
     REQUIRE_SIGNED=1 NOTARIZE=1 ALLOW_ADHOC=0 \
     APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
     APPLE_INSTALLER_SIGNING_IDENTITY="$APPLE_INSTALLER_SIGNING_IDENTITY" \
@@ -117,23 +149,6 @@ EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED="$SIGNED_RELEASE" REQUIRE_NOTARIZED="
 
 mv "$VERSIONED_PKG" "$STABLE_PKG"
 rm -f "${VERSIONED_PKG}.sha256"
-
-STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-release.XXXXXX")"
-trap 'rm -rf "$STAGING_DIR"' EXIT
-PAYLOAD_DIR="${STAGING_DIR}/${PAYLOAD_NAME}"
-mkdir -p "${PAYLOAD_DIR}/bin"
-ditto "$APP_PATH" "${PAYLOAD_DIR}/${PRODUCT}.app"
-install -m 0755 "$CLI_PATH" "${PAYLOAD_DIR}/bin/ultravox-control"
-
-ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
-ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
-if [[ "$SIGNED_RELEASE" == "1" ]]; then
-  xcrun notarytool submit "$ARCHIVE_PATH" --keychain-profile "$NOTARYTOOL_PROFILE" --wait
-  xcrun stapler staple "${PAYLOAD_DIR}/${PRODUCT}.app"
-
-  rm -f "$ARCHIVE_PATH"
-  ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD_DIR" "$ARCHIVE_PATH"
-fi
 
 codesign --verify --strict "$CLI_PATH"
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
