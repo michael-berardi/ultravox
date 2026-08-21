@@ -1894,8 +1894,8 @@ body {
 
 /* Frutiger Aero — Vista-era glass: aqua skies, gloss, aurora light. */
 :root[data-theme="frutiger-aero"] {
-  --text: #0e2a3f;
-  --text-secondary: #2e4b61;
+  --text: #0b2233;
+  --text-secondary: #26455c;
   --text-tertiary: #6b8496;
   --accent: #1f8fff;
   --accent-hover: #3ba2ff;
@@ -1923,10 +1923,10 @@ body {
   --record-glow-hover: rgba(47, 155, 255, 0.48);
   --scrim: rgba(190, 214, 232, 0.42);
   --scrim-strong: rgba(190, 214, 232, 0.58);
-  --material-window: rgba(214, 236, 248, 0.3);
-  --material-surface: rgba(255, 255, 255, 0.55);
-  --material-panel: rgba(255, 255, 255, 0.62);
-  --material-elevated: rgba(255, 255, 255, 0.75);
+  --material-window: rgba(214, 236, 248, 0.45);
+  --material-surface: rgba(255, 255, 255, 0.75);
+  --material-panel: rgba(255, 255, 255, 0.8);
+  --material-elevated: rgba(255, 255, 255, 0.88);
   --material-border: rgba(255, 255, 255, 0.5);
   --material-border-subtle: rgba(90, 140, 180, 0.22);
   --material-highlight: rgba(255, 255, 255, 0.85);
@@ -2737,4 +2737,48 @@ body {
 :root[data-theme="frutiger-aero"] .icon-button {
   color: #2e4b61;
   background: rgba(255, 255, 255, 0.5);
+}
+
+/* Frutiger Aero: solid, readable controls on glass (real Aero was milky, not sheer). */
+:root[data-theme="frutiger-aero"] .secondary-action,
+:root[data-theme="frutiger-aero"] .btn {
+  background: rgba(255, 255, 255, 0.85);
+  color: #16374e;
+  border-color: rgba(70, 120, 160, 0.4);
+  box-shadow: 0 1px 2px rgba(46, 92, 130, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+:root[data-theme="frutiger-aero"] .btn-danger {
+  background: rgba(220, 60, 80, 0.14);
+  color: #8e2436;
+  border-color: rgba(192, 52, 72, 0.55);
+  font-weight: 600;
+}
+:root[data-theme="frutiger-aero"] .icon-button {
+  background: rgba(255, 255, 255, 0.8);
+  color: #26455c;
+  border: 1px solid rgba(70, 120, 160, 0.35);
+}
+:root[data-theme="frutiger-aero"] .status-label {
+  color: #14532d;
+  font-weight: 600;
+}
+:root[data-theme="frutiger-aero"] .header-title {
+  color: #0b2233;
+  font-weight: 650;
+}
+:root[data-theme="frutiger-aero"] .history-link {
+  color: #0f6fd6;
+  font-weight: 600;
+}
+
+/* Frutiger Aero: final legibility bump. */
+:root[data-theme="frutiger-aero"] .status-label {
+  font-size: 13px;
+}
+:root[data-theme="frutiger-aero"] .icon-button {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(70, 120, 160, 0.5);
+}
+:root[data-theme="frutiger-aero"] .recording-card {
+  background: rgba(255, 255, 255, 0.82);
 }
