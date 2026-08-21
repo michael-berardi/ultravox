@@ -75,15 +75,17 @@ if count != 1:
     raise SystemExit("could not update UltraVox package version")
 cargo_path.write_text(updated)
 
-for package_path in (Path("package.json"), Path("apps/desktop/package.json")):
-    package = json.loads(package_path.read_text())
-    package["version"] = version
-    package_path.write_text(json.dumps(package, indent=2) + "\n")
-
-tauri_path = Path("apps/desktop/src-tauri/tauri.conf.json")
-tauri_config = json.loads(tauri_path.read_text())
-tauri_config["version"] = version
-tauri_path.write_text(json.dumps(tauri_config, indent=2) + "\n")
+for json_path in (
+    Path("package.json"),
+    Path("apps/desktop/package.json"),
+    Path("apps/desktop/src-tauri/tauri.conf.json"),
+):
+    text, replaced = re.subn(
+        r'("version": ")[^"]+(")', rf"\g<1>{version}\g<2>", json_path.read_text(), count=1
+    )
+    if replaced != 1:
+        raise SystemExit(f"could not update version in {json_path}")
+    json_path.write_text(text)
 PY
 echo "✅ Updated UltraVox package versions to ${NEW_VERSION}"
 
