@@ -193,9 +193,9 @@ pub fn get_permission_status() -> PermissionStatus {
 }
 
 #[tauri::command]
-pub fn request_permission(kind: PermissionKind) -> Result<PermissionStatus, String> {
+pub async fn request_permission(kind: PermissionKind) -> Result<PermissionStatus, String> {
     #[cfg(target_os = "macos")]
-    match kind {
+    tauri::async_runtime::spawn_blocking(move || match kind {
         PermissionKind::Microphone => {
             let _ = bridge::request_microphone_access();
         }
@@ -205,7 +205,9 @@ pub fn request_permission(kind: PermissionKind) -> Result<PermissionStatus, Stri
         PermissionKind::ScreenRecording => {
             let _ = bridge::request_screen_recording_access();
         }
-    }
+    })
+    .await
+    .map_err(|error| format!("permission request task failed: {error}"))?;
     #[cfg(not(target_os = "macos"))]
     let _ = kind;
     Ok(permission_status())

@@ -1,7 +1,7 @@
 {
   "name": "ultravox",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "UltraVox monorepo — Swift baseline and Rust/Tauri v2 rewrite",
   "scripts": {
     "desktop:dev": "pnpm --filter ultravox-desktop tauri dev",

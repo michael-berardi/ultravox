@@ -239,7 +239,6 @@ mod hotkey {
 
     pub fn setup(app: &AppHandle) {
         if !bridge::is_accessibility_trusted(false) {
-            let _ = bridge::is_accessibility_trusted(true);
             eprintln!(
                 "UltraVox needs Accessibility access to place its indicator and insert transcriptions"
             );

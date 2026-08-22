@@ -1025,7 +1025,7 @@ public func ultravox_macos_bridge_media_transport(
 /// Returns the bridge version string.
 @_cdecl("ultravox_macos_bridge_version")
 public func ultravox_macos_bridge_version() -> UnsafeMutablePointer<CChar> {
-    "UltraVoxMacOSBridge 0.3.1".duplicateAsCChar()
+    "UltraVoxMacOSBridge 0.3.2".duplicateAsCChar()
 }
 
 /// Frees a string previously returned by this bridge.
