@@ -1481,47 +1481,34 @@ impl MediaState {
     }
 }
 
-/// Capture-free media state: activity via public CoreAudio process properties
-/// (self excluded), volume via the default output device, and optional
-/// runtime-only MediaRemote metadata/transport. Metadata is accepted only for
-/// the same PID or a conservative browser helper/main bundle family.
+/// Capture-free now-playing state from macOS MediaRemote plus default-output
+/// volume. MediaRemote is the same global session used by Control Center, so
+/// paused tracks remain controllable and anonymous/silent audio streams do not
+/// produce a misleading generic panel.
 #[cfg(target_os = "macos")]
 fn collect_media_state() -> MediaState {
-    let Some(source) = bridge::active_audio_source() else {
+    let Some(now_playing) = bridge::now_playing() else {
         return MediaState::inactive();
     };
-    let now_playing = bridge::now_playing().filter(|item| bridge::same_media_app(&source, item));
-    let capabilities = now_playing
-        .as_ref()
-        .map(|_| bridge::transport_capabilities())
-        .unwrap_or(bridge::TransportCapabilities {
-            play_pause: false,
-            previous: false,
-            next: false,
-        });
-    let transport_available =
-        now_playing.is_some() && bridge::transport_available() && capabilities.play_pause;
+    let capabilities = bridge::transport_capabilities();
+    let transport_available = bridge::transport_available() && capabilities.play_pause;
     let volume_state = bridge::output_volume_state();
     MediaState {
         active: true,
-        app_name: source
-            .app_name
-            .or_else(|| now_playing.as_ref().and_then(|item| item.app_name.clone())),
-        bundle_id: source
-            .bundle_id
-            .or_else(|| now_playing.as_ref().and_then(|item| item.bundle_id.clone())),
-        title: now_playing.as_ref().and_then(|item| item.title.clone()),
-        artist: now_playing.as_ref().and_then(|item| item.artist.clone()),
-        album: now_playing.as_ref().and_then(|item| item.album.clone()),
-        elapsed_seconds: now_playing.as_ref().and_then(|item| item.elapsed_seconds),
-        duration_seconds: now_playing.as_ref().and_then(|item| item.duration_seconds),
-        is_playing: now_playing.as_ref().and_then(|item| item.is_playing),
+        app_name: now_playing.app_name,
+        bundle_id: now_playing.bundle_id,
+        title: now_playing.title,
+        artist: now_playing.artist,
+        album: now_playing.album,
+        elapsed_seconds: now_playing.elapsed_seconds,
+        duration_seconds: now_playing.duration_seconds,
+        is_playing: now_playing.is_playing,
         volume: volume_state.volume,
         muted: volume_state.muted,
         volume_available: volume_state.volume.is_some(),
         transport_available,
-        previous_available: now_playing.is_some() && capabilities.previous,
-        next_available: now_playing.is_some() && capabilities.next,
+        previous_available: capabilities.previous,
+        next_available: capabilities.next,
     }
 }
 
@@ -1563,21 +1550,16 @@ pub fn set_system_muted(_muted: bool) -> Result<(), String> {
     Err("system mute requires macOS".to_string())
 }
 
-/// Sends `play_pause`, `previous`, or `next` only for the currently matched
-/// now-playing app. The MediaRemote probes may block, so the command runs off
-/// Tauri's IPC dispatch path.
+/// Sends `play_pause`, `previous`, or `next` to the canonical system
+/// now-playing session. The MediaRemote probes may block, so the command runs
+/// off Tauri's IPC dispatch path.
 #[cfg(target_os = "macos")]
 fn send_media_transport(command: String) -> Result<(), String> {
     if !bridge::TRANSPORT_COMMANDS.contains(&command.as_str()) {
         return Err(format!("unknown transport command: {command}"));
     }
-    let source = bridge::active_audio_source()
-        .ok_or_else(|| "media transport source is unavailable".to_string())?;
-    let now_playing = bridge::now_playing()
+    let _now_playing = bridge::now_playing()
         .ok_or_else(|| "media transport metadata is unavailable".to_string())?;
-    if !bridge::same_media_app(&source, &now_playing) {
-        return Err("media transport source does not match now-playing owner".to_string());
-    }
     let capabilities = bridge::transport_capabilities();
     let supported = match command.as_str() {
         "play_pause" => capabilities.play_pause,

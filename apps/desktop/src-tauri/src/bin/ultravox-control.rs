@@ -487,14 +487,9 @@ fn run_caret_bridge_dry_run() -> Result<(), String> {
 }
 #[cfg(target_os = "macos")]
 fn run_media_state() -> Result<(), String> {
-    let source = bridge::active_audio_source();
+    let audio_source = bridge::active_audio_source();
     let now_playing = bridge::now_playing();
-    let matched = source.as_ref().and_then(|source| {
-        now_playing
-            .as_ref()
-            .filter(|item| bridge::same_media_app(source, item))
-    });
-    let capabilities = if matched.is_some() {
+    let capabilities = if now_playing.is_some() {
         bridge::transport_capabilities()
     } else {
         bridge::TransportCapabilities {
@@ -504,13 +499,18 @@ fn run_media_state() -> Result<(), String> {
         }
     };
     let value = serde_json::json!({
-        "active": source.is_some(),
-        "source": source.as_ref().map(|source| serde_json::json!({
+        "active": now_playing.is_some(),
+        "source": now_playing.as_ref().map(|item| serde_json::json!({
+            "processId": item.process_id,
+            "appName": item.app_name,
+            "bundleId": item.bundle_id,
+        })),
+        "audioSource": audio_source.as_ref().map(|source| serde_json::json!({
             "processId": source.process_id,
             "appName": source.app_name,
             "bundleId": source.bundle_id,
         })),
-        "nowPlaying": matched.map(|item| serde_json::json!({
+        "nowPlaying": now_playing.as_ref().map(|item| serde_json::json!({
             "processId": item.process_id,
             "appName": item.app_name,
             "bundleId": item.bundle_id,
@@ -521,11 +521,11 @@ fn run_media_state() -> Result<(), String> {
             "durationSeconds": item.duration_seconds,
             "isPlaying": item.is_playing,
         })),
-        "transportAvailable": matched.is_some()
+        "transportAvailable": now_playing.is_some()
             && bridge::transport_available()
             && capabilities.play_pause,
-        "previousAvailable": matched.is_some() && capabilities.previous,
-        "nextAvailable": matched.is_some() && capabilities.next,
+        "previousAvailable": now_playing.is_some() && capabilities.previous,
+        "nextAvailable": now_playing.is_some() && capabilities.next,
     });
     println!(
         "{}",
@@ -546,13 +546,8 @@ fn run_media_transport(command: &str) -> Result<(), String> {
             "unknown media transport command: {command} (expected play_pause, previous, or next)"
         ));
     }
-    let source = bridge::active_audio_source()
-        .ok_or_else(|| "media transport source is unavailable".to_string())?;
-    let now_playing = bridge::now_playing()
+    let _now_playing = bridge::now_playing()
         .ok_or_else(|| "media transport metadata is unavailable".to_string())?;
-    if !bridge::same_media_app(&source, &now_playing) {
-        return Err("media transport source does not match now-playing owner".to_string());
-    }
     let capabilities = bridge::transport_capabilities();
     let enabled = match command {
         "play_pause" => capabilities.play_pause,

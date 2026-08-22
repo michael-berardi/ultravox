@@ -632,10 +632,10 @@ internal enum MediaActivity {
         return pid_t(info.pbi_ppid)
     }
 
-    /// CoreAudio commonly attributes browser playback to a sandboxed audio
-    /// helper with no NSRunningApplication identity. Walk the bounded parent
-    /// chain to the regular host app so the UI can name Chrome/Safari/etc.
-    private static func owningApplication(_ processID: pid_t) -> NSRunningApplication? {
+    /// CoreAudio and MediaRemote can attribute browser playback to a sandboxed
+    /// helper with no usable app identity. Walk the bounded parent chain to
+    /// the regular host app so the UI can name Chrome/Safari/etc.
+    static func owningApplication(_ processID: pid_t) -> NSRunningApplication? {
         var current = processID
         var visited = Set<pid_t>()
         var fallback: NSRunningApplication?
@@ -1147,7 +1147,7 @@ internal final class MediaRemoteController: @unchecked Sendable {
             let processID = pidBox.get(),
             processID > 0
         else { return nil }
-        let app = NSRunningApplication(processIdentifier: processID)
+        let app = MediaActivity.owningApplication(processID)
         return NowPlayingSnapshot(
             processID: processID,
             appName: app?.localizedName,
@@ -1295,7 +1295,7 @@ public func ultravox_macos_bridge_media_transport(
 /// Returns the bridge version string.
 @_cdecl("ultravox_macos_bridge_version")
 public func ultravox_macos_bridge_version() -> UnsafeMutablePointer<CChar> {
-    "UltraVoxMacOSBridge 0.4.0".duplicateAsCChar()
+    "UltraVoxMacOSBridge 0.4.1".duplicateAsCChar()
 }
 
 /// Frees a string previously returned by this bridge.
