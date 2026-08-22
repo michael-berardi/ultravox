@@ -1447,6 +1447,9 @@ pub struct MediaState {
     pub bundle_id: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album: Option<String>,
+    pub elapsed_seconds: Option<f64>,
+    pub duration_seconds: Option<f64>,
     pub is_playing: Option<bool>,
     pub volume: Option<f64>,
     pub muted: Option<bool>,
@@ -1464,6 +1467,9 @@ impl MediaState {
             bundle_id: None,
             title: None,
             artist: None,
+            album: None,
+            elapsed_seconds: None,
+            duration_seconds: None,
             is_playing: None,
             volume: None,
             muted: None,
@@ -1477,32 +1483,45 @@ impl MediaState {
 
 /// Capture-free media state: activity via public CoreAudio process properties
 /// (self excluded), volume via the default output device, and optional
-/// runtime-only MediaRemote metadata/transport. The private probe blocks off
-/// Tauri's IPC dispatch path and metadata is accepted only for the same PID.
+/// runtime-only MediaRemote metadata/transport. Metadata is accepted only for
+/// the same PID or a conservative browser helper/main bundle family.
 #[cfg(target_os = "macos")]
 fn collect_media_state() -> MediaState {
     let Some(source) = bridge::active_audio_source() else {
         return MediaState::inactive();
     };
-    let now_playing = bridge::now_playing().filter(|item| item.process_id == source.process_id);
-    let transport_available = now_playing.is_some() && bridge::transport_available();
+    let now_playing = bridge::now_playing().filter(|item| bridge::same_media_app(&source, item));
+    let capabilities = now_playing
+        .as_ref()
+        .map(|_| bridge::transport_capabilities())
+        .unwrap_or(bridge::TransportCapabilities {
+            play_pause: false,
+            previous: false,
+            next: false,
+        });
+    let transport_available =
+        now_playing.is_some() && bridge::transport_available() && capabilities.play_pause;
     let volume_state = bridge::output_volume_state();
     MediaState {
         active: true,
-        app_name: source.app_name,
-        bundle_id: source.bundle_id,
+        app_name: source
+            .app_name
+            .or_else(|| now_playing.as_ref().and_then(|item| item.app_name.clone())),
+        bundle_id: source
+            .bundle_id
+            .or_else(|| now_playing.as_ref().and_then(|item| item.bundle_id.clone())),
         title: now_playing.as_ref().and_then(|item| item.title.clone()),
         artist: now_playing.as_ref().and_then(|item| item.artist.clone()),
-        is_playing: now_playing.and_then(|item| item.is_playing),
+        album: now_playing.as_ref().and_then(|item| item.album.clone()),
+        elapsed_seconds: now_playing.as_ref().and_then(|item| item.elapsed_seconds),
+        duration_seconds: now_playing.as_ref().and_then(|item| item.duration_seconds),
+        is_playing: now_playing.as_ref().and_then(|item| item.is_playing),
         volume: volume_state.volume,
         muted: volume_state.muted,
         volume_available: volume_state.volume.is_some(),
         transport_available,
-        // MediaRemote's legacy send API does not expose per-item skip
-        // capability safely. Keep secondary controls hidden rather than
-        // presenting actions the current item may reject.
-        previous_available: false,
-        next_available: false,
+        previous_available: now_playing.is_some() && capabilities.previous,
+        next_available: now_playing.is_some() && capabilities.next,
     }
 }
 
@@ -1544,17 +1563,45 @@ pub fn set_system_muted(_muted: bool) -> Result<(), String> {
     Err("system mute requires macOS".to_string())
 }
 
-/// Sends `play_pause`, `previous`, or `next`. Errors when the command is
-/// unknown or the transport is unavailable on this system.
+/// Sends `play_pause`, `previous`, or `next` only for the currently matched
+/// now-playing app. The MediaRemote probes may block, so the command runs off
+/// Tauri's IPC dispatch path.
+#[cfg(target_os = "macos")]
+fn send_media_transport(command: String) -> Result<(), String> {
+    if !bridge::TRANSPORT_COMMANDS.contains(&command.as_str()) {
+        return Err(format!("unknown transport command: {command}"));
+    }
+    let source = bridge::active_audio_source()
+        .ok_or_else(|| "media transport source is unavailable".to_string())?;
+    let now_playing = bridge::now_playing()
+        .ok_or_else(|| "media transport metadata is unavailable".to_string())?;
+    if !bridge::same_media_app(&source, &now_playing) {
+        return Err("media transport source does not match now-playing owner".to_string());
+    }
+    let capabilities = bridge::transport_capabilities();
+    let supported = match command.as_str() {
+        "play_pause" => capabilities.play_pause,
+        "previous" => capabilities.previous,
+        "next" => capabilities.next,
+        _ => false,
+    };
+    if !supported {
+        return Err(format!("media transport command is unsupported: {command}"));
+    }
+    bridge::media_transport(&command)
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn media_transport(command: String) -> Result<(), String> {
-    bridge::media_transport(&command)
+pub async fn media_transport(command: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || send_media_transport(command))
+        .await
+        .map_err(|error| format!("media transport task failed: {error}"))?
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn media_transport(_command: String) -> Result<(), String> {
+pub async fn media_transport(_command: String) -> Result<(), String> {
     Err("media transport requires macOS".to_string())
 }
 
@@ -1596,7 +1643,7 @@ pub fn export_recording(
 mod tests {
     use super::{
         modifier_conflicts_with_combination, permission_settings_pane,
-        screen_recording_permission_error, validate_remote_url, PermissionKind,
+        screen_recording_permission_error, validate_remote_url, MediaState, PermissionKind,
     };
 
     #[test]
@@ -1640,6 +1687,26 @@ mod tests {
             permission_settings_pane(&PermissionKind::ScreenRecording),
             "Privacy_ScreenCapture"
         );
+    }
+    #[test]
+    fn media_state_serializes_new_metadata_in_camel_case() {
+        let mut state = MediaState::inactive();
+        state.active = true;
+        state.app_name = Some("Music".to_string());
+        state.bundle_id = Some("com.apple.Music".to_string());
+        state.album = Some("Album".to_string());
+        state.elapsed_seconds = Some(4.5);
+        state.duration_seconds = Some(120.0);
+        state.previous_available = true;
+        state.next_available = false;
+        let value = serde_json::to_value(state).expect("media state should serialize");
+        assert_eq!(value["appName"], "Music");
+        assert_eq!(value["bundleId"], "com.apple.Music");
+        assert_eq!(value["album"], "Album");
+        assert_eq!(value["elapsedSeconds"], 4.5);
+        assert_eq!(value["durationSeconds"], 120.0);
+        assert_eq!(value["previousAvailable"], true);
+        assert_eq!(value["nextAvailable"], false);
     }
 }
 

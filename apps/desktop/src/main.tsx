@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import type { ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { ThemeHarness, parseHarnessState } from "./qa/ThemeHarness";
+import { ThemeHarness, parseHarnessSource, parseHarnessState } from "./qa/ThemeHarness";
 import { initTheme, THEMES } from "./themes";
 import "./index.css";
 
@@ -29,7 +29,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BootReady>
       {harnessTheme ? (
-        <ThemeHarness state={parseHarnessState(params.get("qa-state"))} />
+        <ThemeHarness
+          state={parseHarnessState(params.get("qa-state"))}
+          source={parseHarnessSource(params.get("qa-source"))}
+        />
       ) : (
         <App />
       )}

@@ -89,10 +89,20 @@ extern "C" {
     fn ultravox_macos_bridge_get_output_muted(muted: *mut c_int) -> c_int;
     fn ultravox_macos_bridge_set_output_muted(muted: c_int) -> c_int;
     fn ultravox_macos_bridge_media_remote_available() -> c_int;
+    fn ultravox_macos_bridge_media_transport_capabilities(
+        play_pause: *mut c_int,
+        previous: *mut c_int,
+        next: *mut c_int,
+    ) -> c_int;
     fn ultravox_macos_bridge_now_playing(
         process_id: *mut c_int,
+        app_name: *mut *mut c_char,
+        bundle_id: *mut *mut c_char,
         title: *mut *mut c_char,
         artist: *mut *mut c_char,
+        album: *mut *mut c_char,
+        elapsed_seconds: *mut c_double,
+        duration_seconds: *mut c_double,
         is_playing: *mut c_int,
     ) -> c_int;
     fn ultravox_macos_bridge_media_transport(command: *const c_char) -> c_int;
@@ -462,20 +472,84 @@ pub struct OutputVolumeState {
 }
 
 /// Now-playing metadata from optional runtime MediaRemote access.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NowPlayingInfo {
     pub process_id: i32,
+    pub app_name: Option<String>,
+    pub bundle_id: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album: Option<String>,
+    pub elapsed_seconds: Option<f64>,
+    pub duration_seconds: Option<f64>,
     pub is_playing: Option<bool>,
+}
+
+/// Runtime MediaRemote command capabilities. Secondary commands are false
+/// unless the supported-command and command-info APIs prove they are enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransportCapabilities {
+    pub play_pause: bool,
+    pub previous: bool,
+    pub next: bool,
 }
 
 /// Transport commands accepted by [`media_transport`].
 pub const TRANSPORT_COMMANDS: [&str; 3] = ["play_pause", "previous", "next"];
 
-/// Returns the first other process currently running audio output, or `None`
-/// when no other process is active. Capture-free: only public process-state
-/// properties are read and this process is always excluded.
+/// Returns true only for an exact bundle ID or a known browser helper/main
+/// family. Arbitrary bundle ID prefixes are deliberately rejected.
+pub fn same_bundle_family(left: Option<&str>, right: Option<&str>) -> bool {
+    fn family(bundle_id: &str) -> Option<&'static str> {
+        const BROWSER_BASES: [&str; 7] = [
+            "com.google.Chrome",
+            "com.microsoft.edgemac",
+            "com.brave.Browser",
+            "company.thebrowser.Browser",
+            "org.mozilla.firefox",
+            "com.vivaldi.Vivaldi",
+            "com.operasoftware.Opera",
+        ];
+        const SAFARI_FAMILY: [&str; 4] = [
+            "com.apple.Safari",
+            "com.apple.WebKit.Networking",
+            "com.apple.WebKit.WebContent",
+            "com.apple.WebKit.GPU",
+        ];
+        if SAFARI_FAMILY.contains(&bundle_id) {
+            return Some("com.apple.Safari");
+        }
+        BROWSER_BASES.into_iter().find(|base| {
+            bundle_id == *base
+                || bundle_id
+                    .strip_prefix(base)
+                    .is_some_and(|suffix| suffix == ".helper" || suffix.starts_with(".helper."))
+        })
+    }
+
+    match (left, right) {
+        (Some(left), Some(right)) if left == right && !left.is_empty() => true,
+        (Some(left), Some(right)) => family(left)
+            .zip(family(right))
+            .is_some_and(|(left_family, right_family)| left_family == right_family),
+        _ => false,
+    }
+}
+
+/// Returns true when source and now-playing metadata identify the same app.
+pub fn same_media_app(source: &AudioSource, now_playing: &NowPlayingInfo) -> bool {
+    source.process_id == now_playing.process_id
+        || same_bundle_family(
+            source.bundle_id.as_deref(),
+            now_playing.bundle_id.as_deref(),
+        )
+}
+
+/// Returns the best other process currently running audio output, or `None`
+/// when no other process is active. The native bridge prefers the MediaRemote
+/// client PID, then a known browser helper/main family, then the first active
+/// process. Capture-free: only public process-state properties are read and
+/// this process is always excluded.
 pub fn active_audio_source() -> Option<AudioSource> {
     unsafe {
         let mut process_id: c_int = 0;
@@ -551,29 +625,75 @@ pub fn transport_available() -> bool {
     unsafe { ultravox_macos_bridge_media_remote_available() != 0 }
 }
 
+/// Reads runtime MediaRemote command capabilities. Missing secondary command
+/// discovery APIs safely report previous/next as false; play/pause remains
+/// independently available when the send API resolves.
+pub fn transport_capabilities() -> TransportCapabilities {
+    unsafe {
+        let mut play_pause = 0;
+        let mut previous = 0;
+        let mut next = 0;
+        let _ = ultravox_macos_bridge_media_transport_capabilities(
+            &mut play_pause,
+            &mut previous,
+            &mut next,
+        );
+        TransportCapabilities {
+            play_pause: play_pause != 0,
+            previous: previous != 0,
+            next: next != 0,
+        }
+    }
+}
+
+fn valid_seconds(value: c_double) -> Option<f64> {
+    value
+        .is_finite()
+        .then_some(value)
+        .filter(|value| *value >= 0.0)
+}
+
 /// Fetches now-playing metadata, or `None` when MediaRemote is unavailable
 /// or did not reply in time.
 pub fn now_playing() -> Option<NowPlayingInfo> {
     unsafe {
         let mut process_id: c_int = 0;
+        let mut app_name: *mut c_char = std::ptr::null_mut();
+        let mut bundle_id: *mut c_char = std::ptr::null_mut();
         let mut title: *mut c_char = std::ptr::null_mut();
         let mut artist: *mut c_char = std::ptr::null_mut();
+        let mut album: *mut c_char = std::ptr::null_mut();
+        let mut elapsed_seconds: c_double = -1.0;
+        let mut duration_seconds: c_double = -1.0;
         let mut is_playing: c_int = -1;
         if ultravox_macos_bridge_now_playing(
             &mut process_id,
+            &mut app_name,
+            &mut bundle_id,
             &mut title,
             &mut artist,
+            &mut album,
+            &mut elapsed_seconds,
+            &mut duration_seconds,
             &mut is_playing,
         ) != 1
         {
             return None;
         }
+        let app_name = take_bridge_string(app_name);
+        let bundle_id = take_bridge_string(bundle_id);
         let title = take_bridge_string(title);
         let artist = take_bridge_string(artist);
+        let album = take_bridge_string(album);
         Some(NowPlayingInfo {
             process_id,
+            app_name: (!app_name.is_empty()).then_some(app_name),
+            bundle_id: (!bundle_id.is_empty()).then_some(bundle_id),
             title: (!title.is_empty()).then_some(title),
             artist: (!artist.is_empty()).then_some(artist),
+            album: (!album.is_empty()).then_some(album),
+            elapsed_seconds: valid_seconds(elapsed_seconds),
+            duration_seconds: valid_seconds(duration_seconds),
             is_playing: match is_playing {
                 1 => Some(true),
                 0 => Some(false),
@@ -708,6 +828,98 @@ mod tests {
         for command in TRANSPORT_COMMANDS {
             assert_eq!(validate_media_transport_command(command), Ok(command));
         }
+    }
+
+    #[test]
+    fn test_bundle_family_matching_is_conservative() {
+        assert!(same_bundle_family(
+            Some("com.google.Chrome"),
+            Some("com.google.Chrome.helper.renderer")
+        ));
+        assert!(same_bundle_family(
+            Some("com.apple.Safari"),
+            Some("com.apple.WebKit.WebContent")
+        ));
+        assert!(same_bundle_family(
+            Some("com.example.player"),
+            Some("com.example.player")
+        ));
+        assert!(!same_bundle_family(
+            Some("com.google.Chrome"),
+            Some("com.google.Chromeish.helper")
+        ));
+        assert!(!same_bundle_family(
+            Some("com.google.Chrome"),
+            Some("com.apple.Safari")
+        ));
+        assert!(!same_bundle_family(
+            Some("com.apple.Music"),
+            Some("com.spotify.client")
+        ));
+        assert!(!same_bundle_family(None, Some("com.google.Chrome")));
+    }
+
+    #[test]
+    fn test_metadata_match_requires_pid_or_bundle_family() {
+        let source = AudioSource {
+            process_id: 42,
+            app_name: Some("Chrome".to_string()),
+            bundle_id: Some("com.google.Chrome".to_string()),
+        };
+        let browser_helper = NowPlayingInfo {
+            process_id: 99,
+            app_name: Some("Google Chrome Helper".to_string()),
+            bundle_id: Some("com.google.Chrome.helper.renderer".to_string()),
+            title: Some("Track".to_string()),
+            artist: Some("Artist".to_string()),
+            album: Some("Album".to_string()),
+            elapsed_seconds: Some(12.5),
+            duration_seconds: Some(180.0),
+            is_playing: Some(true),
+        };
+        assert!(same_media_app(&source, &browser_helper));
+        assert!(same_media_app(
+            &source,
+            &NowPlayingInfo {
+                process_id: 42,
+                ..browser_helper.clone()
+            }
+        ));
+        assert!(!same_media_app(
+            &source,
+            &NowPlayingInfo {
+                process_id: 99,
+                bundle_id: Some("com.apple.Music".to_string()),
+                ..browser_helper
+            }
+        ));
+    }
+
+    #[test]
+    fn test_now_playing_wire_metadata_preserves_optional_fields() {
+        let info = NowPlayingInfo {
+            process_id: 7,
+            app_name: Some("Music".to_string()),
+            bundle_id: Some("com.apple.Music".to_string()),
+            title: Some("Song".to_string()),
+            artist: Some("Artist".to_string()),
+            album: Some("Album".to_string()),
+            elapsed_seconds: Some(1.25),
+            duration_seconds: Some(123.0),
+            is_playing: Some(false),
+        };
+        assert_eq!(info.album.as_deref(), Some("Album"));
+        assert_eq!(info.elapsed_seconds, Some(1.25));
+        assert_eq!(info.duration_seconds, Some(123.0));
+        assert_eq!(info.app_name.as_deref(), Some("Music"));
+    }
+
+    #[test]
+    fn test_invalid_wire_times_are_rejected() {
+        assert_eq!(valid_seconds(-1.0), None);
+        assert_eq!(valid_seconds(f64::NAN), None);
+        assert_eq!(valid_seconds(f64::INFINITY), None);
+        assert_eq!(valid_seconds(0.0), Some(0.0));
     }
 
     #[test]

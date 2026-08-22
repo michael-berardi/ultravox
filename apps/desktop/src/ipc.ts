@@ -44,6 +44,9 @@ export type MediaState = {
   bundleId?: string | null;
   title?: string | null;
   artist?: string | null;
+  album?: string | null;
+  elapsedSeconds?: number | null;
+  durationSeconds?: number | null;
   isPlaying?: boolean | null;
   volume?: number | null;
   muted?: boolean | null;

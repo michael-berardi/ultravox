@@ -98,11 +98,13 @@ For deterministic visual debugging without launching or focusing the native app:
 ```bash
 pnpm desktop:qa:headless
 # Open headlessly:
-# http://127.0.0.1:1420/?qa-theme=frutiger-aero&qa-state=playing
+# http://127.0.0.1:1420/?qa-theme=frutiger-aero&qa-state=playing&qa-source=music
 ```
 
 The dev-only harness accepts every theme ID plus `qa-state=playing`, `paused`,
-`unknown`, or `volume-unavailable`. Production builds ignore these parameters.
+`unknown`, or `volume-unavailable` and `qa-source=music`, `youtube-music`, or
+`youtube` for deterministic now-playing fixtures. Production builds ignore
+these parameters.
 
 ## Publishing a release
 

@@ -8,8 +8,11 @@ import {
   type MediaTransportCommand,
 } from "../ipc";
 import {
+  formatMediaClock,
   initialMediaVisibility,
-  mediaSubtitle,
+  mediaPlaybackKind,
+  mediaProgressRatio,
+  mediaTimeSummary,
   nextMediaVisibility,
   normalizeVolumePercent,
 } from "./mediaActivity";
@@ -40,6 +43,34 @@ interface MediaPanelProps {
   suppressed: boolean;
   /** Injectable only for deterministic dev/test harnesses. */
   services?: MediaPanelServices;
+}
+
+/**
+ * Purely decorative playback-state animation. UltraVox never captures PCM,
+ * so these bars are NOT a measured spectrum: they idle low when paused or
+ * unknown and sway only while playback is confirmed. Themes restyle the
+ * motif; the reduced-motion media query freezes it entirely.
+ */
+const EQUALIZER_BAR_COUNT = 11;
+
+export function MediaEqualizer({
+  playing,
+  mirror = false,
+}: {
+  playing: boolean;
+  mirror?: boolean;
+}) {
+  return (
+    <div
+      className={`media-eq${mirror ? " media-eq-mirror" : ""}`}
+      aria-hidden="true"
+      data-active={playing || undefined}
+    >
+      {Array.from({ length: EQUALIZER_BAR_COUNT }, (_, index) => (
+        <span key={index} className="media-eq-bar" />
+      ))}
+    </div>
+  );
 }
 
 export function MediaPanel({
@@ -152,90 +183,133 @@ export function MediaPanel({
 
   if (!enabled || suppressed || !visible || !sample) return null;
 
-  const subtitle = mediaSubtitle(sample.title, sample.artist);
+  const source = sample.appName?.trim() || "System audio";
+  const title = sample.title?.trim() || null;
+  const artist = sample.artist?.trim() || null;
+  const album = sample.album?.trim() || null;
+  const playback = mediaPlaybackKind(sample.isPlaying);
+  const playing = playback === "playing";
+  const playbackLabel =
+    playback === "unknown" ? "Play or pause" : playing ? "Pause" : "Play";
+
+  const elapsedClock = formatMediaClock(sample.elapsedSeconds);
+  const durationClock = formatMediaClock(sample.durationSeconds);
+  const progressRatio = mediaProgressRatio(sample.elapsedSeconds, sample.durationSeconds);
+  const timeSummary = mediaTimeSummary(sample.elapsedSeconds, sample.durationSeconds);
+  const showProgress = elapsedClock != null || durationClock != null;
+
   const volumeReady = sample.volumeAvailable;
   const muteReady = sample.muted != null;
-  const playing = sample.isPlaying === true;
-  const playbackLabel =
-    sample.isPlaying == null ? "Play or pause" : playing ? "Pause" : "Play";
-  const hasTransport =
-    sample.transportAvailable || sample.previousAvailable || sample.nextAvailable;
+
   return (
-    <section className="media-panel" aria-label="Now playing">
-      <div className="media-meta">
-        <span className="media-source">{sample.appName?.trim() || "System audio"}</span>
-        {subtitle && <span className="media-title">{subtitle}</span>}
+    <section className="media-panel" aria-label="Now playing" data-playback={playback}>
+      <div className="media-display">
+        <MediaEqualizer playing={playing} mirror />
+        <div className="media-meta">
+          <span className="media-source">{source}</span>
+          <span className={`media-title${title ? "" : " is-unknown"}`}>
+            {title ?? "Unknown track"}
+          </span>
+          {artist && <span className="media-artist">{artist}</span>}
+          {album && <span className="media-album">{album}</span>}
+        </div>
+        <MediaEqualizer playing={playing} />
       </div>
 
-      {hasTransport && (
-        <div className="media-transport" role="group" aria-label="Playback transport">
-          {sample.previousAvailable && (
-            <button
-              type="button"
-              className="icon-button media-button"
-              title="Previous track"
-              aria-label="Previous track"
-              onClick={() => void sendTransport("previous")}
+      {showProgress && (
+        <div className="media-progress">
+          <span className="media-time">{elapsedClock ?? "—:—"}</span>
+          {progressRatio != null ? (
+            <div
+              className="media-progress-track"
+              role="progressbar"
+              aria-label="Track progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progressRatio * 100)}
+              aria-valuetext={timeSummary ?? undefined}
             >
-              <SkipBackIcon />
-            </button>
+              <div
+                className="media-progress-fill"
+                style={{ width: `${progressRatio * 100}%` }}
+              />
+            </div>
+          ) : (
+            <div className="media-progress-track is-indeterminate" aria-hidden="true" />
           )}
-          {sample.transportAvailable && (
-            <button
-              type="button"
-              className="icon-button media-button media-play"
-              title={playbackLabel}
-              aria-label={playbackLabel}
-              onClick={() => void sendTransport("play_pause")}
-            >
-              {playing ? <PauseIcon /> : <PlayIcon />}
-            </button>
-          )}
-          {sample.nextAvailable && (
-            <button
-              type="button"
-              className="icon-button media-button"
-              title="Next track"
-              aria-label="Next track"
-              onClick={() => void sendTransport("next")}
-            >
-              <SkipForwardIcon />
-            </button>
-          )}
+          <span className="media-time media-time-end">{durationClock ?? "—:—"}</span>
         </div>
       )}
 
-      <div className="media-volume">
-        <span className="media-volume-label" id="media-volume-label">
-          Volume
-        </span>
-        <input
-          className="media-volume-slider"
-          type="range"
-          id="media-volume-slider"
-          min={0}
-          max={100}
-          step={1}
-          value={volume}
-          aria-labelledby="media-volume-label"
-          aria-valuetext={volumeReady ? `${volume}%` : "Unavailable"}
-          disabled={!volumeReady}
-          onChange={(event) => changeVolume(event.target.valueAsNumber)}
-        />
-        <output className="media-volume-value" htmlFor="media-volume-slider">
-          {volumeReady ? `${volume}%` : "—"}
-        </output>
-        <button
-          type="button"
-          className="icon-button media-button"
-          title={muted ? "Unmute system audio" : "Mute system audio"}
-          aria-label={muted ? "Unmute system audio" : "Mute system audio"}
-          aria-pressed={muted}
-          disabled={!muteReady}
-          onClick={() => void toggleMute()}
-        >
-          {muted ? <VolumeMutedIcon /> : <VolumeIcon />}
-        </button>
+      <div className="media-controls">
+        <div className="media-transport" role="group" aria-label="Playback controls">
+          <button
+            type="button"
+            className="icon-button media-button"
+            title="Previous track"
+            aria-label="Previous track"
+            disabled={!sample.previousAvailable}
+            onClick={() => void sendTransport("previous")}
+          >
+            <SkipBackIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button media-button media-play"
+            title={playbackLabel}
+            aria-label={playbackLabel}
+            disabled={!sample.transportAvailable}
+            onClick={() => void sendTransport("play_pause")}
+          >
+            {playing ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <button
+            type="button"
+            className="icon-button media-button"
+            title="Next track"
+            aria-label="Next track"
+            disabled={!sample.nextAvailable}
+            onClick={() => void sendTransport("next")}
+          >
+            <SkipForwardIcon />
+          </button>
+        </div>
+
+        {/* Decorative rotary-dial chrome; themes that want a knob reveal it. */}
+        <span className="media-dial" aria-hidden="true" />
+
+        <div className="media-volume">
+          <span className="media-volume-label" id="media-volume-label">
+            Volume
+          </span>
+          <input
+            className="media-volume-slider"
+            type="range"
+            id="media-volume-slider"
+            min={0}
+            max={100}
+            step={1}
+            value={volume}
+            aria-labelledby="media-volume-label"
+            aria-valuetext={volumeReady ? `${volume}%` : "Unavailable"}
+            disabled={!volumeReady}
+            onChange={(event) => changeVolume(event.target.valueAsNumber)}
+          />
+          <output className="media-volume-value" htmlFor="media-volume-slider">
+            {volumeReady ? `${volume}%` : "—"}
+          </output>
+          <button
+            type="button"
+            className="icon-button media-button"
+            title={muted ? "Unmute system audio" : "Mute system audio"}
+            aria-label={muted ? "Unmute system audio" : "Mute system audio"}
+            aria-pressed={muted}
+            disabled={!muteReady}
+            onClick={() => void toggleMute()}
+          >
+            {muted ? <VolumeMutedIcon /> : <VolumeIcon />}
+          </button>
+        </div>
       </div>
     </section>
   );

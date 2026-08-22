@@ -44,13 +44,53 @@ export function normalizeVolumePercent(value: number | null | undefined): number
   return Math.round(Math.min(1, Math.max(0, value)) * 100);
 }
 
-/** "Title — Artist" for glanceable metadata; null when there is nothing to show. */
-export function mediaSubtitle(
-  title: string | null | undefined,
-  artist: string | null | undefined,
+export type MediaPlaybackKind = "playing" | "paused" | "unknown";
+
+/** Tri-state playback: MediaRemote may legitimately not know. */
+export function mediaPlaybackKind(
+  isPlaying: boolean | null | undefined,
+): MediaPlaybackKind {
+  if (isPlaying === true) return "playing";
+  if (isPlaying === false) return "paused";
+  return "unknown";
+}
+
+/** Seconds → "m:ss" for elapsed/duration readouts; null when not a real time. */
+export function formatMediaClock(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
+  const whole = Math.floor(seconds);
+  const minutes = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+/** 0..1 progress; null unless both elapsed and a positive duration are known. */
+export function mediaProgressRatio(
+  elapsedSeconds: number | null | undefined,
+  durationSeconds: number | null | undefined,
+): number | null {
+  if (
+    elapsedSeconds == null ||
+    durationSeconds == null ||
+    !Number.isFinite(elapsedSeconds) ||
+    !Number.isFinite(durationSeconds) ||
+    durationSeconds <= 0 ||
+    elapsedSeconds < 0
+  ) {
+    return null;
+  }
+  return Math.min(1, elapsedSeconds / durationSeconds);
+}
+
+/** Spoken progress summary for the progressbar's aria-valuetext. */
+export function mediaTimeSummary(
+  elapsedSeconds: number | null | undefined,
+  durationSeconds: number | null | undefined,
 ): string | null {
-  const cleanTitle = title?.trim();
-  const cleanArtist = artist?.trim();
-  if (cleanTitle && cleanArtist) return `${cleanTitle} — ${cleanArtist}`;
-  return cleanTitle || cleanArtist || null;
+  const elapsed = formatMediaClock(elapsedSeconds);
+  const duration = formatMediaClock(durationSeconds);
+  if (elapsed && duration) return `${elapsed} of ${duration}`;
+  if (duration) return `Length ${duration}`;
+  if (elapsed) return `${elapsed} elapsed`;
+  return null;
 }

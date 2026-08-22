@@ -79,8 +79,10 @@ int32_t ultravox_macos_bridge_hide_indicator(void);
  */
 
 /* Returns 1 when another process is running output audio and fills its PID,
- * app_name / bundle_id (either string may remain NULL when unknown); 0 when no
- * other process is active. Caller frees strings with
+ * app_name / bundle_id (either string may remain NULL when unknown); the
+ * MediaRemote client PID is preferred, then a conservative browser
+ * helper/main bundle-family match, then the first active process. Returns 0
+ * when no other process is active. Caller frees strings with
  * ultravox_macos_bridge_free_string.
  */
 int32_t ultravox_macos_bridge_active_audio_process(
@@ -103,16 +105,30 @@ int32_t ultravox_macos_bridge_set_output_muted(int32_t muted);
  * dlopen/dlsym only; nothing is statically linked. Availability may change on
  * any OS release, so callers must treat absence as a normal state.
  */
-int32_t ultravox_macos_bridge_media_remote_available(void);
+/* Writes 1 for play/pause when the send API resolves. Previous/next require
+ * supported-command and command-info APIs to report enabled. Missing
+ * discovery symbols leave previous/next at 0.
+ */
+int32_t ultravox_macos_bridge_media_transport_capabilities(
+    int32_t *play_pause,
+    int32_t *previous,
+    int32_t *next
+);
 
-/* Returns 1 and fills the owning PID, title / artist (NULL when absent), plus
+/* Returns 1 and fills the owning PID, app name / bundle ID, title / artist /
+ * album (NULL when absent), elapsed/duration seconds (-1 when unknown), plus
  * *is_playing (1 playing, 0 not playing, -1 unknown); 0 when MediaRemote is
  * unavailable or the reply did not arrive in time. Caller frees strings.
  */
 int32_t ultravox_macos_bridge_now_playing(
     int32_t *process_id,
+    char **app_name,
+    char **bundle_id,
     char **title,
     char **artist,
+    char **album,
+    double *elapsed_seconds,
+    double *duration_seconds,
     int32_t *is_playing
 );
 

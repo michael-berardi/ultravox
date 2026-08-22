@@ -148,6 +148,60 @@ final class UltraVoxMacOSBridgeTests: XCTestCase {
         XCTAssertNil(NowPlayingSnapshot.playingState(from: [:]))
     }
 
+    func testNowPlayingTimeParsingRejectsMalformedValues() {
+        XCTAssertEqual(
+            NowPlayingSnapshot.time(
+                "kMRMediaRemoteNowPlayingInfoElapsedTime",
+                from: ["kMRMediaRemoteNowPlayingInfoElapsedTime": 12.5]),
+            12.5)
+        XCTAssertNil(
+            NowPlayingSnapshot.time(
+                "kMRMediaRemoteNowPlayingInfoDuration",
+                from: ["kMRMediaRemoteNowPlayingInfoDuration": -1.0]))
+        XCTAssertNil(
+            NowPlayingSnapshot.time(
+                "kMRMediaRemoteNowPlayingInfoDuration",
+                from: ["kMRMediaRemoteNowPlayingInfoDuration": "unknown"]))
+    }
+
+    func testBundleFamilyMatchingIsConservative() {
+        XCTAssertTrue(BundleFamily.matches(
+            "com.google.Chrome", "com.google.Chrome.helper.renderer"))
+        XCTAssertTrue(BundleFamily.matches(
+            "com.apple.Safari", "com.apple.WebKit.WebContent"))
+        XCTAssertTrue(BundleFamily.matches("com.example.player", "com.example.player"))
+        XCTAssertFalse(BundleFamily.matches(
+            "com.google.Chrome", "com.google.Chromeish.helper"))
+        XCTAssertFalse(BundleFamily.matches("com.google.Chrome", "com.apple.Safari"))
+        XCTAssertFalse(BundleFamily.matches(nil, "com.google.Chrome"))
+    }
+
+    func testTransportCapabilityResolutionUsesSupportedAndEnabledCommands() {
+        let resolved = MediaTransportCapabilities.resolve(
+            sendAvailable: true,
+            supported: Set([4, 5]),
+            enabled: Set([4]))
+        XCTAssertTrue(resolved.playPause)
+        XCTAssertFalse(resolved.previous)
+        XCTAssertTrue(resolved.next)
+
+        let unavailable = MediaTransportCapabilities.resolve(
+            sendAvailable: true,
+            supported: nil,
+            enabled: nil)
+        XCTAssertTrue(unavailable.playPause)
+        XCTAssertFalse(unavailable.previous)
+        XCTAssertFalse(unavailable.next)
+
+        let unsendable = MediaTransportCapabilities.resolve(
+            sendAvailable: false,
+            supported: Set([4, 5]),
+            enabled: Set([4, 5]))
+        XCTAssertFalse(unsendable.playPause)
+        XCTAssertFalse(unsendable.previous)
+        XCTAssertFalse(unsendable.next)
+    }
+
     func testActiveAudioProcessBridgeReturnsKnownValue() {
         // Capture-free probe must return a well-formed signal in any
         // environment: 1 when another process runs output audio, else 0.

@@ -31,9 +31,27 @@ export const THEMES: ThemeDefinition[] = [
   },
   {
     id: "winamp",
-    name: "Winamp",
-    tagline: "Lime-on-charcoal nostalgia with orange EQ bite.",
+    name: "Winamp Classic",
+    tagline: "Graphite metal, black LCD wells, phosphor green, orange bite.",
     swatch: ["#121218", "#7eff54", "#ff9f2e"],
+  },
+  {
+    id: "winamp-mmd3",
+    name: "Winamp Console",
+    tagline: "Silver-and-navy instrument console with faders and a central dial.",
+    swatch: ["#1a2340", "#c8ccd4", "#ffb347"],
+  },
+  {
+    id: "winamp-bento",
+    name: "Winamp Bento",
+    tagline: "Stacked graphite modules, title rails, and chunky keys.",
+    swatch: ["#2a2c30", "#f2f3f5", "#ff8c1a"],
+  },
+  {
+    id: "winamp-hifi",
+    name: "Winamp Hi-Fi",
+    tagline: "Brushed-silver rack faceplate, black glass, and a big volume dial.",
+    swatch: ["#b9bdc6", "#101014", "#ff3b30"],
   },
   {
     id: "olive",

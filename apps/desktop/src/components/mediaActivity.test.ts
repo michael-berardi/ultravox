@@ -17,8 +17,11 @@ const assert = {
 import {
   MEDIA_HIDE_DELAY_MS,
   MEDIA_SHOW_DELAY_MS,
+  formatMediaClock,
   initialMediaVisibility,
-  mediaSubtitle,
+  mediaPlaybackKind,
+  mediaProgressRatio,
+  mediaTimeSummary,
   nextMediaVisibility,
   normalizeVolumePercent,
 } from "./mediaActivity.ts";
@@ -84,9 +87,43 @@ test("volume normalizes the 0..1 CoreAudio scalar to integer percent", () => {
   assert.equal(normalizeVolumePercent(Number.NaN), 0);
 });
 
-test("subtitle joins title and artist and tolerates blanks", () => {
-  assert.equal(mediaSubtitle("Song", "Artist"), "Song — Artist");
-  assert.equal(mediaSubtitle("Song", null), "Song");
-  assert.equal(mediaSubtitle(undefined, "Artist"), "Artist");
-  assert.equal(mediaSubtitle("  ", ""), null);
+test("playback kind keeps the unknown state distinct from paused", () => {
+  assert.equal(mediaPlaybackKind(true), "playing");
+  assert.equal(mediaPlaybackKind(false), "paused");
+  assert.equal(mediaPlaybackKind(null), "unknown");
+  assert.equal(mediaPlaybackKind(undefined), "unknown");
+});
+
+test("media clock formats m:ss and rejects non-times", () => {
+  assert.equal(formatMediaClock(0), "0:00");
+  assert.equal(formatMediaClock(83), "1:23");
+  assert.equal(formatMediaClock(83.9), "1:23");
+  assert.equal(formatMediaClock(913), "15:13");
+  assert.equal(formatMediaClock(3600), "60:00");
+  assert.equal(formatMediaClock(null), null);
+  assert.equal(formatMediaClock(Number.NaN), null);
+  assert.equal(formatMediaClock(-4), null);
+  assert.equal(formatMediaClock(Number.POSITIVE_INFINITY), null);
+});
+
+test("progress ratio needs elapsed and a positive duration", () => {
+  assert.equal(mediaProgressRatio(0, 200), 0);
+  assert.equal(mediaProgressRatio(200, 200), 1);
+  assert.equal(mediaProgressRatio(300, 200), 1, "elapsed past duration clamps to full");
+  assert.equal(mediaProgressRatio(null, 200), null);
+  assert.equal(mediaProgressRatio(50, null), null);
+  assert.equal(mediaProgressRatio(50, 0), null);
+  assert.equal(mediaProgressRatio(50, -10), null);
+  assert.equal(mediaProgressRatio(-1, 200), null);
+  const ratio = mediaProgressRatio(83, 222);
+  if (ratio == null || Math.abs(ratio - 83 / 222) > 1e-9) {
+    throw new Error(`Expected 83/222 ratio, received ${String(ratio)}`);
+  }
+});
+
+test("time summary speaks only what is known", () => {
+  assert.equal(mediaTimeSummary(83, 222), "1:23 of 3:42");
+  assert.equal(mediaTimeSummary(null, 222), "Length 3:42");
+  assert.equal(mediaTimeSummary(83, null), "1:23 elapsed");
+  assert.equal(mediaTimeSummary(null, null), null);
 });

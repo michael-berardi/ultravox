@@ -2057,6 +2057,138 @@ body {
   --radius-xl: 4px;
 }
 
+/* Winamp Console — MMD3-inspired instrument console: navy wells, silver metal. */
+:root[data-theme="winamp-mmd3"] {
+  --text: #e8ecf4;
+  --text-secondary: #b9c2d4;
+  --text-tertiary: #8f9ab2;
+  --accent: #ffb347;
+  --accent-hover: #ffc670;
+  --accent-pressed: #e09a2e;
+  --accent-muted: rgba(255, 179, 71, 0.16);
+  --accent-cyan: #9fc4ff;
+  --accent-violet: #ffb347;
+  --accent-gradient: linear-gradient(145deg, #9fc4ff, #c8ccd4 52%, #ffb347);
+  --accent-gradient-hover: linear-gradient(145deg, #bcd6ff, #dde1e8 52%, #ffc670);
+  --record: #ff5050;
+  --record-hover: #ff7878;
+  --record-pressed: #d63a3a;
+  --record-muted: rgba(255, 80, 80, 0.15);
+  --danger: #ff5050;
+  --danger-hover: #ff7878;
+  --success: #6fdc9a;
+  --warning: #ffb347;
+  --on-accent: #241300;
+  --on-record: #260808;
+  --ambient-a: rgba(159, 196, 255, 0.07);
+  --ambient-b: rgba(255, 179, 71, 0.06);
+  --sheen: rgba(200, 204, 212, 0.06);
+  --record-border: rgba(200, 204, 212, 0.32);
+  --record-glow: rgba(255, 179, 71, 0.24);
+  --record-glow-hover: rgba(255, 179, 71, 0.36);
+  --scrim: rgba(8, 11, 22, 0.62);
+  --scrim-strong: rgba(8, 11, 22, 0.78);
+  --material-window: rgba(16, 21, 40, 0.94);
+  --material-surface: rgba(24, 31, 56, 0.8);
+  --material-panel: rgba(30, 38, 66, 0.82);
+  --material-elevated: rgba(40, 50, 84, 0.88);
+  --material-border: rgba(200, 204, 212, 0.24);
+  --material-border-subtle: rgba(200, 204, 212, 0.12);
+  --material-highlight: rgba(228, 232, 240, 0.14);
+  --radius: 4px;
+  --radius-sm: 2px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+}
+
+/* Winamp Bento — stacked graphite modules, rails, and chunky rectangular keys. */
+:root[data-theme="winamp-bento"] {
+  --text: #f2f3f5;
+  --text-secondary: #c4c7cd;
+  --text-tertiary: #9a9ea8;
+  --accent: #ff8c1a;
+  --accent-hover: #ffa245;
+  --accent-pressed: #e07608;
+  --accent-muted: rgba(255, 140, 26, 0.16);
+  --accent-cyan: #b9bdc6;
+  --accent-violet: #ff8c1a;
+  --accent-gradient: linear-gradient(145deg, #ffb066, #ff8c1a 52%, #d96f00);
+  --accent-gradient-hover: linear-gradient(145deg, #ffc088, #ffa245 52%, #e8810f);
+  --record: #ff4747;
+  --record-hover: #ff7070;
+  --record-pressed: #d63333;
+  --record-muted: rgba(255, 71, 71, 0.15);
+  --danger: #ff4747;
+  --danger-hover: #ff7070;
+  --success: #7fd08a;
+  --warning: #ffb347;
+  --on-accent: #241100;
+  --on-record: #260a0a;
+  --ambient-a: rgba(255, 140, 26, 0.05);
+  --ambient-b: rgba(185, 189, 198, 0.05);
+  --sheen: rgba(255, 255, 255, 0.04);
+  --record-border: rgba(242, 243, 245, 0.26);
+  --record-glow: rgba(255, 140, 26, 0.22);
+  --record-glow-hover: rgba(255, 140, 26, 0.34);
+  --scrim: rgba(12, 12, 15, 0.62);
+  --scrim-strong: rgba(12, 12, 15, 0.78);
+  --material-window: rgba(24, 25, 29, 0.95);
+  --material-surface: rgba(36, 38, 43, 0.85);
+  --material-panel: rgba(45, 47, 53, 0.88);
+  --material-elevated: rgba(56, 58, 64, 0.92);
+  --material-border: rgba(242, 243, 245, 0.16);
+  --material-border-subtle: rgba(242, 243, 245, 0.08);
+  --material-highlight: rgba(255, 255, 255, 0.08);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+}
+
+/* Winamp Hi-Fi — brushed-silver rack faceplate, black glass, LED accents. */
+:root[data-theme="winamp-hifi"] {
+  --text: #eceff3;
+  --text-secondary: #c3c9d2;
+  --text-tertiary: #99a1ac;
+  --accent: #ffb000;
+  --accent-hover: #ffc640;
+  --accent-pressed: #e09a00;
+  --accent-muted: rgba(255, 176, 0, 0.16);
+  --accent-cyan: #7ef0a0;
+  --accent-violet: #ff5f57;
+  --accent-gradient: linear-gradient(145deg, #7ef0a0, #ffb000 58%, #ff5f57);
+  --accent-gradient-hover: linear-gradient(145deg, #a4f6bc, #ffc640 58%, #ff8278);
+  --record: #ff3b30;
+  --record-hover: #ff6559;
+  --record-pressed: #d62c22;
+  --record-muted: rgba(255, 59, 48, 0.15);
+  --danger: #ff3b30;
+  --danger-hover: #ff6559;
+  --success: #7ef0a0;
+  --warning: #ffb000;
+  --on-accent: #241700;
+  --on-record: #260b09;
+  --ambient-a: rgba(255, 176, 0, 0.05);
+  --ambient-b: rgba(126, 240, 160, 0.05);
+  --sheen: rgba(255, 255, 255, 0.05);
+  --record-border: rgba(236, 239, 243, 0.28);
+  --record-glow: rgba(255, 176, 0, 0.22);
+  --record-glow-hover: rgba(255, 176, 0, 0.34);
+  --scrim: rgba(9, 9, 11, 0.62);
+  --scrim-strong: rgba(9, 9, 11, 0.78);
+  --material-window: rgba(14, 14, 17, 0.95);
+  --material-surface: rgba(26, 27, 31, 0.85);
+  --material-panel: rgba(32, 33, 38, 0.88);
+  --material-elevated: rgba(42, 43, 49, 0.92);
+  --material-border: rgba(236, 239, 243, 0.18);
+  --material-border-subtle: rgba(236, 239, 243, 0.09);
+  --material-highlight: rgba(255, 255, 255, 0.1);
+  --radius: 4px;
+  --radius-sm: 3px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+}
+
 /* Olive — muted minimalist drab. Flat, quiet, zero noise. */
 :root[data-theme="olive"] {
   --text: #e9ebdd;
@@ -2543,6 +2675,181 @@ body {
   background: #141625;
 }
 
+/* Winamp Console: navy rack with silver metal controls and amber lamps. */
+:root[data-theme="winamp-mmd3"] {
+  --font: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+:root[data-theme="winamp-mmd3"] .header-title,
+:root[data-theme="winamp-mmd3"] .settings-tab,
+:root[data-theme="winamp-mmd3"] .eyebrow,
+:root[data-theme="winamp-mmd3"] .history-heading,
+:root[data-theme="winamp-mmd3"] .settings-card > h3,
+:root[data-theme="winamp-mmd3"] .settings-card-heading h3 {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 11px;
+}
+:root[data-theme="winamp-mmd3"] .status-label {
+  color: #ffb347;
+  text-shadow: 0 0 8px rgba(255, 179, 71, 0.55);
+  letter-spacing: 0.12em;
+}
+/* Recessed navy wells behind content surfaces. */
+:root[data-theme="winamp-mmd3"] .hero,
+:root[data-theme="winamp-mmd3"] .recording-card,
+:root[data-theme="winamp-mmd3"] .settings-card,
+:root[data-theme="winamp-mmd3"] .theme-card,
+:root[data-theme="winamp-mmd3"] .input,
+:root[data-theme="winamp-mmd3"] .select,
+:root[data-theme="winamp-mmd3"] .shortcut-capture,
+:root[data-theme="winamp-mmd3"] .compact-modal {
+  background: #10172e;
+  border: 1px solid #05070f;
+  box-shadow:
+    inset 0 2px 7px rgba(0, 0, 0, 0.75),
+    0 1px 0 rgba(200, 204, 212, 0.12);
+}
+/* Brushed silver metal controls with a fader-cap edge. */
+:root[data-theme="winamp-mmd3"] .btn,
+:root[data-theme="winamp-mmd3"] .secondary-action,
+:root[data-theme="winamp-mmd3"] .icon-button,
+:root[data-theme="winamp-mmd3"] .path-button,
+:root[data-theme="winamp-mmd3"] .text-button {
+  background: linear-gradient(180deg, #dde1e8 0%, #c0c5cf 48%, #a8aebb 52%, #b9bec9 100%);
+  color: #1a2340;
+  border: 1px solid #05070f;
+  border-top-color: #f4f6fa;
+  border-radius: var(--radius-sm);
+}
+:root[data-theme="winamp-mmd3"] .btn:hover,
+:root[data-theme="winamp-mmd3"] .secondary-action:hover,
+:root[data-theme="winamp-mmd3"] .icon-button:hover,
+:root[data-theme="winamp-mmd3"] .path-button:hover {
+  background: linear-gradient(180deg, #e8ecf2 0%, #cdd2dc 48%, #b6bcc8 52%, #c6cbd5 100%);
+  color: #1a2340;
+}
+:root[data-theme="winamp-mmd3"] .btn-primary,
+:root[data-theme="winamp-mmd3"] .btn-danger {
+  color: #1a2340;
+}
+:root[data-theme="winamp-mmd3"] .record-button:not(.recording) {
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.85), transparent 44%),
+    linear-gradient(180deg, #dde1e8 0%, #a8aebb 100%);
+  color: #1a2340;
+  border: 1px solid #05070f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+/* Winamp Bento: soft graphite tiles, generous rounding, orange selection. */
+:root[data-theme="winamp-bento"] {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+:root[data-theme="winamp-bento"] .hero,
+:root[data-theme="winamp-bento"] .settings-card,
+:root[data-theme="winamp-bento"] .recording-card,
+:root[data-theme="winamp-bento"] .theme-card {
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 22px rgba(0, 0, 0, 0.36);
+}
+:root[data-theme="winamp-bento"] .btn,
+:root[data-theme="winamp-bento"] .secondary-action,
+:root[data-theme="winamp-bento"] .icon-button {
+  border-radius: var(--radius-sm);
+  border-color: transparent;
+  background: rgba(242, 243, 245, 0.08);
+}
+:root[data-theme="winamp-bento"] .btn:hover,
+:root[data-theme="winamp-bento"] .secondary-action:hover,
+:root[data-theme="winamp-bento"] .icon-button:hover {
+  background: rgba(242, 243, 245, 0.14);
+}
+:root[data-theme="winamp-bento"] .btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+:root[data-theme="winamp-bento"] .record-button:not(.recording) {
+  background: var(--accent-gradient);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 8px 24px rgba(255, 140, 26, 0.28);
+}
+:root[data-theme="winamp-bento"] .status-label {
+  color: #ff8c1a;
+  letter-spacing: 0.08em;
+  font-weight: 650;
+}
+
+/* Winamp Hi-Fi: rack faceplate with engraved labels and LED status. */
+:root[data-theme="winamp-hifi"] {
+  --font: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+:root[data-theme="winamp-hifi"] .header-title,
+:root[data-theme="winamp-hifi"] .settings-tab,
+:root[data-theme="winamp-hifi"] .eyebrow,
+:root[data-theme="winamp-hifi"] .history-heading,
+:root[data-theme="winamp-hifi"] .settings-card > h3,
+:root[data-theme="winamp-hifi"] .settings-card-heading h3 {
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  font-size: 10px;
+}
+:root[data-theme="winamp-hifi"] .status-label {
+  color: #7ef0a0;
+  text-shadow: 0 0 7px rgba(126, 240, 160, 0.6);
+  letter-spacing: 0.18em;
+}
+:root[data-theme="winamp-hifi"] .hero,
+:root[data-theme="winamp-hifi"] .recording-card,
+:root[data-theme="winamp-hifi"] .settings-card,
+:root[data-theme="winamp-hifi"] .theme-card,
+:root[data-theme="winamp-hifi"] .input,
+:root[data-theme="winamp-hifi"] .select,
+:root[data-theme="winamp-hifi"] .shortcut-capture,
+:root[data-theme="winamp-hifi"] .compact-modal {
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #3a3d44 0%, #26282e 100%);
+  border: 1px solid #0a0a0d;
+  border-top-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5),
+    0 8px 22px rgba(0, 0, 0, 0.44);
+}
+:root[data-theme="winamp-hifi"] .btn,
+:root[data-theme="winamp-hifi"] .secondary-action,
+:root[data-theme="winamp-hifi"] .icon-button,
+:root[data-theme="winamp-hifi"] .path-button,
+:root[data-theme="winamp-hifi"] .text-button {
+  background: linear-gradient(180deg, #4a4d55 0%, #33353c 100%);
+  color: #eceff3;
+  border: 1px solid #0a0a0d;
+  border-top-color: rgba(255, 255, 255, 0.24);
+  border-radius: var(--radius-sm);
+}
+:root[data-theme="winamp-hifi"] .btn:hover,
+:root[data-theme="winamp-hifi"] .secondary-action:hover,
+:root[data-theme="winamp-hifi"] .icon-button:hover,
+:root[data-theme="winamp-hifi"] .path-button:hover {
+  background: linear-gradient(180deg, #55585f 0%, #3c3e46 100%);
+  color: #ffffff;
+}
+:root[data-theme="winamp-hifi"] .record-button:not(.recording) {
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.7), transparent 46%),
+    linear-gradient(180deg, #5a5e67 0%, #33353c 100%);
+  border: 1px solid #0a0a0d;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
 /* Olive: flat, quiet, hairline-only. No glow, no shadow, no blur. */
 :root[data-theme="olive"] {
   --material-shadow-sm: none;
@@ -2828,17 +3135,18 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * Media panel — conditional now-playing strip below the latest recording.
- * One structural component; each data-theme changes material and motif only.
- * Decorative motifs are pointer-events-none pseudo-elements.
+ * Media panel — now-playing module below the latest recording.
+ * One structural component (display, progress, transport, volume); each
+ * data-theme re-stages the same DOM with its own material and geometry.
+ * Decorative motifs are pointer-events-none pseudo-elements. The equalizer
+ * is a playback-state animation only — UltraVox never measures audio.
  * ------------------------------------------------------------------------- */
 
 .media-panel {
   position: relative;
   display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
@@ -2866,39 +3174,204 @@ body {
   pointer-events: none;
 }
 
+/* Display region: metadata lines plus the decorative equalizer. */
+.media-display {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
 .media-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  flex: 1 1 110px;
+  gap: 1px;
+  flex: 1;
   min-width: 0;
 }
 
 .media-source {
+  overflow: hidden;
   color: var(--text-secondary);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .media-title {
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.media-title.is-unknown {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.media-artist {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-album {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Decorative equalizer: bars rest low while paused/unknown and sway only
+ * while playback is confirmed. Symmetric resting levels let console themes
+ * read as mirrored meter banks. */
+.media-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+  height: 26px;
+}
+
+.media-eq-mirror {
+  display: none;
+}
+
+.media-eq-bar {
+  --level: 0.5;
+  width: 3px;
+  height: 100%;
+  border-radius: 1px;
+  background: linear-gradient(180deg, var(--accent-cyan), var(--accent) 55%, var(--accent-violet));
+  transform: scaleY(calc(var(--level) * 0.5));
+  transform-origin: bottom;
+}
+
+.media-eq-bar:nth-child(1) { --level: 0.5; }
+.media-eq-bar:nth-child(2) { --level: 0.72; }
+.media-eq-bar:nth-child(3) { --level: 0.92; }
+.media-eq-bar:nth-child(4) { --level: 0.66; }
+.media-eq-bar:nth-child(5) { --level: 0.45; }
+.media-eq-bar:nth-child(6) { --level: 0.34; }
+.media-eq-bar:nth-child(7) { --level: 0.45; }
+.media-eq-bar:nth-child(8) { --level: 0.66; }
+.media-eq-bar:nth-child(9) { --level: 0.92; }
+.media-eq-bar:nth-child(10) { --level: 0.72; }
+.media-eq-bar:nth-child(11) { --level: 0.5; }
+
+.media-eq[data-active] .media-eq-bar {
+  animation: media-eq-sway 760ms ease-in-out infinite alternate;
+}
+
+.media-eq[data-active] .media-eq-bar:nth-child(odd) {
+  animation-duration: 640ms;
+}
+
+.media-eq[data-active] .media-eq-bar:nth-child(3n) {
+  animation-duration: 880ms;
+}
+
+.media-eq[data-active] .media-eq-bar:nth-child(1) { animation-delay: -120ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(2) { animation-delay: -340ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(3) { animation-delay: -560ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(4) { animation-delay: -220ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(5) { animation-delay: -700ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(6) { animation-delay: -440ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(7) { animation-delay: -80ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(8) { animation-delay: -620ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(9) { animation-delay: -300ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(10) { animation-delay: -520ms; }
+.media-eq[data-active] .media-eq-bar:nth-child(11) { animation-delay: -180ms; }
+
+@keyframes media-eq-sway {
+  from {
+    transform: scaleY(calc(var(--level) * 0.3));
+  }
+  to {
+    transform: scaleY(var(--level));
+  }
+}
+
+/* Progress region: honest elapsed/duration readouts around a track. */
+.media-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.media-time {
+  flex: 0 0 auto;
+  min-width: 30px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-time-end {
+  text-align: right;
+}
+
+.media-progress-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  min-width: 40px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-subtle);
+}
+
+.media-progress-track.is-indeterminate {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--border-subtle) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+.media-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent-gradient);
+  transition: width 300ms linear;
+}
+
+/* Controls region: transport keys, optional dial chrome, system volume. */
+.media-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
 }
 
 .media-transport {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  flex: 0 0 auto;
 }
 
 .media-button svg {
   display: block;
+}
+
+.media-button:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .media-play {
@@ -2907,12 +3380,18 @@ body {
   color: var(--accent);
 }
 
+/* Decorative rotary dial: hidden unless a theme reveals it. */
+.media-dial {
+  display: none;
+  flex: 0 0 auto;
+}
+
 .media-volume {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 1 1 130px;
-  min-width: 120px;
+  flex: 1;
+  min-width: 0;
 }
 
 .media-volume-label {
@@ -2932,6 +3411,7 @@ body {
   appearance: none;
   -webkit-appearance: none;
   flex: 1;
+  min-width: 44px;
   height: 4px;
   border-radius: 999px;
   background: var(--border);
@@ -2971,7 +3451,7 @@ body {
   box-shadow: 0 0 0 2px var(--accent-muted), 0 0 0 4px var(--bg);
 }
 
-/* Midnight — one restrained spectral hairline under the metadata. */
+/* Midnight — restrained: one spectral hairline under the module. */
 :root[data-theme="midnight"] .media-panel::after {
   inset: auto 0 0 0;
   height: 1px;
@@ -2986,71 +3466,126 @@ body {
   opacity: 0.7;
 }
 
-/* Frutiger Aero — crisp sky glass, bubble cluster, aurora streak. */
+/* Frutiger Aero — candy-glass display well, gloss buttons, jelly EQ bars. */
 :root[data-theme="frutiger-aero"] .media-panel {
   border-color: rgba(70, 120, 160, 0.38);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(214, 236, 248, 0.35) 60%, rgba(255, 255, 255, 0.4)),
     var(--panel);
 }
-:root[data-theme="frutiger-aero"] .media-panel::before {
-  inset: auto -8px -14px 30%;
-  height: 34px;
+:root[data-theme="frutiger-aero"] .media-display {
+  padding: 5px 10px;
+  border: 1px solid rgba(70, 120, 160, 0.3);
+  border-radius: var(--radius-sm);
   background:
-    radial-gradient(circle 9px at 12% 100%, rgba(53, 208, 255, 0.5), transparent 70%),
-    radial-gradient(circle 6px at 34% 100%, rgba(110, 232, 122, 0.45), transparent 70%),
-    radial-gradient(circle 12px at 58% 100%, rgba(31, 143, 255, 0.4), transparent 70%),
-    radial-gradient(circle 5px at 80% 100%, rgba(53, 208, 255, 0.45), transparent 70%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.35));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 8px 14px rgba(255, 255, 255, 0.28);
+}
+:root[data-theme="frutiger-aero"] .media-eq-bar {
+  width: 4px;
+  border-radius: 2px;
+}
+:root[data-theme="frutiger-aero"] .media-progress-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 1px 2px rgba(70, 120, 160, 0.25);
+}
+:root[data-theme="frutiger-aero"] .media-play {
+  background: linear-gradient(180deg, #3ba2ff, #0f6fd6);
+  border-color: rgba(15, 111, 214, 0.6);
+  color: #f4fbff;
 }
 :root[data-theme="frutiger-aero"] .media-panel::after {
   inset: 0;
-  background: linear-gradient(115deg, transparent 42%, rgba(53, 208, 255, 0.16) 52%, transparent 62%);
+  background: linear-gradient(115deg, transparent 42%, rgba(53, 208, 255, 0.14) 52%, transparent 62%);
 }
 
-/* Frutiger Dark — OLED glass with a low aurora glow. */
+/* Frutiger Dark — OLED glass well with glowing aurora EQ. */
 :root[data-theme="frutiger-dark"] .media-panel {
   border-color: rgba(140, 220, 255, 0.24);
   background:
     linear-gradient(180deg, rgba(158, 231, 255, 0.08), transparent 40%),
     var(--panel);
 }
+:root[data-theme="frutiger-dark"] .media-display {
+  padding: 5px 10px;
+  border: 1px solid rgba(140, 220, 255, 0.2);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(180deg, rgba(158, 231, 255, 0.09), rgba(10, 24, 36, 0.35));
+  box-shadow:
+    inset 0 1px 0 rgba(200, 240, 255, 0.16),
+    inset 0 0 18px rgba(53, 208, 255, 0.08);
+}
+:root[data-theme="frutiger-dark"] .media-eq-bar {
+  box-shadow: 0 0 6px rgba(53, 208, 255, 0.5);
+}
+:root[data-theme="frutiger-dark"] .media-progress-fill {
+  box-shadow: 0 0 8px rgba(53, 208, 255, 0.5);
+}
 :root[data-theme="frutiger-dark"] .media-panel::before {
   inset: auto -10% -18px -10%;
   height: 36px;
   background:
-    radial-gradient(ellipse 46% 100% at 26% 100%, rgba(53, 208, 255, 0.28), transparent 70%),
-    radial-gradient(ellipse 46% 100% at 74% 100%, rgba(110, 232, 122, 0.2), transparent 70%);
+    radial-gradient(ellipse 46% 100% at 26% 100%, rgba(53, 208, 255, 0.22), transparent 70%),
+    radial-gradient(ellipse 46% 100% at 74% 100%, rgba(110, 232, 122, 0.16), transparent 70%);
 }
 
-/* Winamp — black segmented LCD well with phosphor segment ticks. */
+/* Winamp Classic — graphite face, black LCD well, segmented phosphor meters. */
 :root[data-theme="winamp"] .media-panel {
+  background: linear-gradient(180deg, #2a2c44 0%, #1c1e30 100%);
   border: 1px solid #05050a;
-  border-top-color: #05050a;
+  border-top-color: rgba(232, 236, 244, 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(232, 236, 244, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="winamp"] .media-display {
+  padding: 5px 10px;
+  border: 1px solid #05050a;
+  border-radius: 1px;
   background:
-    repeating-linear-gradient(90deg, rgba(0, 230, 0, 0.06) 0 1px, transparent 1px 7px),
+    repeating-linear-gradient(0deg, rgba(0, 230, 0, 0.05) 0 1px, transparent 1px 3px),
     #04040a;
   box-shadow:
     inset 0 2px 6px rgba(0, 0, 0, 0.9),
     0 1px 0 rgba(184, 188, 200, 0.16);
 }
-:root[data-theme="winamp"] .media-panel::after {
-  inset: auto 12px 4px 12px;
-  height: 3px;
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(0, 230, 0, 0.55) 0 2px,
-    rgba(204, 204, 0, 0.4) 2px 4px,
-    transparent 4px 9px
-  );
-}
 :root[data-theme="winamp"] .media-title {
   color: #00e600;
   text-shadow: 0 0 6px rgba(0, 230, 0, 0.55);
 }
+:root[data-theme="winamp"] .media-title.is-unknown {
+  color: #4f8a6f;
+}
 :root[data-theme="winamp"] .media-source,
-:root[data-theme="winamp"] .media-volume-label,
-:root[data-theme="winamp"] .media-volume-value {
+:root[data-theme="winamp"] .media-artist {
   color: #7fbf7f;
+}
+:root[data-theme="winamp"] .media-album,
+:root[data-theme="winamp"] .media-time {
+  color: #6fb56f;
+}
+/* Green → yellow → red segmented meter bars. */
+:root[data-theme="winamp"] .media-eq-bar {
+  width: 4px;
+  border-radius: 0;
+  background: linear-gradient(180deg, #ff2020 0%, #ff9f2e 26%, #cccc00 46%, #00e600 76%);
+  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
+  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
+}
+:root[data-theme="winamp"] .media-progress-track {
+  height: 6px;
+  border-radius: 1px;
+  background: #10121e;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+:root[data-theme="winamp"] .media-progress-fill {
+  background: #00e600;
+  mask-image: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
 }
 :root[data-theme="winamp"] .media-volume-slider {
   background: #10121e;
@@ -3065,53 +3600,511 @@ body {
   color: #66ff33;
   background: transparent;
 }
-
-/* Olive — flat ruled control strip; hairlines only, zero decoration. */
-:root[data-theme="olive"] .media-panel {
-  background: var(--surface);
-}
-:root[data-theme="olive"] .media-panel::before {
-  inset: 0;
-  background: repeating-linear-gradient(
-    180deg,
-    transparent 0 calc(25% - 1px),
-    var(--border-subtle) calc(25% - 1px) 25%
-  );
-  opacity: 0.6;
-}
-
-/* Nord Frost — frosted glass with a calm waveform band. */
-:root[data-theme="nord-frost"] .media-panel::after {
-  inset: auto 0 -2px 0;
-  height: 14px;
+:root[data-theme="winamp"] .media-panel::after {
+  inset: auto 12px 6px 12px;
+  height: 2px;
   background: repeating-linear-gradient(
     90deg,
-    rgba(94, 129, 172, 0.32) 0 2px,
-    transparent 2px 6px
+    rgba(0, 230, 0, 0.55) 0 2px,
+    rgba(204, 204, 0, 0.4) 2px 4px,
+    transparent 4px 9px
   );
-  mask-image: linear-gradient(180deg, transparent, #000 85%);
-  -webkit-mask-image: linear-gradient(180deg, transparent, #000 85%);
+}
+:root[data-theme="winamp"] .empty-state {
+  border-color: #4a6558;
 }
 
-/* Solar Dusk — ember horizon glowing along the bottom edge. */
+
+/* Winamp Console — silver faceplate, navy LCD well, central dial, fader caps. */
+:root[data-theme="winamp-mmd3"] .media-panel {
+  padding: var(--space-2) var(--space-3);
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 4px),
+    linear-gradient(180deg, #d6dae2 0%, #b4bac6 100%);
+  border: 1px solid #05070f;
+  border-top-color: #f4f6fa;
+  color: #1a2340;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 8px 20px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme="winamp-mmd3"] .media-display {
+  padding: 5px 10px;
+  border: 1px solid #05070f;
+  border-radius: 2px;
+  background: #10172e;
+  box-shadow:
+    inset 0 2px 7px rgba(0, 0, 0, 0.8),
+    0 1px 0 rgba(255, 255, 255, 0.35);
+}
+:root[data-theme="winamp-mmd3"] .media-eq-mirror {
+  display: flex;
+  transform: scaleX(-1);
+}
+
+:root[data-theme="winamp-mmd3"] .media-title {
+  color: #f2f5fb;
+}
+:root[data-theme="winamp-mmd3"] .media-title.is-unknown {
+  color: #8f9ab2;
+}
+:root[data-theme="winamp-mmd3"] .media-source {
+  color: #ffb347;
+}
+:root[data-theme="winamp-mmd3"] .media-artist {
+  color: #b9c2d4;
+}
+:root[data-theme="winamp-mmd3"] .media-album {
+  color: #aeb8cc;
+}
+/* Mirrored silver-blue meter banks flanking the readout. */
+:root[data-theme="winamp-mmd3"] .media-eq-bar {
+  width: 3px;
+  border-radius: 1px 1px 0 0;
+  background: linear-gradient(180deg, #9fc4ff, #c8ccd4 60%, #7f89a0);
+}
+:root[data-theme="winamp-mmd3"] .media-progress-track {
+  height: 5px;
+  border-radius: 2px;
+  background: #10172e;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+:root[data-theme="winamp-mmd3"] .media-progress-fill {
+  background: linear-gradient(90deg, #9fc4ff, #ffb347);
+}
+:root[data-theme="winamp-mmd3"] .media-time {
+  color: #566585;
+}
+/* Navy console keys. */
+:root[data-theme="winamp-mmd3"] .media-button {
+  background: linear-gradient(180deg, #25325c 0%, #1a2340 100%);
+  color: #e8ecf4;
+  border: 1px solid #05070f;
+  border-top-color: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
+}
+:root[data-theme="winamp-mmd3"] .media-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2e3d6e 0%, #222c4e 100%);
+  color: #ffffff;
+}
+:root[data-theme="winamp-mmd3"] .media-play {
+  color: #ffb347;
+  background: linear-gradient(180deg, #25325c 0%, #141b33 100%);
+  border-color: #05070f;
+}
+/* Central rotary dial between transport and fader. */
+:root[data-theme="winamp-mmd3"] .media-dial {
+  position: relative;
+  display: block;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #05070f;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.8), transparent 44%),
+    conic-gradient(from 210deg, #8f96a4, #dde1e8, #8f96a4, #dde1e8, #8f96a4);
+  box-shadow:
+    0 2px 5px rgba(0, 0, 0, 0.45),
+    inset 0 1px 1px rgba(255, 255, 255, 0.6);
+}
+:root[data-theme="winamp-mmd3"] .media-dial::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 2px;
+  height: 9px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #1a2340;
+}
+/* Slot fader with a machined cap thumb. */
+:root[data-theme="winamp-mmd3"] .media-volume-label,
+:root[data-theme="winamp-mmd3"] .media-volume-value {
+  color: #3a4666;
+}
+:root[data-theme="winamp-mmd3"] .media-volume-slider {
+  height: 8px;
+  border-radius: 2px;
+  background: #10172e;
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.8),
+    0 1px 0 rgba(255, 255, 255, 0.3);
+}
+:root[data-theme="winamp-mmd3"] .media-volume-slider::-webkit-slider-thumb {
+  width: 12px;
+  height: 18px;
+  border: 1px solid #05070f;
+  border-radius: 2px;
+  background:
+    linear-gradient(180deg, transparent 44%, #1a2340 44% 56%, transparent 56%),
+    linear-gradient(180deg, #eef1f6 0%, #b9bec9 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="winamp-mmd3"] .media-volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 16px;
+  border: 1px solid #05070f;
+  border-radius: 2px;
+  background:
+    linear-gradient(180deg, transparent 44%, #1a2340 44% 56%, transparent 56%),
+    linear-gradient(180deg, #eef1f6 0%, #b9bec9 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* Winamp Bento — stacked graphite modules with a title rail and chunky keys. */
+:root[data-theme="winamp-bento"] .media-panel {
+  gap: 6px;
+  padding: 0;
+  overflow: visible;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-theme="winamp-bento"] .media-display,
+:root[data-theme="winamp-bento"] .media-progress,
+:root[data-theme="winamp-bento"] .media-controls {
+  border: 1px solid #1c1e22;
+  border-radius: 8px;
+  background: #2f3136;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 6px 16px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="winamp-bento"] .media-display {
+  align-items: stretch;
+  padding: 0;
+}
+:root[data-theme="winamp-bento"] .media-meta {
+  gap: 0;
+}
+/* Full-bleed title rail crowns the display module. */
+:root[data-theme="winamp-bento"] .media-source {
+  padding: 4px 10px;
+  border-bottom: 1px solid #1c1e22;
+  border-radius: 8px 0 0 0;
+  background: #17181c;
+  color: #ff8c1a;
+}
+:root[data-theme="winamp-bento"] .media-title {
+  padding: 6px 10px 0;
+  font-size: 14px;
+}
+:root[data-theme="winamp-bento"] .media-artist {
+  padding: 0 10px;
+}
+:root[data-theme="winamp-bento"] .media-album {
+  padding: 0 10px 8px;
+}
+:root[data-theme="winamp-bento"] .media-display .media-meta > :last-child {
+  padding-bottom: 8px;
+}
+:root[data-theme="winamp-bento"] .media-eq {
+  align-self: center;
+  margin-right: 10px;
+}
+:root[data-theme="winamp-bento"] .media-eq-bar {
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #ff8c1a, #6a6e76 70%);
+}
+:root[data-theme="winamp-bento"] .media-progress,
+:root[data-theme="winamp-bento"] .media-controls {
+  padding: 8px 10px;
+}
+:root[data-theme="winamp-bento"] .media-progress-track {
+  height: 8px;
+  border-radius: 4px;
+  background: #17181c;
+}
+:root[data-theme="winamp-bento"] .media-time {
+  color: #9a9ea8;
+}
+/* Chunky rectangular keys; the play key carries the orange accent. */
+:root[data-theme="winamp-bento"] .media-button {
+  width: 40px;
+  height: 30px;
+  border: 1px solid #1c1e22;
+  border-radius: 5px;
+  background: #3a3d43;
+  color: #f2f3f5;
+}
+:root[data-theme="winamp-bento"] .media-button:hover:not(:disabled) {
+  background: #46494f;
+  color: #ffffff;
+}
+:root[data-theme="winamp-bento"] .media-play {
+  background: #ff8c1a;
+  border-color: #d96f00;
+  color: #241100;
+}
+:root[data-theme="winamp-bento"] .media-play:hover:not(:disabled) {
+  background: #ffa245;
+  color: #241100;
+}
+:root[data-theme="winamp-bento"] .media-volume-label,
+:root[data-theme="winamp-bento"] .media-volume-value {
+  color: #9a9ea8;
+}
+:root[data-theme="winamp-bento"] .media-volume-slider {
+  height: 6px;
+  border-radius: 3px;
+  background: #17181c;
+}
+:root[data-theme="winamp-bento"] .media-volume-slider::-webkit-slider-thumb {
+  width: 12px;
+  height: 16px;
+  border: 1px solid #1c1e22;
+  border-radius: 3px;
+  background: #f2f3f5;
+}
+:root[data-theme="winamp-bento"] .media-volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 14px;
+  border: 1px solid #1c1e22;
+  border-radius: 3px;
+  background: #f2f3f5;
+}
+
+/* Winamp Hi-Fi — brushed-silver faceplate, corner screws, black glass, LEDs. */
+:root[data-theme="winamp-hifi"] .media-panel {
+  padding: 10px 12px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #c9cdd4 0%, #9ea3ac 100%);
+  border: 1px solid #0a0a0d;
+  border-top-color: rgba(255, 255, 255, 0.5);
+  color: #15161a;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35),
+    0 10px 24px rgba(0, 0, 0, 0.5);
+}
+/* Recessed hex screws at all four faceplate corners. */
+:root[data-theme="winamp-hifi"] .media-panel::before {
+  inset: 0;
+  background:
+    radial-gradient(circle 2.5px at 8px 8px, #787c86 35%, #2c2e34 60%, transparent 62%),
+    radial-gradient(circle 2.5px at calc(100% - 8px) 8px, #787c86 35%, #2c2e34 60%, transparent 62%),
+    radial-gradient(circle 2.5px at 8px calc(100% - 8px), #787c86 35%, #2c2e34 60%, transparent 62%),
+    radial-gradient(circle 2.5px at calc(100% - 8px) calc(100% - 8px), #787c86 35%, #2c2e34 60%, transparent 62%);
+}
+/* Power LED: red at rest, green while playback is confirmed. */
+:root[data-theme="winamp-hifi"] .media-panel::after {
+  top: 7px;
+  right: 16px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff5f57;
+  box-shadow:
+    0 0 6px rgba(255, 95, 87, 0.9),
+    inset 0 1px 1px rgba(255, 255, 255, 0.4);
+}
+:root[data-theme="winamp-hifi"] .media-panel[data-playback="playing"]::after {
+  background: #7ef0a0;
+  box-shadow:
+    0 0 7px rgba(126, 240, 160, 0.9),
+    inset 0 1px 1px rgba(255, 255, 255, 0.4);
+}
+:root[data-theme="winamp-hifi"] .media-display {
+  margin: 0 4px;
+  padding: 5px 10px;
+  border: 1px solid #000000;
+  border-radius: 3px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 32%),
+    #050507;
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.3);
+}
+:root[data-theme="winamp-hifi"] .media-title {
+  color: #f2f4f7;
+}
+:root[data-theme="winamp-hifi"] .media-title.is-unknown {
+  color: #6c757f;
+}
+:root[data-theme="winamp-hifi"] .media-source {
+  color: #7ef0a0;
+}
+:root[data-theme="winamp-hifi"] .media-artist {
+  color: #9aa4ae;
+}
+:root[data-theme="winamp-hifi"] .media-album {
+  color: #87919b;
+}
+/* VU-meter bars behind the glass. */
+:root[data-theme="winamp-hifi"] .media-eq-bar {
+  width: 3px;
+  border-radius: 0;
+  background: linear-gradient(180deg, #ff5f57 0%, #ffb000 38%, #7ef0a0 72%);
+  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
+  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
+}
+:root[data-theme="winamp-hifi"] .media-progress-track {
+  height: 5px;
+  border-radius: 2px;
+  background: #050507;
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.28);
+}
+:root[data-theme="winamp-hifi"] .media-progress-fill {
+  background: linear-gradient(90deg, #7ef0a0, #ffb000);
+}
+:root[data-theme="winamp-hifi"] .media-time,
+:root[data-theme="winamp-hifi"] .media-volume-label,
+:root[data-theme="winamp-hifi"] .media-volume-value {
+  color: #555b65;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+/* Small dark-metal rack keys. */
+:root[data-theme="winamp-hifi"] .media-button {
+  background: linear-gradient(180deg, #4a4d55 0%, #33353c 100%);
+  color: #eceff3;
+  border: 1px solid #0a0a0d;
+  border-top-color: rgba(255, 255, 255, 0.24);
+  border-radius: 3px;
+}
+:root[data-theme="winamp-hifi"] .media-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #55585f 0%, #3c3e46 100%);
+  color: #ffffff;
+}
+:root[data-theme="winamp-hifi"] .media-play {
+  color: #ffb000;
+  border-color: #0a0a0d;
+  background: linear-gradient(180deg, #33353c 0%, #232529 100%);
+}
+/* Large knurled volume-style dial beside the slider. */
+:root[data-theme="winamp-hifi"] .media-dial {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #0a0a0d;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.7), transparent 42%),
+    repeating-conic-gradient(#33353c 0deg 6deg, #4a4d55 6deg 12deg);
+  box-shadow:
+    0 3px 7px rgba(0, 0, 0, 0.5),
+    inset 0 1px 1px rgba(255, 255, 255, 0.35),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="winamp-hifi"] .media-dial::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 2px;
+  height: 11px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #ffb000;
+  box-shadow: 0 0 4px rgba(255, 176, 0, 0.8);
+}
+:root[data-theme="winamp-hifi"] .media-volume-slider {
+  height: 3px;
+  background: #050507;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.28);
+}
+:root[data-theme="winamp-hifi"] .media-volume-slider::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  border: 1px solid #0a0a0d;
+  background:
+    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.7), transparent 46%),
+    #4a4d55;
+}
+:root[data-theme="winamp-hifi"] .media-volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 1px solid #0a0a0d;
+  background:
+    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.7), transparent 46%),
+    #4a4d55;
+}
+
+/* Olive — flat ruled strip; hairlines only, square meters, zero glow. */
+:root[data-theme="olive"] .media-panel {
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+}
+:root[data-theme="olive"] .media-display {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+:root[data-theme="olive"] .media-eq-bar {
+  width: 2px;
+  border-radius: 0;
+  background: var(--accent);
+}
+:root[data-theme="olive"] .media-progress-track {
+  height: 2px;
+  border-radius: 0;
+}
+:root[data-theme="olive"] .media-progress-fill {
+  background: var(--accent);
+}
+:root[data-theme="olive"] .media-play {
+  border-radius: var(--radius-sm);
+}
+
+/* Nord Frost — frosted display band, soft pill progress, icy meters. */
+:root[data-theme="nord-frost"] .media-display {
+  padding: 5px 10px;
+  border: 1px solid rgba(94, 129, 172, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+:root[data-theme="nord-frost"] .media-eq-bar {
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #88c0d0, #5e81ac);
+}
+:root[data-theme="nord-frost"] .media-progress-track {
+  height: 6px;
+  background: rgba(94, 129, 172, 0.18);
+  box-shadow: inset 0 1px 2px rgba(76, 106, 146, 0.2);
+}
+
+/* Solar Dusk — ember horizon under the display, sunset progress ramp. */
 :root[data-theme="solar-dusk"] .media-panel::after {
   inset: auto -12% -20px -12%;
   height: 30px;
   background: radial-gradient(
     ellipse 60% 100% at 50% 100%,
-    rgba(255, 158, 122, 0.3),
-    rgba(240, 113, 154, 0.14) 55%,
+    rgba(255, 158, 122, 0.28),
+    rgba(240, 113, 154, 0.12) 55%,
     transparent 75%
   );
 }
+:root[data-theme="solar-dusk"] .media-eq-bar {
+  background: linear-gradient(180deg, #f0719a, #ff9e7a 55%, #ffd29b);
+  box-shadow: 0 0 5px rgba(255, 158, 122, 0.35);
+}
+:root[data-theme="solar-dusk"] .media-progress-fill {
+  background: linear-gradient(90deg, #ffd29b, #ff9e7a 55%, #f0719a);
+  box-shadow: 0 0 8px rgba(255, 158, 122, 0.45);
+}
+:root[data-theme="solar-dusk"] .secondary-action {
+  border-color: rgba(255, 184, 107, 0.34);
+  background: rgba(255, 184, 107, 0.06);
+  color: #e2c8bb;
+}
 
-/* Vapor — neon grid floor with a hot pink/cyan edge pulse. */
+
+/* Vapor — neon meter towers, gradient progress, grid horizon. */
 :root[data-theme="vapor"] .media-panel {
   border-color: rgba(1, 205, 254, 0.35);
 }
 :root[data-theme="vapor"] .media-panel::before {
   inset: auto 0 0 0;
-  height: 28%;
+  height: 26%;
   background:
     repeating-linear-gradient(90deg, rgba(1, 205, 254, 0.07) 0 1px, transparent 1px 16px),
     repeating-linear-gradient(0deg, rgba(255, 113, 206, 0.05) 0 1px, transparent 1px 10px);
@@ -3124,8 +4117,59 @@ body {
   background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
   opacity: 0.65;
 }
+:root[data-theme="vapor"] .media-eq-bar {
+  background: linear-gradient(180deg, var(--accent-violet), var(--accent-cyan));
+  box-shadow: 0 0 6px rgba(1, 205, 254, 0.45);
+}
+:root[data-theme="vapor"] .media-progress-fill {
+  box-shadow: 0 0 8px rgba(255, 113, 206, 0.5);
+}
+:root[data-theme="vapor"] .media-play {
+  box-shadow:
+    0 0 10px rgba(1, 205, 254, 0.3),
+    inset 0 0 6px rgba(255, 113, 206, 0.12);
+}
 
-/* Reduced motion: no entrance, no motif motion anywhere in the panel. */
+/* Minimum-height utility window: keep the full player above the fold. */
+@media (max-height: 520px) {
+  .main {
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .hero {
+    min-height: 160px;
+    gap: 6px;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .record-button {
+    flex-basis: 64px;
+    width: 64px;
+    min-width: 64px;
+    height: 64px;
+    min-height: 64px;
+  }
+
+  .history-section {
+    gap: 6px;
+  }
+
+  .empty-state.compact {
+    padding: var(--space-2);
+  }
+
+  .media-panel {
+    gap: 6px;
+    padding: 6px var(--space-2);
+  }
+
+  :root[data-theme="winamp-bento"] .media-panel {
+    padding: 0;
+  }
+}
+
+/* Reduced motion: no entrance, no meter motion anywhere in the panel. */
 @media (prefers-reduced-motion: reduce) {
   .media-panel,
   .media-panel *,
