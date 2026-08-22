@@ -14,9 +14,43 @@
         height: 100%;
         background: transparent;
       }
+      #boot-status {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: #05070c;
+        color: #b6bbc5;
+        font: 600 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif;
+        text-align: center;
+      }
     </style>
+    <script>
+      function reportBootFailure(message) {
+        const bounded = String(message || "Unknown startup error").slice(0, 2048);
+        const status = document.getElementById("boot-status");
+        if (status) status.textContent = `UltraVox could not start: ${bounded}`;
+        try {
+          window.__TAURI_INTERNALS__
+            ?.invoke("report_frontend_error", { message: bounded })
+            ?.catch(() => undefined);
+        } catch {
+          // The visible fallback is authoritative when IPC is unavailable.
+        }
+      }
+      window.addEventListener("error", (event) =>
+        reportBootFailure(event.message || event.type)
+      );
+      window.addEventListener("unhandledrejection", (event) =>
+        reportBootFailure(event.reason instanceof Error ? event.reason.message : event.reason)
+      );
+    </script>
   </head>
   <body>
+    <div id="boot-status" role="status">Starting UltraVox…</div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

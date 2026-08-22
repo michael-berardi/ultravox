@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect } from "react";
+import type { ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ThemeHarness, parseHarnessState } from "./qa/ThemeHarness";
@@ -17,12 +18,21 @@ if (harnessTheme) {
   void initTheme();
 }
 
+function BootReady({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    document.getElementById("boot-status")?.remove();
+  }, []);
+  return children;
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {harnessTheme ? (
-      <ThemeHarness state={parseHarnessState(params.get("qa-state"))} />
-    ) : (
-      <App />
-    )}
+    <BootReady>
+      {harnessTheme ? (
+        <ThemeHarness state={parseHarnessState(params.get("qa-state"))} />
+      ) : (
+        <App />
+      )}
+    </BootReady>
   </React.StrictMode>,
 );

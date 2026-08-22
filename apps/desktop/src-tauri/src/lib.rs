@@ -25,7 +25,8 @@ pub use commands::{
     get_recording, get_settings, get_shortcut_settings, get_update_preferences, hide_indicator,
     import_file, import_url, install_update, is_model_downloaded, list_recordings, media_transport,
     open_permission_settings, paste_text, prepare_model, record_app_telemetry_usage,
-    request_permission, respond_meeting_detection, retry_transcription, search_recordings,
+    report_frontend_error, request_permission, respond_meeting_detection, retry_transcription,
+    search_recordings,
     set_app_telemetry_enabled, set_settings, set_shortcut_settings, set_system_muted,
     set_system_volume, set_update_preferences, show_indicator, start_download,
     start_key_combination_hotkey, start_meeting, start_modifier_hotkey, start_recording,
@@ -393,6 +394,7 @@ pub fn run() {
             get_caret_position,
             paste_text,
             copy_to_clipboard,
+            report_frontend_error,
             start_modifier_hotkey,
             stop_modifier_hotkey,
             start_key_combination_hotkey,
@@ -441,10 +443,6 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
-            #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = apply_theme_material(&window, "midnight");
-            }
 
             let state = AppState::new(app.handle().clone()).map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("failed to initialize app state: {e}"))

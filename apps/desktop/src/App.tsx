@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MainWindow } from "./pages/MainWindow";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -361,10 +360,6 @@ export default function App() {
     }
   }, [settingsConfig]);
 
-  useEffect(() => {
-    if (isReminderWindow) return;
-    void getCurrentWindow().setSize(new LogicalSize(450, showSettings ? 520 : 650));
-  }, [isReminderWindow, showSettings]);
 
   useEffect(() => {
     if (isReminderWindow) return;

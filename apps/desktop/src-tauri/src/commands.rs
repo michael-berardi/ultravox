@@ -85,6 +85,22 @@ pub fn copy_to_clipboard(state: State<AppState>, text: String) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn report_frontend_error(message: String) {
+    let message: String = message
+        .chars()
+        .take(2_048)
+        .map(|character| {
+            if matches!(character, '\n' | '\r') {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    eprintln!("[frontend] {message}");
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct AppInfo {
     pub name: String,
