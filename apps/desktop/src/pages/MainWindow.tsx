@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MediaPanel } from "../components/MediaPanel";
 import { ThinkingOrb } from "thinking-orbs";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { AppStatus } from "../App";
@@ -798,6 +799,10 @@ export function MainWindow({
               onDelete={onDelete}
             />
           )}
+          <MediaPanel
+            enabled={config?.media_panel_enabled ?? false}
+            suppressed={recording || meeting || needsOnboarding}
+          />
         </section>
       </main>
 

@@ -1,10 +1,11 @@
 {
   "name": "ultravox-desktop",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "qa:headless": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

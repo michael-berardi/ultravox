@@ -131,6 +131,14 @@ fn screen_recording_permission_error() -> String {
 }
 
 fn permission_status() -> PermissionStatus {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("ULTRAVOX_QA_PERMISSIONS_GRANTED").is_some() {
+        return PermissionStatus {
+            microphone: PermissionState::Granted,
+            accessibility: PermissionState::Granted,
+            screen_recording: PermissionState::Granted,
+        };
+    }
     #[cfg(target_os = "macos")]
     {
         let microphone = match bridge::microphone_authorization_status() {
@@ -992,18 +1000,17 @@ pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<Str
 
     let decode_source = source.clone();
     let decode_dest = output_path.clone();
-    let duration_ms = tokio::task::spawn_blocking(move || {
-        decode_media_file_to_wav(&decode_source, &decode_dest)
-    })
-    .await
-    .map_err(|error| format!("could not decode the dropped file: {error}"))?
-    .map_err(|error| {
-        let name = source
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("the dropped file");
-        format!("could not import {name}: {error}")
-    })?;
+    let duration_ms =
+        tokio::task::spawn_blocking(move || decode_media_file_to_wav(&decode_source, &decode_dest))
+            .await
+            .map_err(|error| format!("could not decode the dropped file: {error}"))?
+            .map_err(|error| {
+                let name = source
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("the dropped file");
+                format!("could not import {name}: {error}")
+            })?;
 
     let recording = AudioRecording {
         id: id.to_string(),
@@ -1412,6 +1419,127 @@ pub fn get_audio_input_config() -> Result<AudioInputConfig, String> {
     Ok(AudioInputConfig::default())
 }
 
+/// Glanceable media-panel state for the frontend wire contract.
+/// Optional fields are `null` when unknown or unsupported; `volume` is 0..1.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaState {
+    pub active: bool,
+    pub app_name: Option<String>,
+    pub bundle_id: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub is_playing: Option<bool>,
+    pub volume: Option<f64>,
+    pub muted: Option<bool>,
+    pub volume_available: bool,
+    pub transport_available: bool,
+    pub previous_available: bool,
+    pub next_available: bool,
+}
+
+impl MediaState {
+    fn inactive() -> Self {
+        Self {
+            active: false,
+            app_name: None,
+            bundle_id: None,
+            title: None,
+            artist: None,
+            is_playing: None,
+            volume: None,
+            muted: None,
+            volume_available: false,
+            transport_available: false,
+            previous_available: false,
+            next_available: false,
+        }
+    }
+}
+
+/// Capture-free media state: activity via public CoreAudio process properties
+/// (self excluded), volume via the default output device, and optional
+/// runtime-only MediaRemote metadata/transport. The private probe blocks off
+/// Tauri's IPC dispatch path and metadata is accepted only for the same PID.
+#[cfg(target_os = "macos")]
+fn collect_media_state() -> MediaState {
+    let Some(source) = bridge::active_audio_source() else {
+        return MediaState::inactive();
+    };
+    let now_playing = bridge::now_playing().filter(|item| item.process_id == source.process_id);
+    let transport_available = now_playing.is_some() && bridge::transport_available();
+    let volume_state = bridge::output_volume_state();
+    MediaState {
+        active: true,
+        app_name: source.app_name,
+        bundle_id: source.bundle_id,
+        title: now_playing.as_ref().and_then(|item| item.title.clone()),
+        artist: now_playing.as_ref().and_then(|item| item.artist.clone()),
+        is_playing: now_playing.and_then(|item| item.is_playing),
+        volume: volume_state.volume,
+        muted: volume_state.muted,
+        volume_available: volume_state.volume.is_some(),
+        transport_available,
+        // MediaRemote's legacy send API does not expose per-item skip
+        // capability safely. Keep secondary controls hidden rather than
+        // presenting actions the current item may reject.
+        previous_available: false,
+        next_available: false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn get_media_state() -> MediaState {
+    tauri::async_runtime::spawn_blocking(collect_media_state)
+        .await
+        .unwrap_or_else(|_| MediaState::inactive())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn get_media_state() -> MediaState {
+    MediaState::inactive()
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_system_volume(volume: f64) -> Result<(), String> {
+    bridge::set_system_volume(volume)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn set_system_volume(_volume: f64) -> Result<(), String> {
+    Err("system volume requires macOS".to_string())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_system_muted(muted: bool) -> Result<(), String> {
+    bridge::set_system_muted(muted)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn set_system_muted(_muted: bool) -> Result<(), String> {
+    Err("system mute requires macOS".to_string())
+}
+
+/// Sends `play_pause`, `previous`, or `next`. Errors when the command is
+/// unknown or the transport is unavailable on this system.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn media_transport(command: String) -> Result<(), String> {
+    bridge::media_transport(&command)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn media_transport(_command: String) -> Result<(), String> {
+    Err("media transport requires macOS".to_string())
+}
+
 #[tauri::command]
 pub fn export_recording(
     state: State<AppState>,
@@ -1505,17 +1633,18 @@ pub fn set_theme_material(app: tauri::AppHandle, theme: String) -> Result<(), St
         // NSVisualEffectView must be touched on the main thread; Tauri commands
         // run on a worker, so hop over and surface failures to the caller.
         let (tx, rx) = std::sync::mpsc::channel();
-        app.clone().run_on_main_thread(move || {
-            use tauri::Manager;
-            let result = match app.get_webview_window("main") {
-                Some(window) => {
-                    apply_theme_material(&window, &theme).map_err(|e| e.to_string())
-                }
-                None => Err("main window not found".to_string()),
-            };
-            let _ = tx.send(result);
-        })
-        .map_err(|e| e.to_string())?;
+        app.clone()
+            .run_on_main_thread(move || {
+                use tauri::Manager;
+                let result = match app.get_webview_window("main") {
+                    Some(window) => {
+                        apply_theme_material(&window, &theme).map_err(|e| e.to_string())
+                    }
+                    None => Err("main window not found".to_string()),
+                };
+                let _ = tx.send(result);
+            })
+            .map_err(|e| e.to_string())?;
         rx.recv().map_err(|e| e.to_string())??;
     }
     #[cfg(not(target_os = "macos"))]

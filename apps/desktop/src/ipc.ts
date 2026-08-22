@@ -33,6 +33,24 @@ export type AppConfig = {
   onboarding_completed: boolean;
   model_language: string;
   theme: string;
+  media_panel_enabled: boolean;
+};
+
+export type MediaTransportCommand = "play_pause" | "previous" | "next";
+
+export type MediaState = {
+  active: boolean;
+  appName?: string | null;
+  bundleId?: string | null;
+  title?: string | null;
+  artist?: string | null;
+  isPlaying?: boolean | null;
+  volume?: number | null;
+  muted?: boolean | null;
+  volumeAvailable: boolean;
+  transportAvailable: boolean;
+  previousAvailable: boolean;
+  nextAvailable: boolean;
 };
 
 export type AppInfoResponse = {
@@ -327,6 +345,22 @@ export async function setSettings(config: AppConfig): Promise<void> {
 
 export async function getModelCatalog(): Promise<ModelCatalog> {
   return await invoke<ModelCatalog>("get_model_catalog");
+}
+
+export async function getMediaState(): Promise<MediaState> {
+  return await invoke<MediaState>("get_media_state");
+}
+
+export async function setSystemVolume(volume: number): Promise<void> {
+  return await invoke("set_system_volume", { volume });
+}
+
+export async function setSystemMuted(muted: boolean): Promise<void> {
+  return await invoke("set_system_muted", { muted });
+}
+
+export async function mediaTransport(command: MediaTransportCommand): Promise<void> {
+  return await invoke("media_transport", { command });
 }
 
 export async function getDownloadProgress(id: string): Promise<DownloadProgress> {

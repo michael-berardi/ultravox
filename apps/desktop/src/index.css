@@ -1831,22 +1831,41 @@ body {
 }
 
 .permission-panel {
-  width: min(420px, calc(100% - 28px));
-  max-height: calc(100% - 28px);
-  overflow-y: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100% - 20px));
+  max-height: calc(100% - 20px);
+  padding: var(--space-4);
+  overflow: hidden;
 }
 
 .permission-list {
   display: grid;
-  gap: 10px;
-  margin: 14px 0;
+  min-height: 0;
+  margin: 10px 0;
+  padding-right: 4px;
+  gap: 8px;
+  overflow-y: auto;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
 }
+
+.permission-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.permission-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border);
+}
+
 
 .permission-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 5px 10px;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -1884,6 +1903,13 @@ body {
 .permission-footnote {
   color: var(--text-tertiary);
   font-size: 12px;
+  line-height: 1.35;
+  margin: var(--space-2) 0;
+}
+
+.permission-panel > .btn:last-child {
+  flex: 0 0 auto;
+  align-self: flex-end;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1896,7 +1922,7 @@ body {
 :root[data-theme="frutiger-aero"] {
   --text: #0b2233;
   --text-secondary: #26455c;
-  --text-tertiary: #6b8496;
+  --text-tertiary: #40566a;
   --accent: #1f8fff;
   --accent-hover: #3ba2ff;
   --accent-pressed: #0f6fd6;
@@ -1911,25 +1937,25 @@ body {
   --record-muted: rgba(240, 82, 102, 0.12);
   --danger: #c03448;
   --danger-hover: #d6455b;
-  --success: #1f9d55;
-  --warning: #d9931e;
+  --success: #0b6b37;
+  --warning: #8a5700;
   --on-accent: #f4fbff;
   --on-record: #0b2436;
   --ambient-a: rgba(53, 208, 255, 0.32);
   --ambient-b: rgba(110, 232, 122, 0.26);
-  --sheen: rgba(255, 255, 255, 0.5);
+  --sheen: rgba(255, 255, 255, 0.28);
   --record-border: rgba(255, 255, 255, 0.65);
   --record-glow: rgba(47, 155, 255, 0.35);
   --record-glow-hover: rgba(47, 155, 255, 0.48);
-  --scrim: rgba(190, 214, 232, 0.42);
-  --scrim-strong: rgba(190, 214, 232, 0.58);
-  --material-window: rgba(214, 236, 248, 0.45);
-  --material-surface: rgba(255, 255, 255, 0.75);
-  --material-panel: rgba(255, 255, 255, 0.8);
-  --material-elevated: rgba(255, 255, 255, 0.88);
-  --material-border: rgba(255, 255, 255, 0.5);
-  --material-border-subtle: rgba(90, 140, 180, 0.22);
-  --material-highlight: rgba(255, 255, 255, 0.85);
+  --scrim: rgba(205, 228, 242, 0.86);
+  --scrim-strong: rgba(205, 228, 242, 0.96);
+  --material-window: rgba(226, 243, 252, 0.88);
+  --material-surface: rgba(255, 255, 255, 0.88);
+  --material-panel: rgba(255, 255, 255, 0.9);
+  --material-elevated: rgba(255, 255, 255, 0.94);
+  --material-border: rgba(70, 120, 160, 0.38);
+  --material-border-subtle: rgba(70, 120, 160, 0.2);
+  --material-highlight: rgba(255, 255, 255, 0.55);
   --material-shadow-sm: 0 1px 4px rgba(46, 92, 130, 0.14);
   --material-shadow-md: 0 10px 28px rgba(46, 92, 130, 0.18);
   --material-shadow-lg: 0 18px 46px rgba(46, 92, 130, 0.22);
@@ -1944,8 +1970,8 @@ body {
 /* Frutiger Dark — aero glass on true black, OLED-friendly. */
 :root[data-theme="frutiger-dark"] {
   --text: #eaf6ff;
-  --text-secondary: #a9c4d6;
-  --text-tertiary: #8aa6b9;
+  --text-secondary: #c0d9e8;
+  --text-tertiary: #9bb8ca;
   --accent: #35d0ff;
   --accent-hover: #6ee0ff;
   --accent-pressed: #1fb4e2;
@@ -1972,12 +1998,12 @@ body {
   --record-glow-hover: rgba(53, 208, 255, 0.55);
   --scrim: rgba(0, 4, 8, 0.6);
   --scrim-strong: rgba(0, 4, 8, 0.76);
-  --material-window: rgba(0, 2, 6, 0.5);
-  --material-surface: rgba(10, 20, 30, 0.36);
-  --material-panel: rgba(14, 26, 38, 0.42);
-  --material-elevated: rgba(22, 38, 54, 0.52);
-  --material-border: rgba(140, 220, 255, 0.22);
-  --material-border-subtle: rgba(140, 220, 255, 0.11);
+  --material-window: rgba(0, 2, 6, 0.92);
+  --material-surface: rgba(10, 20, 30, 0.84);
+  --material-panel: rgba(14, 26, 38, 0.88);
+  --material-elevated: rgba(22, 38, 54, 0.92);
+  --material-border: rgba(140, 220, 255, 0.34);
+  --material-border-subtle: rgba(140, 220, 255, 0.18);
   --material-highlight: rgba(200, 240, 255, 0.16);
   --material-filter: blur(40px) saturate(170%);
   --radius: 14px;
@@ -2164,8 +2190,8 @@ body {
 /* Vapor — neon grid nights: hot pink, cyan, and indigo. */
 :root[data-theme="vapor"] {
   --text: #f4ecff;
-  --text-secondary: #c3b3e6;
-  --text-tertiary: #a899d1;
+  --text-secondary: #d8c8f5;
+  --text-tertiary: #c1b2e8;
   --accent: #01cdfe;
   --accent-hover: #4de0ff;
   --accent-pressed: #01a8d4;
@@ -2192,13 +2218,13 @@ body {
   --record-glow-hover: rgba(185, 103, 255, 0.42);
   --scrim: rgba(10, 6, 22, 0.62);
   --scrim-strong: rgba(10, 6, 22, 0.76);
-  --material-window: rgba(16, 10, 32, 0.58);
-  --material-surface: rgba(26, 16, 48, 0.46);
-  --material-panel: rgba(35, 22, 62, 0.48);
-  --material-elevated: rgba(46, 30, 80, 0.58);
-  --material-border: rgba(1, 205, 254, 0.2);
-  --material-border-subtle: rgba(1, 205, 254, 0.1);
-  --material-highlight: rgba(255, 113, 206, 0.12);
+  --material-window: rgba(16, 10, 32, 0.92);
+  --material-surface: rgba(26, 16, 48, 0.86);
+  --material-panel: rgba(35, 22, 62, 0.88);
+  --material-elevated: rgba(46, 30, 80, 0.92);
+  --material-border: rgba(1, 205, 254, 0.35);
+  --material-border-subtle: rgba(1, 205, 254, 0.18);
+  --material-highlight: rgba(255, 113, 206, 0.16);
 }
 
 /* Theme picker */
@@ -2290,9 +2316,25 @@ body {
 :root[data-theme="frutiger-aero"] .recording-card,
 :root[data-theme="frutiger-aero"] .theme-card {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.85),
-    inset 0 10px 18px rgba(255, 255, 255, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 10px 18px rgba(255, 255, 255, 0.14),
     0 10px 24px rgba(46, 92, 130, 0.18);
+}
+
+/* Solid focus: every interactive glass surface gets a hard, visible ring. */
+:root[data-theme="frutiger-aero"] :is(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #0f6fd6;
+  outline-offset: 1px;
+}
+:root[data-theme="frutiger-aero"] .permission-row {
+  border-color: rgba(70, 120, 160, 0.34);
+  background: rgba(255, 255, 255, 0.94);
+  color: #0b2233;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+:root[data-theme="frutiger-aero"] .permission-row > div:first-child span {
+  color: #26455c;
 }
 :root[data-theme="frutiger-aero"] .record-button:not(.recording) {
   background:
@@ -2318,7 +2360,8 @@ body {
     radial-gradient(circle at 14% 6%, rgba(53, 208, 255, 0.2), transparent 30%),
     radial-gradient(circle at 84% 14%, rgba(110, 232, 122, 0.13), transparent 28%),
     radial-gradient(circle at 66% 92%, rgba(47, 155, 255, 0.15), transparent 34%),
-    radial-gradient(circle at 24% 78%, rgba(110, 232, 122, 0.09), transparent 24%);
+    radial-gradient(circle at 24% 78%, rgba(110, 232, 122, 0.09), transparent 24%),
+    var(--bg);
 }
 :root[data-theme="frutiger-dark"] .hero,
 :root[data-theme="frutiger-dark"] .settings-card,
@@ -2642,10 +2685,10 @@ body {
     var(--surface);
 }
 
-/* Vapor: neon horizon stripes rising behind the button. */
+/* Vapor: a restrained neon horizon behind the primary control. */
 :root[data-theme="vapor"] .hero {
   background:
-    repeating-linear-gradient(0deg, rgba(255, 113, 206, 0.16) 0 2px, transparent 2px 9px) bottom / 100% 26% no-repeat,
+    repeating-linear-gradient(0deg, rgba(255, 113, 206, 0.08) 0 1px, transparent 1px 12px) bottom / 100% 14% no-repeat,
     linear-gradient(155deg, var(--sheen), transparent 48%),
     var(--surface);
 }
@@ -2686,11 +2729,11 @@ body {
 :root[data-theme="frutiger-aero"] .compact-modal,
 :root[data-theme="frutiger-aero"] .theme-card {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.12) 28%, rgba(178, 219, 240, 0.16) 72%, rgba(255, 255, 255, 0.2));
-  border-color: rgba(255, 255, 255, 0.6);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(214, 236, 248, 0.3) 28%, rgba(178, 219, 240, 0.32) 72%, rgba(255, 255, 255, 0.38));
+  border-color: rgba(70, 120, 160, 0.4);
   border-bottom-color: rgba(46, 92, 130, 0.3);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
     inset 0 -1px 0 rgba(46, 92, 130, 0.18),
     inset 0 12px 22px rgba(255, 255, 255, 0.18),
     0 12px 28px rgba(46, 92, 130, 0.2);
@@ -2702,7 +2745,8 @@ body {
 :root[data-theme="frutiger-dark"] .compact-modal,
 :root[data-theme="frutiger-dark"] .theme-card {
   background:
-    linear-gradient(180deg, rgba(158, 231, 255, 0.1), rgba(158, 231, 255, 0.03) 30%, rgba(10, 24, 36, 0.14) 78%, rgba(110, 232, 122, 0.05));
+    linear-gradient(180deg, rgba(158, 231, 255, 0.1), rgba(158, 231, 255, 0.03) 30%, rgba(10, 24, 36, 0.14) 78%, rgba(110, 232, 122, 0.05)),
+    var(--surface);
   border-color: rgba(158, 231, 255, 0.3);
   border-bottom-color: rgba(0, 10, 18, 0.5);
   box-shadow:
@@ -2781,4 +2825,313 @@ body {
 }
 :root[data-theme="frutiger-aero"] .recording-card {
   background: rgba(255, 255, 255, 0.82);
+}
+
+/* ---------------------------------------------------------------------------
+ * Media panel — conditional now-playing strip below the latest recording.
+ * One structural component; each data-theme changes material and motif only.
+ * Decorative motifs are pointer-events-none pseudo-elements.
+ * ------------------------------------------------------------------------- */
+
+.media-panel {
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  animation: media-panel-enter 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes media-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.media-panel::before,
+.media-panel::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.media-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 110px;
+  min-width: 0;
+}
+
+.media-source {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.media-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-transport {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.media-button svg {
+  display: block;
+}
+
+.media-play {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.media-volume {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 130px;
+  min-width: 120px;
+}
+
+.media-volume-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.media-volume-value {
+  min-width: 34px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.media-volume-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  cursor: pointer;
+}
+
+.media-volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+}
+
+.media-volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+}
+
+.media-volume-slider:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.media-volume-slider:focus-visible,
+.media-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-muted), 0 0 0 4px var(--bg);
+}
+
+/* Midnight — one restrained spectral hairline under the metadata. */
+:root[data-theme="midnight"] .media-panel::after {
+  inset: auto 0 0 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-cyan),
+    var(--accent),
+    var(--accent-violet),
+    transparent
+  );
+  opacity: 0.7;
+}
+
+/* Frutiger Aero — crisp sky glass, bubble cluster, aurora streak. */
+:root[data-theme="frutiger-aero"] .media-panel {
+  border-color: rgba(70, 120, 160, 0.38);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(214, 236, 248, 0.35) 60%, rgba(255, 255, 255, 0.4)),
+    var(--panel);
+}
+:root[data-theme="frutiger-aero"] .media-panel::before {
+  inset: auto -8px -14px 30%;
+  height: 34px;
+  background:
+    radial-gradient(circle 9px at 12% 100%, rgba(53, 208, 255, 0.5), transparent 70%),
+    radial-gradient(circle 6px at 34% 100%, rgba(110, 232, 122, 0.45), transparent 70%),
+    radial-gradient(circle 12px at 58% 100%, rgba(31, 143, 255, 0.4), transparent 70%),
+    radial-gradient(circle 5px at 80% 100%, rgba(53, 208, 255, 0.45), transparent 70%);
+}
+:root[data-theme="frutiger-aero"] .media-panel::after {
+  inset: 0;
+  background: linear-gradient(115deg, transparent 42%, rgba(53, 208, 255, 0.16) 52%, transparent 62%);
+}
+
+/* Frutiger Dark — OLED glass with a low aurora glow. */
+:root[data-theme="frutiger-dark"] .media-panel {
+  border-color: rgba(140, 220, 255, 0.24);
+  background:
+    linear-gradient(180deg, rgba(158, 231, 255, 0.08), transparent 40%),
+    var(--panel);
+}
+:root[data-theme="frutiger-dark"] .media-panel::before {
+  inset: auto -10% -18px -10%;
+  height: 36px;
+  background:
+    radial-gradient(ellipse 46% 100% at 26% 100%, rgba(53, 208, 255, 0.28), transparent 70%),
+    radial-gradient(ellipse 46% 100% at 74% 100%, rgba(110, 232, 122, 0.2), transparent 70%);
+}
+
+/* Winamp — black segmented LCD well with phosphor segment ticks. */
+:root[data-theme="winamp"] .media-panel {
+  border: 1px solid #05050a;
+  border-top-color: #05050a;
+  background:
+    repeating-linear-gradient(90deg, rgba(0, 230, 0, 0.06) 0 1px, transparent 1px 7px),
+    #04040a;
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(184, 188, 200, 0.16);
+}
+:root[data-theme="winamp"] .media-panel::after {
+  inset: auto 12px 4px 12px;
+  height: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 230, 0, 0.55) 0 2px,
+    rgba(204, 204, 0, 0.4) 2px 4px,
+    transparent 4px 9px
+  );
+}
+:root[data-theme="winamp"] .media-title {
+  color: #00e600;
+  text-shadow: 0 0 6px rgba(0, 230, 0, 0.55);
+}
+:root[data-theme="winamp"] .media-source,
+:root[data-theme="winamp"] .media-volume-label,
+:root[data-theme="winamp"] .media-volume-value {
+  color: #7fbf7f;
+}
+:root[data-theme="winamp"] .media-volume-slider {
+  background: #10121e;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+:root[data-theme="winamp"] .media-volume-slider::-webkit-slider-thumb {
+  border-color: #b8bcc8;
+  background: #00e600;
+}
+:root[data-theme="winamp"] .media-play {
+  border-color: #00e600;
+  color: #66ff33;
+  background: transparent;
+}
+
+/* Olive — flat ruled control strip; hairlines only, zero decoration. */
+:root[data-theme="olive"] .media-panel {
+  background: var(--surface);
+}
+:root[data-theme="olive"] .media-panel::before {
+  inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0 calc(25% - 1px),
+    var(--border-subtle) calc(25% - 1px) 25%
+  );
+  opacity: 0.6;
+}
+
+/* Nord Frost — frosted glass with a calm waveform band. */
+:root[data-theme="nord-frost"] .media-panel::after {
+  inset: auto 0 -2px 0;
+  height: 14px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(94, 129, 172, 0.32) 0 2px,
+    transparent 2px 6px
+  );
+  mask-image: linear-gradient(180deg, transparent, #000 85%);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 85%);
+}
+
+/* Solar Dusk — ember horizon glowing along the bottom edge. */
+:root[data-theme="solar-dusk"] .media-panel::after {
+  inset: auto -12% -20px -12%;
+  height: 30px;
+  background: radial-gradient(
+    ellipse 60% 100% at 50% 100%,
+    rgba(255, 158, 122, 0.3),
+    rgba(240, 113, 154, 0.14) 55%,
+    transparent 75%
+  );
+}
+
+/* Vapor — neon grid floor with a hot pink/cyan edge pulse. */
+:root[data-theme="vapor"] .media-panel {
+  border-color: rgba(1, 205, 254, 0.35);
+}
+:root[data-theme="vapor"] .media-panel::before {
+  inset: auto 0 0 0;
+  height: 28%;
+  background:
+    repeating-linear-gradient(90deg, rgba(1, 205, 254, 0.07) 0 1px, transparent 1px 16px),
+    repeating-linear-gradient(0deg, rgba(255, 113, 206, 0.05) 0 1px, transparent 1px 10px);
+  transform: perspective(60px) rotateX(20deg) scale(1.08);
+  transform-origin: bottom;
+}
+:root[data-theme="vapor"] .media-panel::after {
+  inset: auto 0 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+  opacity: 0.65;
+}
+
+/* Reduced motion: no entrance, no motif motion anywhere in the panel. */
+@media (prefers-reduced-motion: reduce) {
+  .media-panel,
+  .media-panel *,
+  .media-panel::before,
+  .media-panel::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

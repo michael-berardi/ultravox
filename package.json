@@ -1,10 +1,11 @@
 {
   "name": "ultravox",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "UltraVox monorepo — Swift baseline and Rust/Tauri v2 rewrite",
   "scripts": {
     "desktop:dev": "pnpm --filter ultravox-desktop tauri dev",
+    "desktop:qa:headless": "pnpm --filter ultravox-desktop qa:headless",
     "desktop:build": "pnpm --filter ultravox-desktop tauri build",
     "desktop:check": "pnpm --filter ultravox-desktop check",
     "desktop:tauri:check": "pnpm --filter ultravox-desktop tauri check",

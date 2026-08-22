@@ -79,6 +79,23 @@ extern "C" {
         directory: *const c_char,
     ) -> c_int;
     fn ultravox_macos_bridge_get_model_progress(version: *const c_char) -> c_double;
+    fn ultravox_macos_bridge_active_audio_process(
+        process_id: *mut c_int,
+        app_name: *mut *mut c_char,
+        bundle_id: *mut *mut c_char,
+    ) -> c_int;
+    fn ultravox_macos_bridge_get_output_volume(volume: *mut c_double) -> c_int;
+    fn ultravox_macos_bridge_set_output_volume(volume: c_double) -> c_int;
+    fn ultravox_macos_bridge_get_output_muted(muted: *mut c_int) -> c_int;
+    fn ultravox_macos_bridge_set_output_muted(muted: c_int) -> c_int;
+    fn ultravox_macos_bridge_media_remote_available() -> c_int;
+    fn ultravox_macos_bridge_now_playing(
+        process_id: *mut c_int,
+        title: *mut *mut c_char,
+        artist: *mut *mut c_char,
+        is_playing: *mut c_int,
+    ) -> c_int;
+    fn ultravox_macos_bridge_media_transport(command: *const c_char) -> c_int;
 }
 
 /// Returns the bridge version string.
@@ -425,6 +442,174 @@ pub fn model_progress(version: &str) -> f64 {
     }
 }
 
+// MARK: - Media panel support
+
+/// Source application detected through public CoreAudio process state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioSource {
+    pub process_id: i32,
+    pub app_name: Option<String>,
+    pub bundle_id: Option<String>,
+}
+
+/// Default-output volume and mute state. `None` members mean the current
+/// device does not support that control; callers must surface that as
+/// "not available" rather than a fabricated value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputVolumeState {
+    pub volume: Option<f64>,
+    pub muted: Option<bool>,
+}
+
+/// Now-playing metadata from optional runtime MediaRemote access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NowPlayingInfo {
+    pub process_id: i32,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub is_playing: Option<bool>,
+}
+
+/// Transport commands accepted by [`media_transport`].
+pub const TRANSPORT_COMMANDS: [&str; 3] = ["play_pause", "previous", "next"];
+
+/// Returns the first other process currently running audio output, or `None`
+/// when no other process is active. Capture-free: only public process-state
+/// properties are read and this process is always excluded.
+pub fn active_audio_source() -> Option<AudioSource> {
+    unsafe {
+        let mut process_id: c_int = 0;
+        let mut app_name: *mut c_char = std::ptr::null_mut();
+        let mut bundle_id: *mut c_char = std::ptr::null_mut();
+        if ultravox_macos_bridge_active_audio_process(
+            &mut process_id,
+            &mut app_name,
+            &mut bundle_id,
+        ) != 1
+        {
+            return None;
+        }
+        let app_name = take_bridge_string(app_name);
+        let bundle_id = take_bridge_string(bundle_id);
+        Some(AudioSource {
+            process_id,
+            app_name: (!app_name.is_empty()).then_some(app_name),
+            bundle_id: (!bundle_id.is_empty()).then_some(bundle_id),
+        })
+    }
+}
+
+/// Reads default-output volume and mute. Unsupported controls report `None`.
+pub fn output_volume_state() -> OutputVolumeState {
+    unsafe {
+        let mut volume: c_double = 0.0;
+        let volume_ok = ultravox_macos_bridge_get_output_volume(&mut volume) == 1;
+        let mut muted: c_int = 0;
+        let muted_ok = ultravox_macos_bridge_get_output_muted(&mut muted) == 1;
+        OutputVolumeState {
+            volume: volume_ok.then(|| volume.clamp(0.0, 1.0)),
+            muted: muted_ok.then_some(muted != 0),
+        }
+    }
+}
+
+/// Validates a volume value in [0, 1]; rejects NaN and out-of-range input.
+fn validate_unit_volume(volume: f64) -> Result<f64, String> {
+    if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+        return Err("volume must be between 0 and 1".to_string());
+    }
+    Ok(volume)
+}
+
+/// Sets the system default-output volume in [0, 1].
+///
+/// Errors when the value is invalid or the device has no settable volume.
+pub fn set_system_volume(volume: f64) -> Result<(), String> {
+    let clamped = validate_unit_volume(volume)?;
+    let ok = unsafe { ultravox_macos_bridge_set_output_volume(clamped) } == 1;
+    if ok {
+        Ok(())
+    } else {
+        Err("default output device does not support volume changes".to_string())
+    }
+}
+
+/// Sets the system default-output mute state.
+///
+/// Errors when the device has no mute control.
+pub fn set_system_muted(muted: bool) -> Result<(), String> {
+    let ok = unsafe { ultravox_macos_bridge_set_output_muted(muted as c_int) } == 1;
+    if ok {
+        Ok(())
+    } else {
+        Err("default output device does not support mute".to_string())
+    }
+}
+
+/// Returns true when runtime MediaRemote transport/metadata access resolved.
+pub fn transport_available() -> bool {
+    unsafe { ultravox_macos_bridge_media_remote_available() != 0 }
+}
+
+/// Fetches now-playing metadata, or `None` when MediaRemote is unavailable
+/// or did not reply in time.
+pub fn now_playing() -> Option<NowPlayingInfo> {
+    unsafe {
+        let mut process_id: c_int = 0;
+        let mut title: *mut c_char = std::ptr::null_mut();
+        let mut artist: *mut c_char = std::ptr::null_mut();
+        let mut is_playing: c_int = -1;
+        if ultravox_macos_bridge_now_playing(
+            &mut process_id,
+            &mut title,
+            &mut artist,
+            &mut is_playing,
+        ) != 1
+        {
+            return None;
+        }
+        let title = take_bridge_string(title);
+        let artist = take_bridge_string(artist);
+        Some(NowPlayingInfo {
+            process_id,
+            title: (!title.is_empty()).then_some(title),
+            artist: (!artist.is_empty()).then_some(artist),
+            is_playing: match is_playing {
+                1 => Some(true),
+                0 => Some(false),
+                _ => None,
+            },
+        })
+    }
+}
+
+/// Validates a media transport command without crossing the FFI boundary.
+fn validate_media_transport_command(command: &str) -> Result<&str, String> {
+    TRANSPORT_COMMANDS
+        .contains(&command)
+        .then_some(command)
+        .ok_or_else(|| {
+            format!(
+                "unknown transport command: {command} (expected one of {})",
+                TRANSPORT_COMMANDS.join(", ")
+            )
+        })
+}
+
+/// Sends a media transport command (`play_pause`, `previous`, or `next`)
+/// through optional runtime MediaRemote access.
+///
+/// Errors on an unknown command without touching the FFI, or when the
+/// transport is unavailable / delivery failed.
+pub fn media_transport(command: &str) -> Result<(), String> {
+    let command = validate_media_transport_command(command)?;
+    let command = CString::new(command).map_err(|_| "command contained interior NUL")?;
+    match unsafe { ultravox_macos_bridge_media_transport(command.as_ptr()) } {
+        1 => Ok(()),
+        _ => Err("media transport is unavailable on this system".to_string()),
+    }
+}
+
 fn take_bridge_string(ptr: *mut c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -496,5 +681,49 @@ mod tests {
     fn test_transcribe_missing_file_fails() {
         let result = transcribe_file("/this/path/does/not/exist.wav");
         assert!(result.is_err(), "missing file should fail validation");
+    }
+
+    #[test]
+    fn test_volume_validation_rejects_invalid_values() {
+        assert_eq!(validate_unit_volume(0.0), Ok(0.0));
+        assert_eq!(validate_unit_volume(1.0), Ok(1.0));
+        assert_eq!(validate_unit_volume(0.42), Ok(0.42));
+        assert!(validate_unit_volume(-0.01).is_err());
+        assert!(validate_unit_volume(1.01).is_err());
+        assert!(validate_unit_volume(f64::NAN).is_err());
+        assert!(validate_unit_volume(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_media_transport_rejects_unknown_commands_without_ffi() {
+        for command in ["", "stop", "PLAY_PAUSE", "play_pause;"] {
+            let result = validate_media_transport_command(command);
+            assert!(result.is_err(), "{command:?} should be rejected");
+            assert!(result.unwrap_err().contains("unknown transport command"));
+        }
+    }
+
+    #[test]
+    fn test_transport_command_list_matches_accepted_inputs() {
+        for command in TRANSPORT_COMMANDS {
+            assert_eq!(validate_media_transport_command(command), Ok(command));
+        }
+    }
+
+    #[test]
+    fn test_active_audio_source_is_well_formed() {
+        // Environment-dependent: Some in any environment where another process
+        // plays audio, None otherwise. Either way the struct must be coherent.
+        if let Some(source) = active_audio_source() {
+            assert!(source.process_id > 0);
+        }
+    }
+
+    #[test]
+    fn test_output_volume_state_is_well_formed() {
+        let state = output_volume_state();
+        if let Some(volume) = state.volume {
+            assert!((0.0..=1.0).contains(&volume));
+        }
     }
 }

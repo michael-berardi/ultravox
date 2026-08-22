@@ -408,7 +408,7 @@ export default function App() {
     <div className="app-shell">
       {!isReminderWindow && (
         <>
-          <div className="view-layer" hidden={showSettings} aria-hidden={showSettings}>
+          <div className="view-layer" hidden={showSettings || needsConsent || needsPermission} aria-hidden={showSettings || needsConsent || needsPermission}>
             <MainWindow
               status={status}
               initialRecording={initialRecording}
@@ -417,7 +417,7 @@ export default function App() {
             />
           </div>
           {settingsConfig && (
-            <div className="view-layer" hidden={!showSettings} aria-hidden={!showSettings}>
+            <div className="view-layer" hidden={!showSettings || needsConsent || needsPermission} aria-hidden={!showSettings || needsConsent || needsPermission}>
               <SettingsPage
                 initialConfig={settingsConfig}
                 onClose={() => setShowSettings(false)}

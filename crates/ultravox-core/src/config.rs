@@ -75,6 +75,8 @@ pub struct AppConfig {
     pub model_language: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_media_panel_enabled")]
+    pub media_panel_enabled: bool,
 }
 
 fn default_theme() -> String {
@@ -89,6 +91,10 @@ fn default_meeting_key_combination() -> String {
     "Control+M".to_string()
 }
 fn default_meeting_detection_enabled() -> bool {
+    true
+}
+
+fn default_media_panel_enabled() -> bool {
     true
 }
 
@@ -122,6 +128,7 @@ impl Default for AppConfig {
             onboarding_completed: false,
             model_language: default_model_language(),
             theme: default_theme(),
+            media_panel_enabled: default_media_panel_enabled(),
         }
     }
 }
@@ -201,6 +208,7 @@ mod tests {
         assert!(cfg.meeting_detection_enabled);
         assert!(!cfg.onboarding_completed);
         assert_eq!(cfg.model_language, "english");
+        assert!(cfg.media_panel_enabled);
     }
 
     #[test]
@@ -233,6 +241,7 @@ mod tests {
             onboarding_completed: true,
             model_language: "multilingual".to_string(),
             theme: "winamp".to_string(),
+            media_panel_enabled: false,
         };
         let serialized = toml::to_string(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&serialized).unwrap();
@@ -271,5 +280,6 @@ model_language = "english"
         )
         .unwrap();
         assert!(parsed.meeting_detection_enabled);
+        assert!(parsed.media_panel_enabled);
     }
 }

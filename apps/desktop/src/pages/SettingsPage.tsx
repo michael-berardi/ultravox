@@ -938,6 +938,19 @@ function AppearanceSettings({ config, onChange }: SettingsSectionProps) {
           ))}
         </ul>
       </div>
+      <div className="settings-card">
+        <div className="settings-card-heading">
+          <div>
+            <h3>Media panel</h3>
+          </div>
+        </div>
+        <ToggleRow
+          label="Show media panel"
+          description="Show now-playing source, transport, and system volume below your latest message while another app plays audio."
+          checked={config.media_panel_enabled}
+          onChange={(checked) => onChange({ media_panel_enabled: checked })}
+        />
+      </div>
     </div>
   );
 }

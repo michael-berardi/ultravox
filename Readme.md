@@ -16,6 +16,7 @@ UltraVox is a private, on-device macOS transcription app for microphone recordin
 - Optional Google Meet and Zoom reminders from the local [OverSeer Browser](https://github.com/michael-berardi/overseer-browser) extension. UltraVox receives a minimized local event containing a schema version, random detection ID, provider name, opaque meeting key, and millisecond detection time, then waits for explicit recording consent.
 - Supported media URL import and queued processing.
 - Language auto-detection for supported models.
+- Optional capture-free media activity panel with source metadata, play/pause, and default-output volume/mute controls.
 
 ## Architecture
 
@@ -91,6 +92,17 @@ npm install --global pnpm@10.27.0
 pnpm install --frozen-lockfile
 ./run.sh build
 ```
+
+For deterministic visual debugging without launching or focusing the native app:
+
+```bash
+pnpm desktop:qa:headless
+# Open headlessly:
+# http://127.0.0.1:1420/?qa-theme=frutiger-aero&qa-state=playing
+```
+
+The dev-only harness accepts every theme ID plus `qa-state=playing`, `paused`,
+`unknown`, or `volume-unavailable`. Production builds ignore these parameters.
 
 ## Publishing a release
 

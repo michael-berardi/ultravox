@@ -292,7 +292,7 @@ fn validate_bundle_name(app: &Path) -> Result<(), String> {
     }
 }
 
-fn verify_app(app: &Path, expected_version: &str, require_notarization: bool) -> Result<(), String> {
+fn verify_bundle_metadata(app: &Path, expected_version: &str) -> Result<(), String> {
     if !app.is_dir() {
         return Err(format!("Expected UltraVox.app at {}.", app.display()));
     }
@@ -318,6 +318,15 @@ fn verify_app(app: &Path, expected_version: &str, require_notarization: bool) ->
             version.trim()
         ));
     }
+    Ok(())
+}
+
+fn verify_app(
+    app: &Path,
+    expected_version: &str,
+    require_notarization: bool,
+) -> Result<(), String> {
+    verify_bundle_metadata(app, expected_version)?;
     let app_arg = app.to_string_lossy().into_owned();
     run_checked(
         "/usr/bin/codesign",
@@ -562,15 +571,13 @@ pub async fn install(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
         return Err("Update is not newer than the running app.".to_string());
     }
     let bundle = current_bundle()?;
-    // The running app was already assessed by Gatekeeper when it was
-    // installed and launched. Re-requiring notarization here permanently
-    // blocks updates for installs whose stapled ticket is missing (e.g. apps
-    // installed from a .pkg, where only the package carried the ticket), so
-    // the installed bundle is checked for identity and version only. The
-    // downloaded candidate below still gets full notarization verification.
-    verify_app(&bundle, &info.current_version, false)?;
-    let staging =
-        std::env::temp_dir().join(format!("ultravox-update-{}", uuid::Uuid::new_v4()));
+    // Candidate identity is the trust boundary below. Requiring the running
+    // bundle's Developer ID signature cannot make that process trustworthy and
+    // blocks recovery from an ad-hoc dev/legacy install. Stable bundle metadata
+    // preserves the canonical path/identifier; every downloaded replacement
+    // still passes full Developer ID, designated-requirement, and notarization checks.
+    verify_bundle_metadata(&bundle, &info.current_version)?;
+    let staging = std::env::temp_dir().join(format!("ultravox-update-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&staging)
         .map_err(|error| format!("Failed to create update staging directory: {error}"))?;
     let candidate = match stage_update(&staging, &info.latest_version).await {
@@ -651,6 +658,28 @@ mod tests {
     }
 
     #[test]
+    fn current_bundle_metadata_allows_signed_recovery_from_ad_hoc_installs() {
+        let root = tempfile::tempdir_in("/private/tmp").unwrap();
+        let app = root.path().join("UltraVox.app");
+        let contents = app.join("Contents");
+        std::fs::create_dir_all(&contents).unwrap();
+        std::fs::write(
+            contents.join("Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>{EXPECTED_BUNDLE_ID}</string>
+<key>CFBundleShortVersionString</key><string>{}</string>
+</dict></plist>"#,
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .unwrap();
+
+        assert!(verify_bundle_metadata(&app, env!("CARGO_PKG_VERSION")).is_ok());
+    }
+    #[test]
     fn update_bundle_name_must_be_exact() {
         assert!(validate_bundle_name(Path::new("/tmp/UltraVox.app")).is_ok());
         assert!(validate_bundle_name(Path::new("/tmp/Impostor.app")).is_err());
@@ -684,7 +713,8 @@ mod tests {
     }
 
     #[test]
-    fn update_helper_requires_new_process_health_before_cleanup() {        let cleanup = INSTALL_HELPER
+    fn update_helper_requires_new_process_health_before_cleanup() {
+        let cleanup = INSTALL_HELPER
             .rfind(r#"/bin/rm -rf "$backup_app" "$staging""#)
             .expect("helper must clean up only after launch");
         let process_snapshot = INSTALL_HELPER

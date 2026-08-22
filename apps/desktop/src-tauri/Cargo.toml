@@ -1,6 +1,6 @@
 [package]
 name = "ultravox"
-version = "0.2.9"
+version = "0.3.0"
 description = "UltraVox — real-time audio transcription with on-device models"
 authors = ["Implose Labs"]
 license = "MIT"
@@ -44,6 +44,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 [target.'cfg(target_os = "macos")'.dependencies]
 ultravox-macos-bridge = { path = "../../../crates/ultravox-macos-bridge" }
 window-vibrancy = "0.6"
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = ["custom-protocol"]

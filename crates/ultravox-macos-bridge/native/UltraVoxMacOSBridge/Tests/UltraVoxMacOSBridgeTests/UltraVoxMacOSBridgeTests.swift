@@ -127,6 +127,40 @@ final class UltraVoxMacOSBridgeTests: XCTestCase {
         XCTAssertEqual(origin.x, visibleFrame.minX + 8)
         XCTAssertEqual(origin.y, visibleFrame.minY + 8)
     }
+
+    // MARK: - Media panel support
+
+    func testMediaTransportCommandsMapToStableSendCommandCodes() {
+        XCTAssertEqual(MediaTransportCommand(rawValue: "play_pause")?.sendCommandCode, 2)
+        XCTAssertEqual(MediaTransportCommand(rawValue: "next")?.sendCommandCode, 4)
+        XCTAssertEqual(MediaTransportCommand(rawValue: "previous")?.sendCommandCode, 5)
+        XCTAssertNil(MediaTransportCommand(rawValue: "stop"))
+        XCTAssertNil(MediaTransportCommand(rawValue: "PLAY_PAUSE"))
+    }
+
+    func testPlayingStateDerivesFromPlaybackRate() {
+        XCTAssertTrue(
+            NowPlayingSnapshot.playingState(
+                from: ["kMRMediaRemoteNowPlayingInfoPlaybackRate": 1.5])!)
+        XCTAssertFalse(
+            NowPlayingSnapshot.playingState(
+                from: ["kMRMediaRemoteNowPlayingInfoPlaybackRate": 0.0])!)
+        XCTAssertNil(NowPlayingSnapshot.playingState(from: [:]))
+    }
+
+    func testActiveAudioProcessBridgeReturnsKnownValue() {
+        // Capture-free probe must return a well-formed signal in any
+        // environment: 1 when another process runs output audio, else 0.
+        var processID: pid_t = 0
+        var appName: UnsafeMutablePointer<CChar>? = nil
+        var bundleId: UnsafeMutablePointer<CChar>? = nil
+        let result = ultravox_macos_bridge_active_audio_process(
+            &processID, &appName, &bundleId)
+        XCTAssertTrue(result == 0 || result == 1)
+        if result == 1 { XCTAssertGreaterThan(processID, 0) }
+        if let appName { ultravox_macos_bridge_free_string(appName) }
+        if let bundleId { ultravox_macos_bridge_free_string(bundleId) }
+    }
     func testMicrophoneAuthorizationStatusReturnsKnownValue() {
         let status = ultravox_macos_bridge_microphone_authorization_status()
         XCTAssertTrue((0...3).contains(status))

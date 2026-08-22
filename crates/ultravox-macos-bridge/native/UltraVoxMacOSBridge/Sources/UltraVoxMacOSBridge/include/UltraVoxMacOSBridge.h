@@ -72,6 +72,55 @@ void ultravox_macos_bridge_set_meeting_hotkey_callback(
 int32_t ultravox_macos_bridge_show_indicator(double x, double y);
 int32_t ultravox_macos_bridge_set_indicator_state(const char *state);
 int32_t ultravox_macos_bridge_hide_indicator(void);
+/* Media panel support. Activity detection uses only public CoreAudio process
+ * state (kAudioHardwarePropertyProcessObjectList +
+ * kAudioProcessPropertyIsRunningOutput), excludes this process, and never
+ * captures audio or requires new permissions.
+ */
+
+/* Returns 1 when another process is running output audio and fills its PID,
+ * app_name / bundle_id (either string may remain NULL when unknown); 0 when no
+ * other process is active. Caller frees strings with
+ * ultravox_macos_bridge_free_string.
+ */
+int32_t ultravox_macos_bridge_active_audio_process(
+    int32_t *process_id,
+    char **app_name,
+    char **bundle_id
+);
+
+/* Default-output volume in [0, 1]. Getters/setters return 1 on success and 0
+ * when no default output device exists or it lacks a volume/mute control
+ * (unsupported state). Callers must surface unsupported as "not available",
+ * never as a fabricated value.
+ */
+int32_t ultravox_macos_bridge_get_output_volume(double *volume);
+int32_t ultravox_macos_bridge_set_output_volume(double volume);
+int32_t ultravox_macos_bridge_get_output_muted(int32_t *muted);
+int32_t ultravox_macos_bridge_set_output_muted(int32_t muted);
+
+/* Optional transport/metadata through MediaRemote, resolved at runtime via
+ * dlopen/dlsym only; nothing is statically linked. Availability may change on
+ * any OS release, so callers must treat absence as a normal state.
+ */
+int32_t ultravox_macos_bridge_media_remote_available(void);
+
+/* Returns 1 and fills the owning PID, title / artist (NULL when absent), plus
+ * *is_playing (1 playing, 0 not playing, -1 unknown); 0 when MediaRemote is
+ * unavailable or the reply did not arrive in time. Caller frees strings.
+ */
+int32_t ultravox_macos_bridge_now_playing(
+    int32_t *process_id,
+    char **title,
+    char **artist,
+    int32_t *is_playing
+);
+
+/* command is "play_pause", "previous", or "next". Returns 1 when sent,
+ * 0 when unavailable or delivery failed, -1 for an unknown command.
+ */
+int32_t ultravox_macos_bridge_media_transport(const char *command);
+
 
 /* Transcribes the audio file at path using FluidAudio / CoreML.
  * Defaults to the English v2 model. On success, writes a malloc-allocated
