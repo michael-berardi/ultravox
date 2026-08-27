@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "UltraVox Light",
+  "identifier": "com.ultravox.light",
+  "version": "0.7.0",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "UltraVox Light",
+        "width": 450,
+        "height": 650,
+        "minWidth": 400,
+        "minHeight": 500,
+        "resizable": true,
+        "center": true,
+        "visible": true,
+        "transparent": true,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 16 },
+        "focus": true
+      }
+    ],
+    "security": { "csp": null, "capabilities": ["default"] },
+    "trayIcon": {
+      "id": "main-tray",
+      "iconPath": "icons/tray-icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": true,
+      "tooltip": "UltraVox Light"
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns"],
+    "copyright": "Copyright © 2026 UltraVox contributors",
+    "category": "Productivity",
+    "macOS": {
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "-"
+    },
+    "shortDescription": "Private on-device transcription",
+    "longDescription": "UltraVox Light provides private real-time audio transcription using downloadable on-device models."
+  }
+}

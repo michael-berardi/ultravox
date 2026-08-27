@@ -1,0 +1,14 @@
+[package]
+name = "ultravox-macos-bridge"
+version = "0.7.0"
+edition = "2021"
+authors = ["UltraVox contributors"]
+license = "MIT"
+description = "macOS-native integration bridge for UltraVox Light"
+repository = "https://github.com/michael-berardi/ultravox-light"
+
+[dependencies]
+libc = "0.2"
+
+[lib]
+crate-type = ["rlib"]

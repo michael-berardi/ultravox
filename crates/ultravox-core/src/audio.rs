@@ -1,0 +1,838 @@
+use async_trait::async_trait;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use thiserror::Error;
+use uuid::Uuid;
+
+/// Errors from the audio recording subsystem.
+#[derive(Debug, Error)]
+pub enum AudioError {
+    #[error("permission denied")]
+    PermissionDenied,
+    #[error("no audio was captured; check that the microphone is selected and not muted")]
+    SilentInput,
+    #[error("device unavailable")]
+    DeviceUnavailable,
+    #[error("recording already in progress")]
+    AlreadyRecording,
+    #[error("not recording")]
+    NotRecording,
+    #[error("audio format error: {0}")]
+    Format(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Configuration for an audio input capture session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioInputConfig {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: SampleFormat,
+    pub device_id: Option<String>,
+}
+
+impl Default for AudioInputConfig {
+    fn default() -> Self {
+        Self {
+            sample_rate: 16_000,
+            channels: 1,
+            sample_format: SampleFormat::I16,
+            device_id: None,
+        }
+    }
+}
+
+/// Audio sample format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SampleFormat {
+    I16,
+    F32,
+}
+
+/// Handle to an active recording session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioRecording {
+    pub id: String,
+    pub output_path: PathBuf,
+    pub start_time_ms: u64,
+    pub duration_ms: Option<u64>,
+}
+
+/// Abstraction over a platform audio recorder.
+#[async_trait]
+pub trait AudioBackend: Send + Sync {
+    /// List available input devices.
+    async fn list_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioError>;
+
+    /// Start recording to the given path with the supplied configuration.
+    async fn start_recording(
+        &mut self,
+        config: AudioInputConfig,
+        output_path: PathBuf,
+    ) -> Result<AudioRecording, AudioError>;
+
+    /// Stop the current recording and return the completed recording metadata.
+    async fn stop_recording(&mut self) -> Result<AudioRecording, AudioError>;
+
+    /// Whether the backend is currently recording.
+    fn is_recording(&self) -> bool;
+}
+
+/// Metadata for a discovered audio input device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// Convert our sample-format enum to a cpal sample format.
+fn cpal_sample_format(format: SampleFormat) -> cpal::SampleFormat {
+    match format {
+        SampleFormat::I16 => cpal::SampleFormat::I16,
+        SampleFormat::F32 => cpal::SampleFormat::F32,
+    }
+}
+
+/// Derive a recording ID from the output path file stem when it is a valid UUID.
+/// Falls back to a freshly generated UUID so callers always get a usable ID.
+fn recording_id_from_output_path(output_path: &PathBuf) -> String {
+    output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::new_v4)
+        .to_string()
+}
+
+/// Mix interleaved multi-channel samples down to mono.
+#[cfg(test)]
+fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return samples.to_vec();
+    }
+    let channels = channels as usize;
+    let mut mono = Vec::with_capacity(samples.len() / channels);
+    for chunk in samples.chunks_exact(channels) {
+        let sum: f32 = chunk.iter().sum();
+        mono.push(sum / channels as f32);
+    }
+    mono
+}
+
+/// Resample a mono signal to the target sample rate using linear interpolation.
+#[cfg(test)]
+fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+    if source_rate == target_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = source_rate as f64 / target_rate as f64;
+    let out_len = (samples.len() as f64 / ratio) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = i as f64 * ratio;
+        let src_idx = src_pos as usize;
+        let frac = (src_pos - src_idx as f64) as f32;
+        let s0 = samples[src_idx];
+        let s1 = samples.get(src_idx + 1).copied().unwrap_or(s0);
+        out.push(s0 + (s1 - s0) * frac);
+    }
+    out
+}
+
+const AUDIO_CHUNK_QUEUE_CAPACITY: usize = 32;
+
+/// Incremental mono linear resampler. It retains only the source frames needed
+/// for the next interpolation point instead of the complete recording.
+struct StreamingResampler {
+    source_rate: u32,
+    target_rate: u32,
+    input_frames: u64,
+    output_frames: u64,
+    buffer_start: u64,
+    buffer: VecDeque<f32>,
+}
+
+impl StreamingResampler {
+    fn new(source_rate: u32, target_rate: u32) -> Result<Self, AudioError> {
+        if source_rate == 0 || target_rate == 0 {
+            return Err(AudioError::Format(
+                "sample rates must be greater than zero".to_string(),
+            ));
+        }
+        Ok(Self {
+            source_rate,
+            target_rate,
+            input_frames: 0,
+            output_frames: 0,
+            buffer_start: 0,
+            buffer: VecDeque::new(),
+        })
+    }
+
+    fn desired_output_frames(&self) -> u64 {
+        ((self.input_frames as u128 * self.target_rate as u128) / self.source_rate as u128)
+            .min(u64::MAX as u128) as u64
+    }
+
+    fn push_interleaved<F>(
+        &mut self,
+        samples: &[f32],
+        channels: u16,
+        mut emit: F,
+    ) -> Result<(), AudioError>
+    where
+        F: FnMut(f32) -> Result<(), AudioError>,
+    {
+        if channels == 0 {
+            return Err(AudioError::Format(
+                "audio input reported zero channels".to_string(),
+            ));
+        }
+        let channels = channels as usize;
+        for frame in samples.chunks_exact(channels) {
+            let mono = frame.iter().copied().sum::<f32>() / channels as f32;
+            self.buffer.push_back(mono);
+            self.input_frames += 1;
+            self.flush_ready(false, &mut emit)?;
+        }
+        Ok(())
+    }
+
+    fn finish<F>(&mut self, mut emit: F) -> Result<(), AudioError>
+    where
+        F: FnMut(f32) -> Result<(), AudioError>,
+    {
+        self.flush_ready(true, &mut emit)
+    }
+
+    fn flush_ready<F>(&mut self, finalizing: bool, emit: &mut F) -> Result<(), AudioError>
+    where
+        F: FnMut(f32) -> Result<(), AudioError>,
+    {
+        let desired = self.desired_output_frames();
+        while self.output_frames < desired {
+            let source_position =
+                self.output_frames as f64 * self.source_rate as f64 / self.target_rate as f64;
+            let source_index = source_position.floor() as u64;
+            let local_index = source_index.saturating_sub(self.buffer_start) as usize;
+            let Some(first) = self.buffer.get(local_index).copied() else {
+                break;
+            };
+            let second = self.buffer.get(local_index + 1).copied();
+            if second.is_none() && !finalizing {
+                break;
+            }
+            let fraction = (source_position - source_index as f64) as f32;
+            let sample = first + (second.unwrap_or(first) - first) * fraction;
+            emit(sample)?;
+            self.output_frames += 1;
+            self.prune_consumed_frames();
+        }
+        Ok(())
+    }
+
+    fn prune_consumed_frames(&mut self) {
+        let next_source_index = (self.output_frames as f64 * self.source_rate as f64
+            / self.target_rate as f64)
+            .floor() as u64;
+        while self.buffer_start < next_source_index && self.buffer.len() > 1 {
+            self.buffer.pop_front();
+            self.buffer_start += 1;
+        }
+    }
+
+    #[cfg(test)]
+    fn buffered_frames(&self) -> usize {
+        self.buffer.len()
+    }
+}
+
+fn queue_audio_chunk(
+    sender: &std::sync::mpsc::SyncSender<Vec<f32>>,
+    chunk: Vec<f32>,
+    overflowed_chunks: &AtomicU32,
+) {
+    if matches!(
+        sender.try_send(chunk),
+        Err(std::sync::mpsc::TrySendError::Full(_))
+    ) {
+        overflowed_chunks.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Compute a normalized microphone level in [0, 1] from interleaved f32 samples.
+///
+/// Samples are mixed down to mono per frame, then converted from RMS to a
+/// decibel meter. The -60 dB floor suppresses room noise while the -3 dB
+/// ceiling leaves normal speech in the visually useful middle of the range.
+fn compute_audio_level(samples: &[f32], channels: u16) -> f32 {
+    if samples.is_empty() || channels == 0 {
+        return 0.0;
+    }
+    let channels = channels as usize;
+    let frames = samples.len() / channels;
+    if frames == 0 {
+        return 0.0;
+    }
+    let mut sum_sq = 0.0f64;
+    for chunk in samples.chunks_exact(channels) {
+        let avg = chunk.iter().map(|sample| *sample as f64).sum::<f64>() / channels as f64;
+        sum_sq += avg * avg;
+    }
+    let rms = (sum_sq / frames as f64).sqrt() as f32;
+
+    const FLOOR_RMS: f32 = 1e-3;
+    const FLOOR_DB: f32 = -60.0;
+    const CEILING_DB: f32 = -3.0;
+    if rms <= FLOOR_RMS {
+        return 0.0;
+    }
+    let decibels = 20.0 * rms.log10();
+    ((decibels - FLOOR_DB) / (CEILING_DB - FLOOR_DB)).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+fn validate_captured_audio(samples: &[f32]) -> Result<(), AudioError> {
+    if samples.is_empty() || samples.iter().all(|sample| sample.abs() < 1e-8) {
+        return Err(AudioError::SilentInput);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+pub struct CpalAudioBackend {
+    recording: Option<CpalRecordingState>,
+    current_level: Arc<AtomicU32>,
+}
+
+impl CpalAudioBackend {
+    /// Create a new cpal-backed audio backend using the default host.
+    pub fn new() -> Self {
+        Self {
+            recording: None,
+            current_level: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    /// Return the current microphone input level as a normalized value in [0, 1].
+    ///
+    /// The value is lock-free and updated from the live CPAL input callback. It
+    /// is reset to 0 at recording lifecycle boundaries and reports 0 when the
+    /// backend is not recording.
+    pub fn current_input_level(&self) -> f32 {
+        if self.recording.is_none() {
+            return 0.0;
+        }
+        f32::from_bits(self.current_level.load(Ordering::Relaxed))
+    }
+
+    fn store_level(&self, value: f32) {
+        self.current_level.store(value.to_bits(), Ordering::Relaxed);
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    /// Runs the full recording lifecycle on a dedicated OS thread so the cpal
+    /// `Stream` (which is `!Send` on macOS CoreAudio) never crosses a thread
+    /// boundary. The caller passes the stop channel receiver and gets back the
+    /// finalized recording metadata (or an error) via a tokio oneshot.
+    fn record_on_thread(
+        config: AudioInputConfig,
+        output_path: PathBuf,
+        id: String,
+        start_time_ms: u64,
+        stop_rx: std::sync::mpsc::Receiver<()>,
+        level_shared: Arc<AtomicU32>,
+    ) -> Result<AudioRecording, AudioError> {
+        let sample_rate = config.sample_rate;
+        let channels = config.channels;
+
+        let host = cpal::default_host();
+        let device = if let Some(device_id) = &config.device_id {
+            let name_target = device_id.strip_prefix("cpal:").unwrap_or(device_id);
+            host.input_devices()
+                .map_err(|_| AudioError::DeviceUnavailable)?
+                .find(|d| d.name().ok().as_deref() == Some(name_target))
+                .ok_or(AudioError::DeviceUnavailable)?
+        } else {
+            host.default_input_device()
+                .ok_or(AudioError::DeviceUnavailable)?
+        };
+
+        let supported_configs = device
+            .supported_input_configs()
+            .map_err(|_| AudioError::DeviceUnavailable)?;
+        let preferred_format = cpal_sample_format(config.sample_format);
+        let mut selected_config = None;
+        for cfg in supported_configs {
+            let supports_rate =
+                cfg.min_sample_rate().0 <= sample_rate && cfg.max_sample_rate().0 >= sample_rate;
+            if cfg.channels() == channels && supports_rate {
+                let candidate = cfg.with_sample_rate(cpal::SampleRate(sample_rate));
+                if candidate.sample_format() == preferred_format {
+                    selected_config = Some(candidate);
+                    break;
+                }
+                if selected_config.is_none() {
+                    selected_config = Some(candidate);
+                }
+            }
+        }
+        let selected_config = selected_config
+            .or_else(|| device.default_input_config().ok())
+            .ok_or(AudioError::DeviceUnavailable)?;
+
+        let actual_sample_rate = selected_config.sample_rate().0;
+        let actual_channels = selected_config.channels();
+
+        let (sample_tx, sample_rx) =
+            std::sync::mpsc::sync_channel::<Vec<f32>>(AUDIO_CHUNK_QUEUE_CAPACITY);
+        let overflowed_chunks = Arc::new(AtomicU32::new(0));
+        let err_fn = |err| eprintln!("audio stream error: {}", err);
+        let sample_tx_clone = sample_tx.clone();
+        let overflowed_chunks_clone = Arc::clone(&overflowed_chunks);
+
+        let stream = match selected_config.sample_format() {
+            cpal::SampleFormat::F32 => {
+                let cfg = selected_config.config();
+                let level_shared = Arc::clone(&level_shared);
+                device.build_input_stream(
+                    &cfg,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        let level = compute_audio_level(data, actual_channels);
+                        level_shared.store(level.to_bits(), Ordering::Relaxed);
+                        queue_audio_chunk(
+                            &sample_tx_clone,
+                            data.to_vec(),
+                            &overflowed_chunks_clone,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                let cfg = selected_config.config();
+                let level_shared = Arc::clone(&level_shared);
+                device.build_input_stream(
+                    &cfg,
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        let chunk: Vec<f32> =
+                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                        let level = compute_audio_level(&chunk, actual_channels);
+                        level_shared.store(level.to_bits(), Ordering::Relaxed);
+                        queue_audio_chunk(&sample_tx_clone, chunk, &overflowed_chunks_clone);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                let cfg = selected_config.config();
+                let level_shared = Arc::clone(&level_shared);
+                device.build_input_stream(
+                    &cfg,
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        let chunk: Vec<f32> = data
+                            .iter()
+                            .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                            .collect();
+                        let level = compute_audio_level(&chunk, actual_channels);
+                        level_shared.store(level.to_bits(), Ordering::Relaxed);
+                        queue_audio_chunk(&sample_tx_clone, chunk, &overflowed_chunks_clone);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            _ => {
+                return Err(AudioError::Format(
+                    "unsupported cpal sample format".to_string(),
+                ))
+            }
+        }
+        .map_err(|e| AudioError::Format(format!("build stream: {e}")))?;
+
+        stream
+            .play()
+            .map_err(|e| AudioError::Format(format!("play stream: {e}")))?;
+
+        // Drop our copy of sample_tx so the only remaining sender is the stream
+        // callback; the receiver can then detect end-of-stream by disconnect.
+        drop(sample_tx);
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&output_path, spec)
+            .map_err(|e| AudioError::Format(format!("wav writer: {e}")))?;
+        let mut resampler = StreamingResampler::new(actual_sample_rate, sample_rate)?;
+        let mut frames = 0u64;
+        let mut max_abs = 0.0f32;
+        let mut process_chunk = |chunk: Vec<f32>| -> Result<(), AudioError> {
+            resampler.push_interleaved(&chunk, actual_channels, |sample| {
+                let sample = sample.clamp(-1.0, 1.0);
+                max_abs = max_abs.max(sample.abs());
+                writer
+                    .write_sample(sample)
+                    .map_err(|_| AudioError::Format("wav write failed".to_string()))?;
+                frames += 1;
+                Ok(())
+            })
+        };
+
+        loop {
+            match stop_rx.try_recv() {
+                Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            match sample_rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                Ok(chunk) => process_chunk(chunk)?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        // Drop the stream first to stop the audio callback and disconnect the
+        // channel sender. Any samples already in flight are delivered before
+        // the sender is dropped, so we can then drain the channel completely.
+        drop(stream);
+        while let Ok(chunk) = sample_rx.try_recv() {
+            process_chunk(chunk)?;
+        }
+        drop(process_chunk);
+        resampler.finish(|sample| {
+            let sample = sample.clamp(-1.0, 1.0);
+            max_abs = max_abs.max(sample.abs());
+            writer
+                .write_sample(sample)
+                .map_err(|_| AudioError::Format("wav write failed".to_string()))?;
+            frames += 1;
+            Ok(())
+        })?;
+
+        // Silence can come from a muted or unavailable input as well as an OS
+        // privacy decision. Permission is checked explicitly before recording,
+        // so never infer it from sample content.
+        if frames == 0 || max_abs < 1e-8 {
+            return Err(AudioError::SilentInput);
+        }
+        let dropped = overflowed_chunks.load(Ordering::Relaxed);
+        if dropped > 0 {
+            return Err(AudioError::Format(format!(
+                "audio capture buffer overflowed; dropped {dropped} chunks"
+            )));
+        }
+        writer
+            .finalize()
+            .map_err(|e| AudioError::Format(format!("wav finalize: {e}")))?;
+
+        let duration_ms = frames * 1000 / sample_rate.max(1) as u64;
+
+        Ok(AudioRecording {
+            id,
+            output_path,
+            start_time_ms,
+            duration_ms: Some(duration_ms),
+        })
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CpalRecordingState {
+    id: String,
+    output_path: PathBuf,
+    start_time_ms: u64,
+    stop_tx: std::sync::mpsc::Sender<()>,
+    handle: tokio::task::JoinHandle<Result<AudioRecording, AudioError>>,
+}
+
+#[async_trait]
+impl AudioBackend for CpalAudioBackend {
+    async fn list_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioError> {
+        let host = cpal::default_host();
+        let mut devices = Vec::new();
+        let default = host.default_input_device();
+        let Ok(list) = host.input_devices() else {
+            return Ok(vec![AudioDeviceInfo {
+                id: "default".to_string(),
+                name: "System Default".to_string(),
+                is_default: true,
+            }]);
+        };
+        for device in list {
+            let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+            let id = format!("cpal:{}", name);
+            let is_default = default.as_ref().and_then(|d| d.name().ok()).as_ref() == Some(&name);
+            devices.push(AudioDeviceInfo {
+                id,
+                name,
+                is_default,
+            });
+        }
+        if devices.is_empty() {
+            devices.push(AudioDeviceInfo {
+                id: "default".to_string(),
+                name: "System Default".to_string(),
+                is_default: true,
+            });
+        }
+        Ok(devices)
+    }
+
+    async fn start_recording(
+        &mut self,
+        config: AudioInputConfig,
+        output_path: PathBuf,
+    ) -> Result<AudioRecording, AudioError> {
+        if self.recording.is_some() {
+            return Err(AudioError::AlreadyRecording);
+        }
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let id = recording_id_from_output_path(&output_path);
+        let start_time_ms = Self::now_ms();
+        self.store_level(0.0);
+        let level_shared = Arc::clone(&self.current_level);
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let output_path_clone = output_path.clone();
+        let id_for_thread = id.clone();
+        let (result_tx, result_rx) =
+            tokio::sync::oneshot::channel::<Result<AudioRecording, AudioError>>();
+
+        // The cpal Stream is not Send on macOS CoreAudio, so device setup, stream
+        // creation, sample collection, and WAV writing all happen on a dedicated
+        // OS thread. Communication back to the async caller uses tokio oneshot.
+        std::thread::spawn(move || {
+            let result = Self::record_on_thread(
+                config,
+                output_path_clone,
+                id_for_thread,
+                start_time_ms,
+                stop_rx,
+                level_shared,
+            );
+            let _ = result_tx.send(result);
+        });
+
+        let handle: tokio::task::JoinHandle<Result<AudioRecording, AudioError>> =
+            tokio::spawn(async move {
+                result_rx.await.unwrap_or_else(|_| {
+                    Err(AudioError::Format(
+                        "recorder thread dropped result".to_string(),
+                    ))
+                })
+            });
+
+        self.recording = Some(CpalRecordingState {
+            id: id.clone(),
+            output_path: output_path.clone(),
+            start_time_ms,
+            stop_tx,
+            handle,
+        });
+
+        Ok(AudioRecording {
+            id,
+            output_path,
+            start_time_ms,
+            duration_ms: None,
+        })
+    }
+
+    async fn stop_recording(&mut self) -> Result<AudioRecording, AudioError> {
+        let state = self.recording.take().ok_or(AudioError::NotRecording)?;
+        let _ = state.stop_tx.send(());
+        let result = state
+            .handle
+            .await
+            .map_err(|e| AudioError::Format(format!("recorder task: {e}")))??;
+        self.store_level(0.0);
+
+        let metadata = std::fs::metadata(&result.output_path)?;
+        if metadata.len() == 0 {
+            return Err(AudioError::Format("recorded WAV file is empty".to_string()));
+        }
+        if let Some(duration_ms) = result.duration_ms {
+            if duration_ms < 100 {
+                return Err(AudioError::Format(
+                    "recording too short (less than 100ms)".to_string(),
+                ));
+            }
+        }
+        Ok(result)
+    }
+
+    fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+}
+
+/// Sample rate of WAV files produced by media imports, matching recorded audio.
+pub const IMPORT_SAMPLE_RATE: u32 = 16_000;
+
+/// Maximum size of a media file accepted for import (2 GB, matching the URL
+/// download limit).
+pub const IMPORT_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Build the codec registry used for media imports: all enabled Symphonia
+/// codecs plus the libopus-backed Opus decoder (WhatsApp voice notes, WebM).
+fn import_codec_registry() -> symphonia::core::codecs::registry::CodecRegistry {
+    let mut registry = symphonia::core::codecs::registry::CodecRegistry::new();
+    symphonia::default::register_enabled_codecs(&mut registry);
+    registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
+    registry
+}
+
+/// Decode a media file (wav, mp3, m4a/aac, flac, ogg, opus, webm, mp4 audio,
+/// aiff, caf, alac, …) into a 16 kHz mono f32 WAV at `dest`, returning the
+/// decoded duration in milliseconds. On failure, any partial `dest` file is
+/// removed.
+pub fn decode_media_file_to_wav(
+    source: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<u64, AudioError> {
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+
+    let result = (|| {
+        let file = std::fs::File::open(source)?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(extension) = source.extension().and_then(|ext| ext.to_str()) {
+            hint.with_extension(extension);
+        }
+        let mut format = symphonia::default::get_probe()
+            .probe(
+                &hint,
+                mss,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .map_err(|e| {
+                AudioError::Format(format!("unsupported or unreadable media file: {e}"))
+            })?;
+        let track = format
+            .default_track(TrackType::Audio)
+            .ok_or_else(|| AudioError::Format("media file has no audio track".to_string()))?;
+        let track_id = track.id;
+        let codec_params = track
+            .codec_params
+            .as_ref()
+            .ok_or_else(|| AudioError::Format("audio track is missing codec parameters".into()))?
+            .audio()
+            .ok_or_else(|| AudioError::Format("track is not a supported audio codec".into()))?;
+        let source_rate = codec_params
+            .sample_rate
+            .ok_or_else(|| AudioError::Format("audio track has no sample rate".to_string()))?;
+        let channels = codec_params
+            .channels
+            .as_ref()
+            .map(|c| c.count() as u16)
+            .filter(|c| *c > 0)
+            .ok_or_else(|| AudioError::Format("audio track has no channels".to_string()))?;
+        let mut decoder = import_codec_registry()
+            .make_audio_decoder(codec_params, &AudioDecoderOptions::default())
+            .map_err(|e| AudioError::Format(format!("no decoder for this audio codec: {e}")))?;
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: IMPORT_SAMPLE_RATE,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(dest, spec)
+            .map_err(|e| AudioError::Format(format!("wav writer: {e}")))?;
+        let mut resampler = StreamingResampler::new(source_rate, IMPORT_SAMPLE_RATE)?;
+        let mut frames = 0u64;
+        let mut interleaved: Vec<f32> = Vec::new();
+
+        loop {
+            let packet = match format.next_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) => break,
+                Err(SymphoniaError::ResetRequired) => {
+                    return Err(AudioError::Format(
+                        "chained audio streams are not supported".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    return Err(AudioError::Format(format!("could not read media: {e}")));
+                }
+            };
+            if packet.track_id != track_id {
+                continue;
+            }
+            let decoded = match decoder.decode_ref(&packet.as_packet_ref()) {
+                Ok(decoded) => decoded,
+                Err(SymphoniaError::IoError(_) | SymphoniaError::DecodeError(_)) => continue,
+                Err(e) => {
+                    return Err(AudioError::Format(format!("audio decode failed: {e}")));
+                }
+            };
+            if decoded.frames() == 0 {
+                continue;
+            }
+            let spec = decoded.spec();
+            if spec.rate() != source_rate || spec.channels().count() as u16 != channels {
+                return Err(AudioError::Format(
+                    "media file changes audio format mid-stream".to_string(),
+                ));
+            }
+            interleaved.clear();
+            decoded.copy_to_vec_interleaved(&mut interleaved);
+            resampler.push_interleaved(&interleaved, channels, |sample| {
+                writer
+                    .write_sample(sample.clamp(-1.0, 1.0))
+                    .map_err(|_| AudioError::Format("wav write failed".to_string()))?;
+                frames += 1;
+                Ok(())
+            })?;
+        }
+
+        resampler.finish(|sample| {
+            writer
+                .write_sample(sample.clamp(-1.0, 1.0))
+                .map_err(|_| AudioError::Format("wav write failed".to_string()))?;
+            frames += 1;
+            Ok(())
+        })?;
+        writer
+            .finalize()
+            .map_err(|e| AudioError::Format(format!("wav finalize: {e}")))?;
+        if frames == 0 {
+            return Err(AudioError::Format(
+                "media file decoded to no audio samples".to_string(),
+            ));
+        }
+        Ok(frames.saturating_mul(1_000) / IMPORT_SAMPLE_RATE as u64)
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    result
+}
+

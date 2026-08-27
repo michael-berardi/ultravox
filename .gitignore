@@ -1,0 +1,48 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Local configuration and editors
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.cursorrules
+
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.rlib
+*.rmeta
+
+# SwiftPM / Xcode-generated state
+.build/
+SourcePackages/
+xcuserdata/
+*.dSYM
+*.dSYM.zip
+
+# Node / pnpm
+node_modules/
+dist/
+.pnpm-store/
+*-debug.log*
+
+# Builds and release artifacts
+build/
+release/
+*.app
+*.app.tar.gz
+*.dmg
+*.pkg
+*.profraw
+
+# Test and tool caches
+.coverage
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.py[cod]

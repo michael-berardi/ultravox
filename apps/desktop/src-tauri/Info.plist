@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>UltraVox Light</string>
+  <key>CFBundleName</key>
+  <string>UltraVox Light</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>UltraVox Light needs microphone access to transcribe your speech.</string>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>UltraVox Light uses accessibility access to integrate with system text fields.</string>
+</dict>
+</plist>

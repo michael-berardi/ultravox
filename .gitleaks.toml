@@ -1,0 +1,23 @@
+# Gitleaks allowlist for UltraVox.
+#
+# Everything listed here was reviewed by the release audit (2026-08-26):
+# - target/          cargo build artifacts (gitignored, scanned by accident)
+# - asian-autocorrect/  vendored upstream library; hits are its own test
+#                       fixtures and bundled yarn runtime, not LDS secrets
+# - crates/ultravox-macos-bridge/native/**/checkouts  upstream FluidAudio
+#                       checkout documentation examples
+#
+# If any real credential ever appears here, rotate it first; never add it
+# to this file.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Build output and vendored upstream sources"
+paths = [
+  '''(^|/)target/''',
+  '''(^|/)asian-autocorrect/''',
+  '''crates/ultravox-macos-bridge/native/.*/\.build/''',
+  '''(^|/)\.build/checkouts/''',
+]

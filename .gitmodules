@@ -1,0 +1,3 @@
+[submodule "asian-autocorrect"]
+	path = asian-autocorrect
+	url = https://github.com/huacnlee/autocorrect
