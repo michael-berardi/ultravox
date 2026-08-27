@@ -6,7 +6,7 @@ use arboard::Clipboard;
 use chrono::Utc;
 use ultravox_core::{
     AudioBackend, ConfigManager, CpalAudioBackend, DownloadManager, DownloadState, ModelCatalog,
-    ModelDownload, RecordingHistory, RecordingRow, RecordingStatus,
+    ModelDownload, RecordingHistory, RecordingRow, RecordingStatus, ShortcutSettings,
 };
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
