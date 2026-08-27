@@ -91,9 +91,22 @@ async fn download(url: &str, target: &Path) -> Result<(), String> {
     let bytes = client(DOWNLOAD_TIMEOUT)?.get(url).send().await.map_err(|e| format!("download failed: {e}"))?.error_for_status().map_err(|e| format!("download failed: {e}"))?.bytes().await.map_err(|e| format!("download failed: {e}"))?;
     fs::write(target, &bytes).map_err(|e| format!("failed to write {}: {e}", target.display()))
 }
+fn command_output(program: &str, args: &[&str], action: &str) -> Result<String, String> {
+    let output = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to {action}: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to {action}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 fn command(program: &str, args: &[&str], action: &str) -> Result<(), String> {
-    let output = Command::new(program).args(args).stdin(Stdio::null()).output().map_err(|e| format!("failed to {action}: {e}"))?;
-    if output.status.success() { Ok(()) } else { Err(format!("failed to {action}: {}", String::from_utf8_lossy(&output.stderr).trim())) }
+    command_output(program, args, action).map(|_| ())
 }
 fn verify_checksum(artifact: &Path, checksum: &Path) -> Result<(), String> {
     let expected = fs::read_to_string(checksum).map_err(|e| e.to_string())?.split_whitespace().next().unwrap_or_default().to_ascii_lowercase();
@@ -127,8 +140,14 @@ fn install_macos(app: &AppHandle, artifact: &Path, staging: &Path, version: &str
     let candidate = find_bundle(&unpacked).ok_or("public update archive did not contain UltraVox Light.app")?;
     let info = candidate.join("Contents/Info.plist");
     let info_arg = info.to_string_lossy();
-    command("/usr/libexec/PlistBuddy", &["-c", "Print :CFBundleIdentifier", info_arg.as_ref()], "inspect the public update")?;
-    let _ = version;
+    let identifier = command_output("/usr/libexec/PlistBuddy", &["-c", "Print :CFBundleIdentifier", info_arg.as_ref()], "inspect the public update identifier")?;
+    if identifier != "com.ultravox.light" {
+        return Err("public update bundle identifier does not match UltraVox Light".to_string());
+    }
+    let candidate_version = command_output("/usr/libexec/PlistBuddy", &["-c", "Print :CFBundleShortVersionString", info_arg.as_ref()], "inspect the public update version")?;
+    if candidate_version != version {
+        return Err("public update bundle version does not match the checked release".to_string());
+    }
     let current = std::env::current_exe().map_err(|e| e.to_string())?;
     let target = current.ancestors().find(|path| path.extension().is_some_and(|e| e == "app")).ok_or("updates require an installed app bundle")?.to_path_buf();
     let backup = target.with_file_name(format!(".UltraVox-Light.previous-{}.app", process::id()));

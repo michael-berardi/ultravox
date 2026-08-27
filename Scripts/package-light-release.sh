@@ -21,6 +21,7 @@ echo "==> Building UltraVox ${VERSION} Light (${PLATFORM})"
 cd "${ROOT_DIR}/apps/desktop"
 pnpm install --frozen-lockfile
 pnpm tauri:build
+cargo build --release --no-default-features --features cli,custom-protocol --bin ultravox-control
 
 mkdir -p "${OUTPUT_DIR}"
 rm -f "${OUTPUT_DIR}/${PREFIX}".*
