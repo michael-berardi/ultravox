@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
   setSettings,
   getSettings,
@@ -23,10 +24,11 @@ import {
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { THEMES } from "../themes";
 import { BrandMark, startHeaderDrag } from "../components/BrandMark";
-type TabId = "shortcut" | "model" | "transcription" | "privacy" | "appearance";
+export type SettingsTab = "shortcut" | "model" | "transcription" | "privacy" | "appearance" | "support";
 
 interface SettingsPageProps {
   initialConfig: AppConfig;
+  initialTab?: SettingsTab;
   onClose: () => void;
 }
 
@@ -54,14 +56,15 @@ function normalizeModifier(value: string): ModifierKey {
 }
 
 
-export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("shortcut");
+export function SettingsPage({ initialConfig, initialTab = "shortcut", onClose }: SettingsPageProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [config, setConfig] = useState<AppConfig>(initialConfig);
   const [error, setError] = useState<string | null>(null);
   const configRef = useRef(initialConfig);
   const pendingConfigRef = useRef<AppConfig | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
+  useEffect(() => setActiveTab(initialTab), [initialTab]);
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
@@ -161,6 +164,7 @@ export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
         <TabButton id="transcription" label="Transcription" active={activeTab} onClick={setActiveTab} />
         <TabButton id="privacy" label="Privacy" active={activeTab} onClick={setActiveTab} />
         <TabButton id="appearance" label="Appearance" active={activeTab} onClick={setActiveTab} />
+        <TabButton id="support" label="Support" active={activeTab} onClick={setActiveTab} />
       </div>
       {error && <div className="settings-error" role="alert">{error}</div>}
 
@@ -170,6 +174,7 @@ export function SettingsPage({ initialConfig, onClose }: SettingsPageProps) {
         {activeTab === "transcription" && <TranscriptionSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "privacy" && <PrivacySettings config={cfg} onChange={updateConfig} />}
         {activeTab === "appearance" && <AppearanceSettings config={cfg} onChange={updateConfig} />}
+        {activeTab === "support" && <SupportSettings />}
       </div>
 
     </div>
@@ -182,10 +187,10 @@ function TabButton({
   active,
   onClick,
 }: {
-  id: TabId;
+  id: SettingsTab;
   label: string;
-  active: TabId;
-  onClick: (id: TabId) => void;
+  active: SettingsTab;
+  onClick: (id: SettingsTab) => void;
 }) {
   const isActive = active === id;
   return (
@@ -230,15 +235,15 @@ function keyNameFromKeyboardEvent(event: KeyboardEvent): string | null {
   }
 }
 
-function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+function shortcutFromKeyboardEvent(event: KeyboardEvent, allowBareSpace = false): string | null {
   const modifiers = [
     event.metaKey ? "Command" : null,
     event.altKey ? "Option" : null,
     event.ctrlKey ? "Control" : null,
     event.shiftKey ? "Shift" : null,
   ].filter((modifier): modifier is string => modifier !== null);
+  if (modifiers.length === 0 && allowBareSpace && event.code === "Space") return "Space";
   if (modifiers.length !== 1) return null;
-
   const key = keyNameFromKeyboardEvent(event);
   return key ? `${modifiers[0]}+${key}` : null;
 }
@@ -278,9 +283,11 @@ function ShortcutSettings({
         setCaptureMessage("Esc to cancel");
         return;
       }
-      const shortcut = shortcutFromKeyboardEvent(event);
+      const shortcut = shortcutFromKeyboardEvent(event, config.hold_to_record);
       if (!shortcut) {
-        if (!["MetaLeft", "MetaRight", "AltLeft", "AltRight", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
+        if (event.code === "Space" && !config.hold_to_record) {
+          setCaptureMessage("Turn on Hold shortcut to use Space alone");
+        } else if (!["MetaLeft", "MetaRight", "AltLeft", "AltRight", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
           setCaptureMessage("Use one modifier and one supported key");
         }
         return;
@@ -291,7 +298,7 @@ function ShortcutSettings({
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [capturing, onChange]);
+  }, [capturing, config.hold_to_record, onChange]);
 
   return (
     <div className="settings-group" role="tabpanel" id="panel-shortcut" aria-labelledby="tab-shortcut">
@@ -302,7 +309,7 @@ function ShortcutSettings({
             <p>Changes take effect as soon as you choose them.</p>
           </div>
         </div>
-        <SettingsRow label="Keyboard shortcut" description="Use one modifier with a letter, number, backtick, Space, or Return.">
+        <SettingsRow label="Keyboard shortcut" description="Use one modifier with a supported key, or turn on Hold shortcut to use Space alone.">
           <button
             type="button"
             className={`shortcut-capture${capturing === "recording" ? " is-capturing" : ""}`}
@@ -365,9 +372,7 @@ function ModelSettings({ config, onChange }: SettingsSectionProps) {
     async function load() {
       try {
         const modelCatalog = await getModelCatalog();
-        const visibleCatalog = ["fluidaudio-en-v2", "fluidaudio-multilingual-v3"]
-          .map((id) => modelCatalog.models.find((model) => model.id === id))
-          .filter((model): model is ModelEntry => model !== undefined);
+        const visibleCatalog = modelCatalog.models;
         const statuses = Object.fromEntries(
           await Promise.all(
             visibleCatalog.map(async (model) => [
@@ -436,22 +441,23 @@ function ModelSettings({ config, onChange }: SettingsSectionProps) {
   }, [preparing]);
 
   const mode: "english" | "multilingual" =
-    config.selected_engine === "fluidaudio" && config.fluid_audio_model_version === "v3"
-      ? "multilingual"
-      : "english";
-  const selectedModelId =
-    mode === "english" ? "fluidaudio-en-v2" : "fluidaudio-multilingual-v3";
+    config.model_language === "multilingual" ? "multilingual" : "english";
+  const selectedModelId = catalog.find((model) =>
+    model.id.includes(mode === "multilingual" ? "multilingual" : "-en"),
+  )?.id;
 
   const setMode = (next: "english" | "multilingual") => {
+    const usesWhisper = catalog.some((model) => model.family === "whisper");
     onChange({
-      selected_engine: "fluidaudio",
+      selected_engine: usesWhisper ? "whisper" : "fluidaudio",
       fluid_audio_model_version: next === "english" ? "v2" : "v3",
+      whisper_language: next === "english" ? "en" : "auto",
       model_language: next,
     });
   };
 
   const onDownload = async (model: ModelEntry) => {
-    const modelMode = model.id === "fluidaudio-multilingual-v3" ? "multilingual" : "english";
+    const modelMode = model.id.includes("multilingual") ? "multilingual" : "english";
     setMode(modelMode);
     setModelError(null);
     setProgress((current) => ({ ...current, [model.id]: 0 }));
@@ -506,7 +512,7 @@ function ModelSettings({ config, onChange }: SettingsSectionProps) {
           <div className="model-option-list" role="radiogroup" aria-label="Transcription model">
             {catalog.map((model) => {
               const modelMode =
-                model.id === "fluidaudio-multilingual-v3" ? "multilingual" : "english";
+                model.id.includes("multilingual") ? "multilingual" : "english";
               const title = modelMode === "english" ? "English" : "Multilingual";
               const isSelected = model.id === selectedModelId;
               const isDownloaded = downloaded[model.id];
@@ -755,6 +761,52 @@ function AppearanceSettings({ config, onChange }: SettingsSectionProps) {
     <div className="settings-card"><div className="settings-card-heading"><h3>Theme</h3></div><ul className="theme-grid">{THEMES.map(theme => <li key={theme.id}><button type="button" className={`theme-card ${config.theme === theme.id ? "selected" : ""}`} onClick={() => onChange({ theme: theme.id })} aria-pressed={config.theme === theme.id}><span className="theme-card-preview" style={{ background: `linear-gradient(135deg, ${theme.swatch[1]}, ${theme.swatch[2]}) bottom / 100% 12px no-repeat, ${theme.swatch[0]}` }} /><span className="theme-card-name">{theme.name}</span><span className="theme-card-tagline">{theme.tagline}</span></button></li>)}</ul></div>
     <div className="settings-card"><div className="settings-card-heading"><h3>Recording meter</h3></div><ToggleRow label="Reactive microphone meter" description="Show the live microphone level while recording." checked={config.reactive_visuals_enabled} onChange={checked => onChange({ reactive_visuals_enabled: checked })} /></div>
   </div>;
+}
+
+const STORE_URL = "https://implosecybernetics.com/software/?product=ultravox";
+
+async function openStorefront(): Promise<void> {
+  try {
+    await openExternal(STORE_URL);
+  } catch {
+    window.open(STORE_URL, "_blank");
+  }
+}
+
+function SupportSettings() {
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-support" aria-labelledby="tab-support">
+      <section className="settings-card support-mission">
+        <span className="eyebrow">Sustainable independent software</span>
+        <h3>Help keep UltraVox maintained</h3>
+        <p>
+          UltraVox Light is free and open source. A one-time Pro license directly funds
+          code signing, Windows and Linux packaging, compatibility work, support, and
+          continued improvements to both editions.
+        </p>
+        <p>
+          Light stays fully usable whether you upgrade or not. Pro is the practical way
+          to support long-term development if UltraVox saves you time.
+        </p>
+        <button type="button" className="btn btn-primary" onClick={() => void openStorefront()}>
+          Get a Pro license — $25
+        </button>
+        <span className="description">One-time purchase · perpetual license · updates included</span>
+      </section>
+      <section className="settings-card">
+        <div className="settings-card-heading">
+          <h3>What Pro adds</h3>
+          <p>The extras are secondary to keeping the project healthy.</p>
+        </div>
+        <ul className="support-perks">
+          <li>Meeting mode for mixed system and microphone audio, plus system-only Lecture mode</li>
+          <li>The complete signature theme collection</li>
+          <li>The now-playing media console with live transport and spectrum</li>
+          <li>Authenticated releases through the Implose distribution channel</li>
+        </ul>
+      </section>
+    </div>
+  );
 }
 
 function CloseIcon() {

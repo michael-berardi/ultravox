@@ -53,35 +53,62 @@ pub struct ModelCatalog {
 
 impl Default for ModelCatalog {
     fn default() -> Self {
-        Self {
-            models: vec![
-                ModelEntry {
-                    id: "fluidaudio-en-v2".to_string(),
-                    family: ModelFamily::FluidAudio,
-                    version: ModelVersion::V2,
-                    name: "English (Parakeet v2)".to_string(),
-                    description: "Optimized English transcription model (default).".to_string(),
-                    url: "https://huggingface.co/fluidaudio/asr-en-v2/resolve/main/model.bin"
-                        .to_string(),
-                    filename: "fluidaudio-en-v2.bin".to_string(),
-                    size_bytes: Some(464_470_016),
-                    is_default: true,
-                },
-                ModelEntry {
-                    id: "fluidaudio-multilingual-v3".to_string(),
-                    family: ModelFamily::FluidAudio,
-                    version: ModelVersion::V3,
-                    name: "Multilingual (Parakeet v3)".to_string(),
-                    description: "Multilingual transcription model supporting 100+ languages."
-                        .to_string(),
-                    url: "https://huggingface.co/fluidaudio/asr-multilingual-v3/resolve/main/model.bin"
-                        .to_string(),
-                    filename: "fluidaudio-multilingual-v3.bin".to_string(),
-                    size_bytes: Some(483_311_616),
-                    is_default: false,
-                },
-            ],
-        }
+        #[cfg(target_os = "macos")]
+        let models = vec![
+            ModelEntry {
+                id: "fluidaudio-en-v2".to_string(),
+                family: ModelFamily::FluidAudio,
+                version: ModelVersion::V2,
+                name: "English (Parakeet v2)".to_string(),
+                description: "Optimized English transcription model (default).".to_string(),
+                url: "https://huggingface.co/fluidaudio/asr-en-v2/resolve/main/model.bin"
+                    .to_string(),
+                filename: "fluidaudio-en-v2.bin".to_string(),
+                size_bytes: Some(464_470_016),
+                is_default: true,
+            },
+            ModelEntry {
+                id: "fluidaudio-multilingual-v3".to_string(),
+                family: ModelFamily::FluidAudio,
+                version: ModelVersion::V3,
+                name: "Multilingual (Parakeet v3)".to_string(),
+                description: "Multilingual transcription model supporting 100+ languages."
+                    .to_string(),
+                url: "https://huggingface.co/fluidaudio/asr-multilingual-v3/resolve/main/model.bin"
+                    .to_string(),
+                filename: "fluidaudio-multilingual-v3.bin".to_string(),
+                size_bytes: Some(483_311_616),
+                is_default: false,
+            },
+        ];
+        #[cfg(not(target_os = "macos"))]
+        let models = vec![
+            ModelEntry {
+                id: "whisper-base-en".to_string(),
+                family: ModelFamily::Whisper,
+                version: ModelVersion::V2,
+                name: "English (Whisper base.en)".to_string(),
+                description: "Fast English transcription for Windows and Linux.".to_string(),
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+                    .to_string(),
+                filename: "ggml-base.en.bin".to_string(),
+                size_bytes: Some(147_964_211),
+                is_default: true,
+            },
+            ModelEntry {
+                id: "whisper-base-multilingual".to_string(),
+                family: ModelFamily::Whisper,
+                version: ModelVersion::V2,
+                name: "Multilingual (Whisper base)".to_string(),
+                description: "Multilingual transcription for Windows and Linux.".to_string(),
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+                    .to_string(),
+                filename: "ggml-base.bin".to_string(),
+                size_bytes: Some(147_951_465),
+                is_default: false,
+            },
+        ];
+        Self { models }
     }
 }
 

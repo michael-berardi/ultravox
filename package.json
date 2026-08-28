@@ -1,11 +1,10 @@
 {
   "name": "ultravox-light",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Private, on-device transcription for UltraVox Light",
   "scripts": {
     "desktop:dev": "pnpm --filter ultravox-desktop tauri:dev",
-    "desktop:qa:headless": "pnpm --filter ultravox-desktop qa:headless",
     "desktop:build": "pnpm --filter ultravox-desktop tauri:build",
     "desktop:check": "pnpm --filter ultravox-desktop check",
     "desktop:tauri:check": "pnpm --filter ultravox-desktop tauri check",

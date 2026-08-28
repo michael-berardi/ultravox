@@ -15,15 +15,16 @@ use ultravox_core::{
 
 #[cfg(target_os = "macos")]
 use ultravox_macos_bridge as bridge;
+#[cfg(not(target_os = "macos"))]
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use crate::events::{
-    IndicatorHidePayload, IndicatorShowPayload,
-    RecordingAddedPayload, RecordingDeletedPayload, RecordingStartedPayload,
-    RecordingStoppedPayload, SettingsChangedPayload, TranscriptionCompletedPayload,
-    TranscriptionProgressPayload, UrlImportProgressPayload, INDICATOR_HIDE, INDICATOR_SHOW,
-    RECORDING_ADDED, RECORDING_DELETED,
-    RECORDING_STARTED, RECORDING_STOPPED, SETTINGS_CHANGED, SHORTCUT_TRIGGERED,
-    TRANSCRIPTION_COMPLETED, TRANSCRIPTION_PROGRESS, URL_IMPORT_PROGRESS,
+    IndicatorHidePayload, IndicatorShowPayload, RecordingAddedPayload, RecordingDeletedPayload,
+    RecordingStartedPayload, RecordingStoppedPayload, SettingsChangedPayload,
+    TranscriptionCompletedPayload, TranscriptionProgressPayload, UrlImportProgressPayload,
+    INDICATOR_HIDE, INDICATOR_SHOW, RECORDING_ADDED, RECORDING_DELETED, RECORDING_STARTED,
+    RECORDING_STOPPED, SETTINGS_CHANGED, SHORTCUT_TRIGGERED, TRANSCRIPTION_COMPLETED,
+    TRANSCRIPTION_PROGRESS, URL_IMPORT_PROGRESS,
 };
 
 /// A live recording session tracked by the desktop shell.
@@ -108,6 +109,140 @@ fn fallback_row(
     row.refresh_display();
     row
 }
+#[cfg(not(target_os = "macos"))]
+struct WhisperOptions {
+    language: String,
+    translate: bool,
+    suppress_blank: bool,
+    show_timestamps: bool,
+    temperature: f32,
+    no_speech_threshold: f32,
+    initial_prompt: String,
+    use_beam_search: bool,
+    beam_size: i32,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn transcribe_with_whisper(
+    audio_path: &std::path::Path,
+    model_path: &std::path::Path,
+    options: WhisperOptions,
+) -> Result<String, String> {
+    if !model_path.is_file() {
+        return Err(format!(
+            "Whisper model is not downloaded: {}",
+            model_path.display()
+        ));
+    }
+    let mut reader = hound::WavReader::open(audio_path)
+        .map_err(|error| format!("failed to read recorded audio: {error}"))?;
+    let spec = reader.spec();
+    if spec.channels != 1 || spec.sample_rate != 16_000 {
+        return Err(format!(
+            "Whisper requires 16 kHz mono WAV input; received {} Hz / {} channels",
+            spec.sample_rate, spec.channels
+        ));
+    }
+    let samples = match (spec.sample_format, spec.bits_per_sample) {
+        (hound::SampleFormat::Int, 16) => reader
+            .samples::<i16>()
+            .map(|sample| {
+                sample
+                    .map(|value| value as f32 / i16::MAX as f32)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        (hound::SampleFormat::Float, 32) => reader
+            .samples::<f32>()
+            .map(|sample| sample.map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => {
+            return Err(format!(
+                "Whisper requires 16-bit PCM or 32-bit float WAV input; received {}-bit {:?}",
+                spec.bits_per_sample, spec.sample_format
+            ))
+        }
+    };
+    let context = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        .map_err(|error| format!("failed to load Whisper model: {error}"))?;
+    let mut state = context
+        .create_state()
+        .map_err(|error| format!("failed to initialize Whisper: {error}"))?;
+    let strategy = if options.use_beam_search {
+        SamplingStrategy::BeamSearch {
+            beam_size: options.beam_size.max(1),
+            patience: -1.0,
+        }
+    } else {
+        SamplingStrategy::Greedy { best_of: 1 }
+    };
+    let mut params = FullParams::new(strategy);
+    params.set_n_threads(
+        std::thread::available_parallelism()
+            .map(|threads| threads.get().min(8) as i32)
+            .unwrap_or(4),
+    );
+    params.set_translate(options.translate);
+    params.set_suppress_blank(options.suppress_blank);
+    params.set_no_timestamps(!options.show_timestamps);
+    params.set_temperature(options.temperature);
+    params.set_no_speech_thold(options.no_speech_threshold);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    let detect_language = options.language.is_empty() || options.language == "auto";
+    params.set_language((!detect_language).then_some(options.language.as_str()));
+    params.set_detect_language(detect_language);
+    if !options.initial_prompt.is_empty() {
+        params.set_initial_prompt(&options.initial_prompt);
+    }
+    state
+        .full(params, &samples)
+        .map_err(|error| format!("Whisper transcription failed: {error}"))?;
+    let mut text = String::new();
+    for segment in state.as_iter() {
+        text.push_str(
+            &segment
+                .to_str_lossy()
+                .map_err(|error| format!("failed to read Whisper output: {error}"))?,
+        );
+    }
+    Ok(text.trim().to_string())
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod whisper_integration_test {
+    #[test]
+    #[ignore = "requires ULTRAVOX_TEST_WHISPER_MODEL"]
+    fn transcribes_the_real_jfk_fixture() {
+        let model = std::env::var("ULTRAVOX_TEST_WHISPER_MODEL")
+            .expect("ULTRAVOX_TEST_WHISPER_MODEL must point to ggml-base.en.bin");
+        let audio = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../test/fixtures/jfk-short.wav");
+        let text = super::transcribe_with_whisper(
+            &audio,
+            std::path::Path::new(&model),
+            super::WhisperOptions {
+                language: "en".to_string(),
+                translate: false,
+                suppress_blank: true,
+                show_timestamps: false,
+                temperature: 0.0,
+                no_speech_threshold: 0.6,
+                initial_prompt: String::new(),
+                use_beam_search: false,
+                beam_size: 5,
+            },
+        )
+        .unwrap()
+        .to_ascii_lowercase();
+        assert!(
+            text.contains("fellow") && text.contains("americans"),
+            "{text}"
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 struct NativeIndicatorGuard;
 
@@ -118,7 +253,6 @@ impl Drop for NativeIndicatorGuard {
         bridge::hide_indicator();
     }
 }
-
 
 impl AppState {
     /// Initialize the state from the Tauri app handle.
@@ -867,20 +1001,45 @@ impl AppState {
         }
         self.emit_transcription_progress(&visible_id, 0.1, "transcribing")?;
 
-        // Transcribe on a blocking thread so a native engine (FluidAudio/CoreML)
-        // does not block the async runtime. Use the configured FluidAudio model
-        // version so multilingual v3 recordings are transcribed with v3. Pass the
-        // recording identity so the native engine can cancel this specific job
-        // without touching other work.
-        let path = audio_path.to_string_lossy().to_string();
-        let (fluid_version, models_directory) = {
+        // Native engines are CPU-bound, so keep them off the async runtime.
+        #[cfg(target_os = "macos")]
+        let (path, fluid_version, models_directory, recording_id_for_task) = {
             let cfg = self.config.lock().map_err(|e| e.to_string())?;
             (
+                audio_path.to_string_lossy().to_string(),
                 cfg.get().fluid_audio_model_version.clone(),
                 cfg.get().models_directory.clone(),
+                id.to_string(),
             )
         };
-        let recording_id_for_task = id.to_string();
+        #[cfg(not(target_os = "macos"))]
+        let (model_path, whisper_options) = {
+            let models_dir = self.models_dir()?;
+            let cfg = self.config.lock().map_err(|e| e.to_string())?;
+            let config = cfg.get();
+            let filename = if config.model_language == "multilingual" {
+                "ggml-base.bin"
+            } else {
+                "ggml-base.en.bin"
+            };
+            (
+                config
+                    .selected_whisper_model_path
+                    .clone()
+                    .unwrap_or_else(|| models_dir.join(filename)),
+                WhisperOptions {
+                    language: config.whisper_language.0.clone(),
+                    translate: config.translate_to_english,
+                    suppress_blank: config.suppress_blank_audio,
+                    show_timestamps: config.show_timestamps,
+                    temperature: config.temperature as f32,
+                    no_speech_threshold: config.no_speech_threshold as f32,
+                    initial_prompt: config.initial_prompt.clone(),
+                    use_beam_search: config.use_beam_search,
+                    beam_size: config.beam_size as i32,
+                },
+            )
+        };
         let text = tokio::task::spawn_blocking(move || {
             #[cfg(target_os = "macos")]
             {
@@ -894,7 +1053,7 @@ impl AppState {
             }
             #[cfg(not(target_os = "macos"))]
             {
-                let _ = path; Err("on-device transcription requires the native engine on this platform".to_string())
+                transcribe_with_whisper(&audio_path, &model_path, whisper_options)
             }
         })
         .await
@@ -1029,4 +1188,3 @@ impl AppState {
         }
     }
 }
-

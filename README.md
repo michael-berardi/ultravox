@@ -1,6 +1,6 @@
 # UltraVox Light
 
-Private, on-device transcription for macOS. UltraVox Light is MIT-licensed open-source software: recordings, transcripts, and downloaded models stay on your device.
+Private, on-device transcription for macOS, Windows, and Linux. UltraVox Light is MIT-licensed open-source software: recordings, transcripts, and downloaded models stay on your device.
 
 <p align="center">
   <a href="https://github.com/michael-berardi/ultravox-light/releases/latest"><strong>Download UltraVox Light</strong></a>
@@ -17,23 +17,29 @@ Private, on-device transcription for macOS. UltraVox Light is MIT-licensed open-
 ## Features
 
 - On-device microphone transcription with English and multilingual models.
-- Global recording shortcuts, including press-to-toggle and hold-to-record modes.
+- Global recording shortcuts on macOS, plus in-app recording on every supported platform.
 - Transcription from supported URLs and local audio files.
 - Local history with search, copy, export, retry, and deletion controls.
 - Five free themes: Midnight, Silver Rack, Nord Frost, Vapor, and Obsidian Rite.
-- Public release updates verified with published SHA-256 checksums.
-- Optional headless QA harness for deterministic UI checks.
+- Public release updates verified with published SHA-256 checksums and platform identity checks.
 
-## Requirements
+## Supported platforms
 
-- macOS on Apple silicon.
-- Node.js 22, pnpm 10, Rust, and CMake.
-- `yt-dlp` and `ffmpeg` for URL transcription (`brew install yt-dlp ffmpeg`).
-- Accessibility permission enables caret targeting and automatic paste.
+- macOS 14 or newer on Apple silicon.
+- Windows 10 or 11 on x86_64.
+- x86_64 Linux distributions compatible with the Ubuntu 22.04 WebKitGTK/GLIBC baseline.
 
 ## Install
 
-Download `UltraVox-Light-macos-arm64.zip` from the [latest UltraVox Light release](https://github.com/michael-berardi/ultravox-light/releases/latest), then verify its adjacent SHA-256 file.
+Download the artifact for your system from the [latest UltraVox Light release](https://github.com/michael-berardi/ultravox-light/releases/latest), then verify it with the adjacent SHA-256 file.
+
+| System | Release artifact |
+| --- | --- |
+| macOS | `UltraVox-Light-macos-arm64.zip` |
+| Windows | `UltraVox-Light-windows-x86_64-setup.exe` |
+| Linux | `UltraVox-Light-linux-x86_64.AppImage` |
+
+Light and Pro deliberately share the same signed application identity, canonical install path, settings directory, and OS permission grants. Installing Pro over Light upgrades the edition without asking you to grant microphone, accessibility, or screen-capture access again.
 
 ## Quick start
 
@@ -47,19 +53,19 @@ Download `UltraVox-Light-macos-arm64.zip` from the [latest UltraVox Light releas
 
 Transcription runs locally. Audio and transcripts are not sent to a transcription service. URL transcription downloads audio through the local `yt-dlp` executable and then processes it with the selected on-device model. History and model caches use the app's local data directory.
 
-UltraVox Light uses no analytics or hosted service credentials. Public updates use release assets and adjacent SHA-256 checksum files.
+UltraVox Light uses no analytics or hosted service credentials. Public updates use immutable release assets and adjacent SHA-256 checksum files.
 
 ## Updates
 
-UltraVox Light checks the public GitHub release metadata at launch and at most once per day. You may install a candidate manually or enable automatic installation in **Settings → Privacy**. Before installation, the app verifies the version, checksum, bundle identity, and downloaded archive. Failed verification leaves the installed version untouched.
+UltraVox Light checks the public GitHub release metadata at launch and at most once per day. You may install a candidate manually or enable automatic installation in **Settings → Privacy**. Before installation, the app verifies the version and checksum; macOS also requires the canonical bundle identity, Developer ID signature, designated requirement, and stapled notarization ticket. Failed verification leaves the installed version untouched.
 
 ## Build from source
 
 ```bash
 git clone --recurse-submodules https://github.com/michael-berardi/ultravox-light.git
 cd ultravox-light
-brew install cmake libomp rust node@22
-export PATH="$(brew --prefix node@22)/bin:$PATH"
+# Install the current platform's Tauri prerequisites first:
+# https://v2.tauri.app/start/prerequisites/
 npm install --global pnpm@10.27.0
 pnpm install --frozen-lockfile
 
@@ -75,28 +81,26 @@ pnpm desktop:dev
 pnpm desktop:check
 ```
 
-### Headless visual QA
-
-```bash
-pnpm desktop:qa:headless
-```
-
-The QA harness supports deterministic theme, drag/drop, model, transcription, and permission states without external services.
 
 ## Architecture
 
 - **Tauri + React** provide the desktop shell and accessible interface.
 - **Rust** handles recording, audio decoding, history, model downloads, updates, and CLI tooling.
-- **Swift** bridges macOS microphone permissions, accessibility insertion, global shortcuts, and FluidAudio/CoreML transcription.
-- **Whisper.cpp** remains available for local Whisper model workflows.
+- **Swift/FluidAudio** provide native macOS transcription, permissions, and insertion.
+- **Whisper.cpp** provides local transcription on Windows and Linux.
 
 ## CLI
 
-The optional `ultravox-control` binary provides health, status, model-catalog, history, download, shortcut, audio-device, recording, transcription, import, clipboard, and caret diagnostics. Run it with no arguments to print the exact command usage.
+The optional `ultravox-control` binary provides health, status, model-catalog, and audio-device diagnostics. Run it with `--help` to print the exact command usage.
 
 ## Contributing
 
 Please do not include recordings, transcripts, credentials, private URLs, or generated build output in issues or pull requests. See `apps/desktop/LEGAL_NOTICES.md` for third-party attribution.
+
+## Support and security
+
+Use [GitHub Issues](https://github.com/michael-berardi/ultravox-light/issues) for reproducible bugs and feature requests. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/michael-berardi/ultravox-light/security/advisories/new); do not include credentials, private recordings, or transcripts in a public issue.
+
 ## License
 
 UltraVox Light source and documentation are available under the [MIT License](LICENSE). Third-party rights remain with their respective owners.

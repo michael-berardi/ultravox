@@ -139,9 +139,7 @@ export function MainWindow({
     setModelStatusLoading(true);
     try {
       const modelCatalog = await getModelCatalog();
-      const visibleCatalog = ["fluidaudio-en-v2", "fluidaudio-multilingual-v3"]
-        .map((id) => modelCatalog.models.find((model) => model.id === id))
-        .filter((model): model is ModelEntry => model !== undefined);
+      const visibleCatalog = modelCatalog.models;
       const statuses = Object.fromEntries(
         await Promise.all(
           visibleCatalog.map(async (model) => [
@@ -500,17 +498,18 @@ export function MainWindow({
     }
   };
 
-  const selectedModelId =
-    config?.selected_engine === "fluidaudio" && config.fluid_audio_model_version === "v3"
-      ? "fluidaudio-multilingual-v3"
-      : "fluidaudio-en-v2";
+  const selectedModelId = catalog.find((model) =>
+    model.id.includes(config?.model_language === "multilingual" ? "multilingual" : "-en"),
+  )?.id;
   const selectLanguage = async (mode: "english" | "multilingual"): Promise<boolean> => {
     try {
       const current = configRef.current ?? config ?? (await getSettings());
+      const usesWhisper = catalog.some((model) => model.family === "whisper");
       const next: AppConfig = {
         ...current,
-        selected_engine: "fluidaudio",
+        selected_engine: usesWhisper ? "whisper" : "fluidaudio",
         fluid_audio_model_version: mode === "english" ? "v2" : "v3",
+        whisper_language: mode === "english" ? "en" : "auto",
         model_language: mode,
         onboarding_completed: true,
       };
@@ -594,7 +593,7 @@ export function MainWindow({
     };
   }, [reactiveVisualsEnabled, recording]);
 
-  const selectedDownloaded = downloaded[selectedModelId] === true;
+  const selectedDownloaded = selectedModelId ? downloaded[selectedModelId] === true : false;
   const needsOnboarding = !modelStatusLoading && !selectedDownloaded;
   const latestRecording = recordings[0];
   const transcribing = ["pending", "converting", "transcribing"].includes(
@@ -660,14 +659,14 @@ export function MainWindow({
                 <h1 id="model-setup-title">Choose a transcription model</h1>
               </div>
             </div>
-            <p className="description">Models run privately on your Mac and remain available offline.</p>
+            <p className="description">Models run privately on your device and remain available offline.</p>
             {catalog.length === 0 && !modelError ? (
               <p className="setup-loading" aria-live="polite">Checking model status…</p>
             ) : (
               <div className="model-choice" role="radiogroup" aria-label="Transcription model">
                 {catalog.map((model) => {
                   const mode =
-                    model.id === "fluidaudio-multilingual-v3" ? "multilingual" : "english";
+                    model.id.includes("multilingual") ? "multilingual" : "english";
                   return (
                     <ModelCard
                       key={model.id}

@@ -446,7 +446,7 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: transparent;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font: 600 11px/1 var(--font);
   cursor: pointer;
   transition: color var(--transition), border-color var(--transition), background var(--transition);
@@ -594,6 +594,74 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.support-invitation {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 55;
+  display: grid;
+  width: min(calc(100% - 24px), 440px);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.support-invitation strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 15px;
+}
+
+.support-invitation p {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.support-invitation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.support-mission {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.support-mission h3 {
+  margin: var(--space-2) 0 0;
+}
+
+.support-mission p {
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.support-mission .btn {
+  margin-top: var(--space-4);
+}
+
+.support-mission > .description {
+  margin-top: var(--space-2);
+}
+
+.support-perks {
+  display: grid;
+  margin: 0;
+  padding-left: 20px;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 .update-automatic-choice {

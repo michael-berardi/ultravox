@@ -1102,6 +1102,10 @@ private final class KeyCombinationMonitor: @unchecked Sendable {
             print("[UltraVoxMacOSBridge] unable to parse key combination: \(combo)")
             return false
         }
+        guard holdToRecord || parsed.modifier != nil else {
+            print("[UltraVoxMacOSBridge] bare Space requires hold-to-record")
+            return false
+        }
 
         stop()
         self.combo = parsed
@@ -1140,7 +1144,7 @@ private final class KeyCombinationMonitor: @unchecked Sendable {
 
         let registerStatus = RegisterEventHotKey(
             UInt32(parsed.keyCode),
-            parsed.modifier.carbonMask,
+            parsed.modifier?.carbonMask ?? 0,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
@@ -1231,9 +1235,9 @@ private final class KeyCombinationMonitor: @unchecked Sendable {
     }
 }
 
-private struct KeyCombination {
+struct KeyCombination {
     let raw: String
-    let modifier: Modifier
+    let modifier: Modifier?
     let keyCode: UInt16
 
     enum Modifier {
@@ -1252,11 +1256,13 @@ private struct KeyCombination {
     static func parse(_ combo: String) -> KeyCombination? {
         let parts = combo.split(separator: "+", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-        guard parts.count >= 2,
-              let modifier = parseModifier(parts[0])
+        if parts.count == 1, parts[0] == "space" {
+            return KeyCombination(raw: combo, modifier: nil, keyCode: 49)
+        }
+        guard parts.count == 2,
+              let modifier = parseModifier(parts[0]),
+              let keyCode = keyCodeForName(parts[1])
         else { return nil }
-        let key = parts[1]
-        guard let keyCode = keyCodeForName(key) else { return nil }
         return KeyCombination(raw: combo, modifier: modifier, keyCode: keyCode)
     }
 

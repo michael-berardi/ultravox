@@ -11,6 +11,7 @@ export type AppConfig = {
   fluid_audio_model_version: string;
   selected_whisper_model_path: string | null;
   models_directory: string | null;
+  audio_input_device_id: string | null;
   whisper_language: Language;
   translate_to_english: boolean;
   suppress_blank_audio: boolean;
@@ -26,13 +27,18 @@ export type AppConfig = {
   modifier_only_hotkey: string;
   key_combination: string;
   hold_to_record: boolean;
+  meeting_key_combination: string;
+  meeting_detection_enabled: boolean;
   add_space_after_sentence: boolean;
   auto_copy_to_clipboard: boolean;
   auto_paste_transcription: boolean;
   onboarding_completed: boolean;
   model_language: string;
   theme: string;
+  media_panel_enabled: boolean;
   reactive_visuals_enabled: boolean;
+  show_meeting_mode: boolean;
+  show_lecture_mode: boolean;
   show_transcribe_url: boolean;
 };
 export type AppInfoResponse = { name: string; version: string; identifier: string };

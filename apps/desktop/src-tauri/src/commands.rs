@@ -23,7 +23,7 @@ use crate::state::AppState;
 use crate::update::{self, UpdateInfo, UpdatePreferences};
 
 pub const APP_NAME: &str = "UltraVox Light";
-pub const APP_IDENTIFIER: &str = "com.ultravox.light";
+pub const APP_IDENTIFIER: &str = "com.imploselabs.ultravox";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,15 +137,7 @@ pub enum PermissionKind {
     Accessibility,
 }
 
-
 fn permission_status() -> PermissionStatus {
-    #[cfg(debug_assertions)]
-    if std::env::var_os("ULTRAVOX_QA_PERMISSIONS_GRANTED").is_some() {
-        return PermissionStatus {
-            microphone: PermissionState::Granted,
-            accessibility: PermissionState::Granted,
-        };
-    }
     #[cfg(target_os = "macos")]
     {
         let microphone = match bridge::microphone_authorization_status() {
@@ -521,8 +513,7 @@ pub async fn prepare_model(state: State<'_, AppState>, model_id: String) -> Resu
             .clone();
         let was_downloaded = bridge::is_model_downloaded(version, directory.as_deref());
         let prepared = bridge::prepare_model(version, directory.as_deref());
-        if !was_downloaded {
-        }
+        if !was_downloaded {}
         return Ok(prepared);
     }
 
@@ -1105,21 +1096,36 @@ pub fn export_recording(
 
 #[cfg(test)]
 mod tests {
-    use super::{modifier_conflicts_with_combination, permission_settings_pane, validate_remote_url, PermissionKind};
+    use super::{
+        modifier_conflicts_with_combination, permission_settings_pane, validate_remote_url,
+        PermissionKind,
+    };
     #[test]
     fn media_url_requires_http_or_https() {
-        assert_eq!(validate_remote_url("https://example.com/audio").unwrap(), "https://example.com/audio");
+        assert_eq!(
+            validate_remote_url("https://example.com/audio").unwrap(),
+            "https://example.com/audio"
+        );
         assert!(validate_remote_url("file:///tmp/a.wav").is_err());
         assert!(validate_remote_url("not a URL").is_err());
     }
     #[test]
     fn modifier_only_shortcuts_cannot_prefix_key_combinations() {
-        assert!(modifier_conflicts_with_combination("rightOption", "Option+M"));
-        assert!(!modifier_conflicts_with_combination("rightCommand", "Control+M"));
+        assert!(modifier_conflicts_with_combination(
+            "rightOption",
+            "Option+M"
+        ));
+        assert!(!modifier_conflicts_with_combination(
+            "rightCommand",
+            "Control+M"
+        ));
     }
     #[test]
     fn permission_settings_open_accessibility_pane() {
-        assert_eq!(permission_settings_pane(&PermissionKind::Accessibility), "Privacy_Accessibility");
+        assert_eq!(
+            permission_settings_pane(&PermissionKind::Accessibility),
+            "Privacy_Accessibility"
+        );
     }
 }
 #[tauri::command]
@@ -1131,7 +1137,9 @@ pub fn set_theme_material(app: tauri::AppHandle, theme: String) -> Result<(), St
             _ => tauri::Theme::Dark,
         };
         if let Some(window) = app.get_webview_window("main") {
-            window.set_theme(Some(mode)).map_err(|error| error.to_string())?;
+            window
+                .set_theme(Some(mode))
+                .map_err(|error| error.to_string())?;
         }
     }
     #[cfg(not(target_os = "macos"))]
