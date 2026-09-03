@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use ultravox_core::{
     decode_media_file_to_wav, AppConfig, AudioBackend, AudioDeviceInfo, AudioInputConfig,
-    AudioRecording, DownloadManager, DownloadProgress, ModelCatalog, ModelDownload, RecordingRow,
-    IMPORT_MAX_BYTES,
+    AudioRecording, CustomDictionary, DownloadManager, DownloadProgress, ModelCatalog,
+    ModelDownload, RecordingRow, IMPORT_MAX_BYTES,
 };
 
 #[cfg(target_os = "macos")]
@@ -426,6 +426,27 @@ pub fn transcribe_file(_path: String) -> TranscriptionResult {
     }
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct DictionaryApplyResult {
+    pub text: String,
+    pub canonical_terms: Vec<String>,
+}
+
+/// Deterministic smoke-test surface for the same local matcher used by the
+/// transcription pipeline.
+#[tauri::command]
+pub fn dictionary_apply(dictionary: String, text: String) -> Result<DictionaryApplyResult, String> {
+    let dictionary = CustomDictionary::parse(&dictionary).map_err(|error| error.to_string())?;
+    Ok(DictionaryApplyResult {
+        text: dictionary.apply(&text),
+        canonical_terms: dictionary
+            .canonical_terms()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> Result<AppConfig, String> {
     let manager = state
@@ -437,6 +458,7 @@ pub fn get_settings(state: State<AppState>) -> Result<AppConfig, String> {
 
 #[tauri::command]
 pub fn set_settings(state: State<AppState>, config: AppConfig) -> Result<(), String> {
+    CustomDictionary::parse(&config.custom_dictionary).map_err(|error| error.to_string())?;
     let models_dir = match config.models_directory.as_ref() {
         Some(directory) => directory.clone(),
         None => state
@@ -457,17 +479,28 @@ pub fn set_settings(state: State<AppState>, config: AppConfig) -> Result<(), Str
         .config
         .lock()
         .map_err(|error| format!("lock poisoned: {error}"))?;
+    let previous = manager.get();
+    let models_directory_changed = previous.models_directory != config.models_directory;
+    let selected_model_changed = models_directory_changed
+        || previous.selected_engine != config.selected_engine
+        || previous.fluid_audio_model_version != config.fluid_audio_model_version
+        || previous.selected_whisper_model_path != config.selected_whisper_model_path
+        || previous.model_language != config.model_language;
     manager
         .set(config.clone())
         .map_err(|error| error.to_string())?;
     drop(manager);
 
-    *state
-        .downloads
-        .lock()
-        .map_err(|error| format!("lock poisoned: {error}"))? =
-        DownloadManager::with_models_dir(models_dir);
-    state.warm_transcription_model();
+    if models_directory_changed {
+        *state
+            .downloads
+            .lock()
+            .map_err(|error| format!("lock poisoned: {error}"))? =
+            DownloadManager::with_models_dir(models_dir);
+    }
+    if selected_model_changed {
+        state.warm_transcription_model();
+    }
     state.emit_settings_changed(&config)?;
     Ok(())
 }
@@ -1097,8 +1130,8 @@ pub fn export_recording(
 #[cfg(test)]
 mod tests {
     use super::{
-        modifier_conflicts_with_combination, permission_settings_pane, validate_remote_url,
-        PermissionKind,
+        dictionary_apply, modifier_conflicts_with_combination, permission_settings_pane,
+        validate_remote_url, PermissionKind,
     };
     #[test]
     fn media_url_requires_http_or_https() {
@@ -1120,6 +1153,17 @@ mod tests {
             "Control+M"
         ));
     }
+    #[test]
+    fn dictionary_ipc_applies_entries() {
+        let result = dictionary_apply(
+            "Retex\nUltraVox = Ultra Box".to_string(),
+            "retext, Ultra Box!".to_string(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "Retex, UltraVox!");
+        assert_eq!(result.canonical_terms, vec!["Retex", "UltraVox"]);
+    }
+
     #[test]
     fn permission_settings_open_accessibility_pane() {
         assert_eq!(

@@ -7,6 +7,7 @@
 
 pub mod audio;
 pub mod config;
+pub mod dictionary;
 pub mod download;
 pub mod history;
 pub mod model_catalog;
@@ -18,6 +19,10 @@ pub use audio::{
     AudioRecording, CpalAudioBackend, IMPORT_MAX_BYTES, IMPORT_SAMPLE_RATE,
 };
 pub use config::{AppConfig, ConfigError, ConfigManager, Engine, Language};
+pub use dictionary::{
+    CustomDictionary, DictionaryError, MAX_ALIASES_PER_ENTRY, MAX_DICTIONARY_BYTES,
+    MAX_DICTIONARY_ENTRIES, MAX_DICTIONARY_FIELD_BYTES,
+};
 pub use download::{
     DownloadError, DownloadHandle, DownloadManager, DownloadProgress, DownloadState, ModelDownload,
 };

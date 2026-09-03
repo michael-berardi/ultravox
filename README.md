@@ -19,6 +19,7 @@ Private, on-device transcription for macOS, Windows, and Linux. UltraVox Light i
 - On-device microphone transcription with English and multilingual models.
 - Global recording shortcuts on macOS, plus in-app recording on every supported platform.
 - Transcription from supported URLs and local audio files.
+- A manual, local custom dictionary for preferred terms and spoken aliases.
 - Local history with search, copy, export, retry, and deletion controls.
 - Five free themes: Midnight, Silver Rack, Nord Frost, Vapor, and Obsidian Rite.
 - Public release updates verified with published SHA-256 checksums and platform identity checks.
@@ -48,6 +49,21 @@ Light and Pro deliberately share the same signed application identity, canonical
 3. Set a global shortcut in **Settings → Shortcut**.
 4. Press the shortcut, speak, then press it again to transcribe.
 5. Use **Transcribe URL** for a supported HTTP(S) URL, or drop a local audio file onto the window.
+
+## Custom dictionary
+
+Open **Settings → Dictionary** to add preferred spellings. Use one entry per line:
+
+```text
+Retex = retext
+UltraVox = Ultra Box
+```
+
+A line may contain only the canonical term, or `Canonical term = alias one, alias two`. Blank lines and lines beginning with `#` or `//` are ignored. Alias matching is case-insensitive, and conservative typo matching is limited to distinctive custom terms. Corrections happen locally before a transcript is saved, copied, or pasted. On Windows and Linux, canonical terms are also appended to the existing Whisper initial prompt.
+
+The dictionary accepts up to 128 KiB and 512 canonical entries. Canonical and alias fields are limited to 128 bytes, with at most 16 aliases total for each canonical term.
+
+This feature is manual in UltraVox Light. It does not scan Retex, contacts, files, or other apps for vocabulary.
 
 ## Privacy
 
@@ -91,7 +107,21 @@ pnpm desktop:check
 
 ## CLI
 
-The optional `ultravox-control` binary provides health, status, model-catalog, and audio-device diagnostics. Run it with `--help` to print the exact command usage.
+The optional `ultravox-control` binary provides health, status, model-catalog, audio-device, and dictionary diagnostics. Run it with `--help` to print the exact command usage. Dictionary commands read the installed app's real `settings.toml` by default:
+
+```bash
+cargo run -p ultravox --features cli --bin ultravox-control -- dictionary-smoke
+cargo run -p ultravox --features cli --bin ultravox-control -- dictionary-apply 'retext, Ultra Box!'
+```
+
+Use `ULTRAVOX_DATA_DIR` to point automated tests at an isolated settings directory. Inline entries remain available for a deterministic one-off check:
+
+```bash
+ULTRAVOX_DATA_DIR=/tmp/ultravox-test \
+  cargo run -p ultravox --features cli --bin ultravox-control -- \
+  dictionary-apply --dictionary $'Retex\nUltraVox = Ultra Box' 'retext, Ultra Box!'
+# Retex, UltraVox!
+```
 
 ## Contributing
 
@@ -100,6 +130,8 @@ Please do not include recordings, transcripts, credentials, private URLs, or gen
 ## Support and security
 
 Use [GitHub Issues](https://github.com/michael-berardi/ultravox-light/issues) for reproducible bugs and feature requests. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/michael-berardi/ultravox-light/security/advisories/new); do not include credentials, private recordings, or transcripts in a public issue.
+
+On macOS, a plain local Tauri bundle is ad-hoc signed and must not be installed over the canonical app when testing permission continuity. Accessibility, Microphone, and Screen Recording grants persist only across builds carrying the same stable Developer ID designated requirement; published builds additionally require notarization.
 
 ## License
 

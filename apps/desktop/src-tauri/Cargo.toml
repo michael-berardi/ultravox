@@ -1,6 +1,6 @@
 [package]
 name = "ultravox"
-version = "0.8.0"
+version = "0.9.0"
 description = "UltraVox Light — real-time audio transcription with on-device models"
 authors = ["UltraVox contributors"]
 license = "MIT"

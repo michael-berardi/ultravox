@@ -24,11 +24,12 @@ import {
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { THEMES } from "../themes";
 import { BrandMark, startHeaderDrag } from "../components/BrandMark";
-export type SettingsTab = "shortcut" | "model" | "transcription" | "privacy" | "appearance" | "support";
+export type SettingsTab = "shortcut" | "model" | "transcription" | "dictionary" | "privacy" | "appearance" | "support";
 
 interface SettingsPageProps {
   initialConfig: AppConfig;
   initialTab?: SettingsTab;
+  qaMode?: boolean;
   onClose: () => void;
 }
 
@@ -56,7 +57,7 @@ function normalizeModifier(value: string): ModifierKey {
 }
 
 
-export function SettingsPage({ initialConfig, initialTab = "shortcut", onClose }: SettingsPageProps) {
+export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = false, onClose }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [config, setConfig] = useState<AppConfig>(initialConfig);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +67,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", onClose }
 
   useEffect(() => setActiveTab(initialTab), [initialTab]);
   useEffect(() => {
+    if (qaMode) return;
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
 
@@ -95,7 +97,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", onClose }
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [qaMode]);
 
   const persist = useCallback((next: AppConfig, operation: () => Promise<void>) => {
     configRef.current = next;
@@ -162,6 +164,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", onClose }
         <TabButton id="shortcut" label="Shortcut" active={activeTab} onClick={setActiveTab} />
         <TabButton id="model" label="Model" active={activeTab} onClick={setActiveTab} />
         <TabButton id="transcription" label="Transcription" active={activeTab} onClick={setActiveTab} />
+        <TabButton id="dictionary" label="Dictionary" active={activeTab} onClick={setActiveTab} />
         <TabButton id="privacy" label="Privacy" active={activeTab} onClick={setActiveTab} />
         <TabButton id="appearance" label="Appearance" active={activeTab} onClick={setActiveTab} />
         <TabButton id="support" label="Support" active={activeTab} onClick={setActiveTab} />
@@ -172,6 +175,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", onClose }
         {activeTab === "shortcut" && <ShortcutSettings config={cfg} onChange={updateShortcut} />}
         {activeTab === "model" && <ModelSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "transcription" && <TranscriptionSettings config={cfg} onChange={updateConfig} />}
+        {activeTab === "dictionary" && <DictionarySettings config={cfg} onChange={updateConfig} />}
         {activeTab === "privacy" && <PrivacySettings config={cfg} onChange={updateConfig} />}
         {activeTab === "appearance" && <AppearanceSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "support" && <SupportSettings />}
@@ -690,6 +694,51 @@ function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
           onChange={(checked) => onChange({ add_space_after_sentence: checked })}
         />
       </div>
+    </div>
+  );
+}
+
+const MAX_DICTIONARY_BYTES = 128 * 1024;
+
+function DictionarySettings({ config, onChange }: SettingsSectionProps) {
+  const byteCount = new TextEncoder().encode(config.custom_dictionary).length;
+  const updateDictionary = (value: string) => {
+    if (new TextEncoder().encode(value).length <= MAX_DICTIONARY_BYTES) {
+      onChange({ custom_dictionary: value });
+    }
+  };
+
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-dictionary" aria-labelledby="tab-dictionary">
+      <section className="settings-card dictionary-card">
+        <div className="settings-card-heading">
+          <div>
+            <h3>Custom dictionary</h3>
+            <p id="dictionary-local-help">Manual and local. Corrections run on this device before history, copy, or paste.</p>
+          </div>
+        </div>
+        <label className="dictionary-label" htmlFor="custom-dictionary">Terms and aliases</label>
+        <textarea
+          id="custom-dictionary"
+          className="input dictionary-editor"
+          value={config.custom_dictionary}
+          onChange={(event) => updateDictionary(event.target.value)}
+          maxLength={MAX_DICTIONARY_BYTES}
+          rows={10}
+          spellCheck={false}
+          aria-describedby="dictionary-local-help dictionary-format-help dictionary-limit"
+          placeholder={"Retex = retext\nUltraVox = Ultra Box"}
+        />
+        <p className="dictionary-help" id="dictionary-format-help">
+          One entry per line: <code>Canonical term</code> or <code>Canonical term = alias one, alias two</code>. Blank lines and lines beginning with # or // are ignored. Exact aliases ignore case; distinctive terms also receive conservative typo correction.
+        </p>
+        <p className="dictionary-limit" id="dictionary-limit" aria-live="polite">
+          {byteCount.toLocaleString()} / {MAX_DICTIONARY_BYTES.toLocaleString()} bytes
+        </p>
+        <p className="dictionary-help">
+          UltraVox Light never scans Retex, contacts, files, or other apps for vocabulary.
+        </p>
+      </section>
     </div>
   );
 }

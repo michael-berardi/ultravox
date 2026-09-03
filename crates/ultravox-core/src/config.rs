@@ -1,4 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -38,7 +40,7 @@ impl Default for Language {
     }
 }
 
-const CURRENT_CONFIG_VERSION: u32 = 3;
+const CURRENT_CONFIG_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -57,6 +59,21 @@ pub struct AppConfig {
     pub temperature: f64,
     pub no_speech_threshold: f64,
     pub initial_prompt: String,
+    #[serde(default)]
+    pub custom_dictionary: String,
+    // Pro-owned fields remain part of the shared v4 schema so opening and
+    // saving settings in Light never discards them. Light does not scan or
+    // refresh these paths.
+    #[serde(default)]
+    pub retex_dictionary: String,
+    #[serde(default)]
+    pub retex_vault_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub retex_vault_identities: Vec<String>,
+    #[serde(default)]
+    pub retex_auto_refresh: bool,
+    #[serde(default)]
+    pub retex_last_refresh_at: Option<DateTime<Utc>>,
     pub use_beam_search: bool,
     pub beam_size: u32,
     pub debug_mode: bool,
@@ -133,6 +150,12 @@ impl Default for AppConfig {
             temperature: 0.0,
             no_speech_threshold: 0.6,
             initial_prompt: String::new(),
+            custom_dictionary: String::new(),
+            retex_dictionary: String::new(),
+            retex_vault_paths: Vec::new(),
+            retex_vault_identities: Vec::new(),
+            retex_auto_refresh: false,
+            retex_last_refresh_at: None,
             use_beam_search: false,
             beam_size: 5,
             debug_mode: false,
@@ -196,7 +219,35 @@ impl ConfigManager {
         self.save()
     }
     pub fn save(&self) -> Result<(), ConfigError> {
-        std::fs::write(&self.config_path, toml::to_string_pretty(&self.config)?)?;
+        let contents = toml::to_string_pretty(&self.config)?;
+        let temporary_path = self
+            .config_path
+            .with_extension(format!("toml.tmp-{}", uuid::Uuid::new_v4()));
+        let write_result = (|| -> Result<(), std::io::Error> {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary_path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()
+        })();
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&temporary_path);
+            return Err(ConfigError::Io(error));
+        }
+        if let Err(error) = std::fs::rename(&temporary_path, &self.config_path) {
+            let _ = std::fs::remove_file(&temporary_path);
+            return Err(ConfigError::Io(error));
+        }
         Ok(())
     }
     pub fn mutate(&mut self) -> &mut AppConfig {
@@ -210,9 +261,14 @@ mod tests {
     #[test]
     fn defaults_are_light() {
         let cfg = AppConfig::default();
-        assert_eq!(cfg.config_version, 3);
+        assert_eq!(cfg.config_version, CURRENT_CONFIG_VERSION);
         assert_eq!(cfg.key_combination, "Option+Backtick");
         assert_eq!(cfg.theme, "midnight");
+        assert!(cfg.custom_dictionary.is_empty());
+        assert!(cfg.retex_dictionary.is_empty());
+        assert!(cfg.retex_vault_paths.is_empty());
+        assert!(!cfg.retex_auto_refresh);
+        assert!(cfg.retex_last_refresh_at.is_none());
     }
     #[test]
     fn roundtrip_preserves_shared_pro_settings() {
@@ -224,7 +280,116 @@ mod tests {
         cfg.reactive_visuals_enabled = true;
         cfg.show_meeting_mode = false;
         cfg.show_lecture_mode = false;
+        cfg.custom_dictionary = "Retex = retext".to_string();
+        cfg.retex_dictionary = "Cloudflare\nOpenAI".to_string();
+        cfg.retex_vault_paths = vec![PathBuf::from("/tmp/pro-vault")];
+        cfg.retex_vault_identities = vec!["1:2".to_string()];
+        cfg.retex_auto_refresh = true;
+        cfg.retex_last_refresh_at = Some(
+            DateTime::parse_from_rfc3339("2026-09-03T20:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
         let parsed: AppConfig = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn migrates_old_config_with_empty_dictionary() {
+        let directory = std::env::temp_dir().join(format!(
+            "ultravox-config-dictionary-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(ConfigManager::FILE_NAME),
+            "config_version = 3\nretex_dictionary = \"Cloudflare\\nOpenAI\"\nretex_vault_paths = [\"/tmp/pro-vault\"]\nretex_auto_refresh = true\nretex_last_refresh_at = \"2026-09-03T20:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let manager = ConfigManager::new(&directory).unwrap();
+        assert_eq!(manager.get().config_version, CURRENT_CONFIG_VERSION);
+        assert!(manager.get().custom_dictionary.is_empty());
+        assert_eq!(manager.get().retex_dictionary, "Cloudflare\nOpenAI");
+        assert_eq!(
+            manager.get().retex_vault_paths,
+            vec![PathBuf::from("/tmp/pro-vault")]
+        );
+        assert!(manager.get().retex_auto_refresh);
+        assert_eq!(
+            manager.get().retex_last_refresh_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-09-03T20:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+        let persisted = std::fs::read_to_string(directory.join(ConfigManager::FILE_NAME)).unwrap();
+        let persisted: AppConfig = toml::from_str(&persisted).unwrap();
+        assert_eq!(persisted, *manager.get());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn light_load_and_write_preserve_pro_v5_fields() {
+        let directory = std::env::temp_dir().join(format!(
+            "ultravox-config-pro-roundtrip-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(ConfigManager::FILE_NAME),
+            "config_version = 5\nretex_dictionary = \"Retex\"\nretex_vault_paths = [\"/tmp/one\", \"/tmp/two\"]\nretex_vault_identities = [\"1:2\", \"1:3\"]\nretex_auto_refresh = true\nretex_last_refresh_at = \"2026-09-03T20:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let mut manager = ConfigManager::new(&directory).unwrap();
+        let pro_fields = (
+            manager.get().retex_dictionary.clone(),
+            manager.get().retex_vault_paths.clone(),
+            manager.get().retex_vault_identities.clone(),
+            manager.get().retex_auto_refresh,
+            manager.get().retex_last_refresh_at,
+        );
+        manager.mutate().custom_dictionary = "UltraVox = Ultra Box".to_string();
+        manager.save().unwrap();
+
+        let reloaded = ConfigManager::new(&directory).unwrap();
+        assert_eq!(reloaded.get().retex_dictionary, pro_fields.0);
+        assert_eq!(reloaded.get().retex_vault_paths, pro_fields.1);
+        assert_eq!(reloaded.get().retex_vault_identities, pro_fields.2);
+        assert_eq!(reloaded.get().retex_auto_refresh, pro_fields.3);
+        assert_eq!(reloaded.get().retex_last_refresh_at, pro_fields.4);
+        assert_eq!(reloaded.get().custom_dictionary, "UltraVox = Ultra Box");
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settings_writes_remain_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "ultravox-config-permissions-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manager = ConfigManager::new(&directory).unwrap();
+        manager.save().unwrap();
+        let settings = directory.join(ConfigManager::FILE_NAME);
+        assert_eq!(
+            std::fs::metadata(&settings).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o644)).unwrap();
+        manager.save().unwrap();
+        assert_eq!(
+            std::fs::metadata(&settings).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

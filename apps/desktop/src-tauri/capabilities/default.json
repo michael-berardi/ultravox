@@ -7,7 +7,7 @@
   "commands": [
     "get_app_info", "get_app_status", "get_permission_status", "request_permission", "open_permission_settings",
     "get_update_preferences", "set_update_preferences", "check_for_update", "install_update",
-    "get_settings", "set_settings", "get_model_catalog", "get_download_progress", "get_downloads",
+    "get_settings", "set_settings", "dictionary_apply", "get_model_catalog", "get_download_progress", "get_downloads",
     "start_download", "prepare_model", "is_model_downloaded", "get_model_progress", "cancel_download",
     "list_recordings", "search_recordings", "get_recording", "update_recording", "delete_recording", "delete_all_recordings",
     "start_recording", "stop_recording", "import_url", "import_file", "get_transcription_status", "retry_transcription",
