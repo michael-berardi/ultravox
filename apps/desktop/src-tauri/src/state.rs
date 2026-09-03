@@ -5,12 +5,13 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::task::{AbortHandle, JoinError, JoinHandle};
 use uuid::Uuid;
 
 use ultravox_core::{
     AppConfig, AudioBackend, AudioInputConfig, AudioRecording, ConfigManager, CpalAudioBackend,
-    DownloadManager, ModelCatalog, RecordingHistory, RecordingRow, RecordingStatus,
+    CustomDictionary, DownloadManager, ModelCatalog, RecordingHistory, RecordingRow,
+    RecordingStatus,
 };
 
 #[cfg(target_os = "macos")]
@@ -76,6 +77,37 @@ fn recording_id_for(recording: &AudioRecording) -> Uuid {
                 .and_then(|s| Uuid::parse_str(s).ok())
         })
         .unwrap_or_else(Uuid::new_v4)
+}
+
+fn transcription_task_failure(result: Result<Result<String, String>, JoinError>) -> Option<String> {
+    match result {
+        Ok(Ok(_)) => None,
+        Ok(Err(reason)) => Some(reason),
+        Err(error) if error.is_cancelled() => None,
+        Err(error) => Some(format!("transcription task stopped unexpectedly: {error}")),
+    }
+}
+
+fn mark_incomplete_recording_failed(
+    history: &mut RecordingHistory,
+    id: Uuid,
+    reason: &str,
+) -> Result<Option<RecordingRow>, String> {
+    let Some(mut row) = history.get(id).map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    if !matches!(
+        row.status,
+        RecordingStatus::Pending | RecordingStatus::Converting | RecordingStatus::Transcribing
+    ) {
+        return Ok(None);
+    }
+    row.transcription = reason.to_string();
+    row.status = RecordingStatus::Failed;
+    row.progress = 1.0;
+    row.refresh_display();
+    history.insert(&row).map_err(|error| error.to_string())?;
+    Ok(Some(row))
 }
 
 fn fallback_row(
@@ -376,6 +408,44 @@ impl AppState {
             .map_err(|e| e.to_string())
     }
 
+    fn handle_transcription_task_result(
+        &self,
+        id: Uuid,
+        result: Result<Result<String, String>, JoinError>,
+        context: &str,
+    ) {
+        let Some(reason) = transcription_task_failure(result) else {
+            return;
+        };
+
+        let update = self
+            .history
+            .lock()
+            .map_err(|error| error.to_string())
+            .and_then(|mut history| mark_incomplete_recording_failed(&mut history, id, &reason));
+        match update {
+            Ok(Some(row)) => {
+                if let Err(error) = self
+                    .emit_recording_added(&row)
+                    .and_then(|_| self.emit_transcription_progress(&id.to_string(), 1.0, "failed"))
+                    .and_then(|_| {
+                        self.emit_transcription_completed(
+                            &id.to_string(),
+                            reason.clone(),
+                            Some(row.language.clone()),
+                        )
+                    })
+                {
+                    eprintln!("{context}: {reason}; failed to emit failure state: {error}");
+                } else {
+                    eprintln!("{context}: {reason}");
+                }
+            }
+            Ok(None) => eprintln!("{context}: {reason}"),
+            Err(error) => eprintln!("{context}: {reason}; failed to persist failure: {error}"),
+        }
+    }
+
     /// Emit `recording-added`.
     pub fn emit_recording_added(&self, row: &ultravox_core::RecordingRow) -> Result<(), String> {
         self.app
@@ -604,13 +674,12 @@ impl AppState {
             {
                 active.take();
             }
-            if let Err(error) = result {
-                // Aborted tasks are expected on cancellation; avoid logging them
-                // as unexpected failures.
-                if !error.is_cancelled() {
-                    eprintln!("transcription task failed: {error}");
-                }
-            }
+            drop(active);
+            state.handle_transcription_task_result(
+                recording_id,
+                result,
+                "transcription task failed",
+            );
         });
 
         Ok(recording)
@@ -693,11 +762,12 @@ impl AppState {
             if active.as_ref().is_some_and(|task| task.recording_id == id) {
                 active.take();
             }
-            if let Err(error) = result {
-                if !error.is_cancelled() {
-                    eprintln!("managed audio transcription task failed: {error}");
-                }
-            }
+            drop(active);
+            state.handle_transcription_task_result(
+                id,
+                result,
+                "managed audio transcription task failed",
+            );
         });
 
         Ok(id.to_string())
@@ -884,11 +954,8 @@ impl AppState {
             if active.as_ref().is_some_and(|task| task.recording_id == id) {
                 active.take();
             }
-            if let Err(error) = result {
-                if !error.is_cancelled() {
-                    eprintln!("retry transcription task failed: {error}");
-                }
-            }
+            drop(active);
+            state.handle_transcription_task_result(id, result, "retry transcription task failed");
         });
 
         Ok(id.to_string())
@@ -950,8 +1017,9 @@ impl AppState {
         let visible_id = id.to_string();
         let audio_path = recording.output_path.clone();
 
-        // Read config once for language and post-processing settings.
-        let (language, auto_copy, auto_paste, add_space) = {
+        // Parse the bounded manual dictionary before starting work, then keep
+        // the compiled matcher in memory for this transcription.
+        let (language, auto_copy, auto_paste, add_space, dictionary) = {
             let cfg = self.config.lock().map_err(|e| e.to_string())?;
             let cfg = cfg.get();
             (
@@ -959,6 +1027,8 @@ impl AppState {
                 cfg.auto_copy_to_clipboard,
                 cfg.auto_paste_transcription,
                 cfg.add_space_after_sentence,
+                CustomDictionary::parse(&cfg.custom_dictionary)
+                    .map_err(|error| error.to_string())?,
             )
         };
 
@@ -1034,7 +1104,7 @@ impl AppState {
                     show_timestamps: config.show_timestamps,
                     temperature: config.temperature as f32,
                     no_speech_threshold: config.no_speech_threshold as f32,
-                    initial_prompt: config.initial_prompt.clone(),
+                    initial_prompt: dictionary.combined_initial_prompt(&config.initial_prompt),
                     use_beam_search: config.use_beam_search,
                     beam_size: config.beam_size as i32,
                 },
@@ -1061,13 +1131,16 @@ impl AppState {
 
         match text {
             Ok(text) => {
+                // Apply local vocabulary corrections before the transcript is
+                // written to history, copied, emitted, or pasted.
+                let text = dictionary.apply(&text);
                 let final_text = if add_space
                     && !text.is_empty()
                     && text.ends_with(|c: char| c.is_ascii_punctuation())
                 {
                     format!("{text} ")
                 } else {
-                    text.clone()
+                    text
                 };
 
                 // Update history with the completed transcription. Do not
@@ -1186,5 +1259,78 @@ impl AppState {
                 Err(failure_text)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: Uuid, status: RecordingStatus) -> RecordingRow {
+        let mut row = RecordingRow {
+            id,
+            timestamp: Utc::now(),
+            file_name: "recording.wav".to_string(),
+            title: String::new(),
+            preview: String::new(),
+            transcription: String::new(),
+            language: "en".to_string(),
+            duration_seconds: 1.0,
+            status,
+            progress: 0.0,
+            source_file_url: None,
+        };
+        row.refresh_display();
+        row
+    }
+
+    #[test]
+    fn watcher_surfaces_inner_task_errors() {
+        assert_eq!(
+            transcription_task_failure(Ok(Err("invalid dictionary".to_string()))),
+            Some("invalid dictionary".to_string())
+        );
+        assert_eq!(transcription_task_failure(Ok(Ok("done".to_string()))), None);
+    }
+
+    #[test]
+    fn inner_task_errors_fail_pending_and_transcribing_rows() {
+        let mut history = RecordingHistory::new_in_memory().unwrap();
+        for status in [RecordingStatus::Pending, RecordingStatus::Transcribing] {
+            let id = Uuid::new_v4();
+            history.insert(&row(id, status)).unwrap();
+            let changed = mark_incomplete_recording_failed(
+                &mut history,
+                id,
+                "dictionary line 1 contains an invalid field",
+            )
+            .unwrap();
+            assert!(changed.is_some());
+            let persisted = history.get(id).unwrap().unwrap();
+            assert_eq!(persisted.status, RecordingStatus::Failed);
+            assert_eq!(persisted.progress, 1.0);
+            assert_eq!(
+                persisted.transcription,
+                "dictionary line 1 contains an invalid field"
+            );
+        }
+    }
+
+    #[test]
+    fn task_error_handler_does_not_overwrite_terminal_rows() {
+        let mut history = RecordingHistory::new_in_memory().unwrap();
+        let id = Uuid::new_v4();
+        let mut completed = row(id, RecordingStatus::Completed);
+        completed.transcription = "finished".to_string();
+        history.insert(&completed).unwrap();
+
+        assert!(
+            mark_incomplete_recording_failed(&mut history, id, "late error")
+                .unwrap()
+                .is_none()
+        );
+        let persisted = history.get(id).unwrap().unwrap();
+        assert_eq!(persisted.status, RecordingStatus::Completed);
+        assert_eq!(persisted.transcription, "finished");
     }
 }

@@ -19,6 +19,12 @@ export type AppConfig = {
   temperature: number;
   no_speech_threshold: number;
   initial_prompt: string;
+  custom_dictionary: string;
+  retex_dictionary: string;
+  retex_vault_paths: string[];
+  retex_vault_identities: string[];
+  retex_auto_refresh: boolean;
+  retex_last_refresh_at: string | null;
   use_beam_search: boolean;
   beam_size: number;
   debug_mode: boolean;
@@ -71,6 +77,11 @@ export type CaretPosition = {
 export type TranscriptionResult = {
   text: string;
   success: boolean;
+};
+
+export type DictionaryApplyResult = {
+  text: string;
+  canonical_terms: string[];
 };
 
 export type BridgeVersion = {
@@ -296,6 +307,13 @@ export async function setThemeMaterial(theme: string): Promise<void> {
 
 export async function setSettings(config: AppConfig): Promise<void> {
   return await invoke("set_settings", { config });
+}
+
+export async function dictionaryApply(
+  dictionary: string,
+  text: string,
+): Promise<DictionaryApplyResult> {
+  return await invoke<DictionaryApplyResult>("dictionary_apply", { dictionary, text });
 }
 
 export async function getModelCatalog(): Promise<ModelCatalog> {
