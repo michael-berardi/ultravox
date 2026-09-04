@@ -42,7 +42,7 @@
   },
   "bundle": {
     "active": true,
-    "resources": {"../../skills/dictionary-review/SKILL.md": "skills/dictionary-review/SKILL.md"},
+    "resources": {"../../../skills/dictionary-review/SKILL.md": "skills/dictionary-review/SKILL.md"},
     "targets": ["app", "dmg", "deb", "rpm", "appimage", "msi", "nsis"],
     "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
     "copyright": "Copyright © 2026 UltraVox contributors",
