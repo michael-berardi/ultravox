@@ -84,6 +84,74 @@ pub fn copy_to_clipboard(state: State<AppState>, text: String) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
+/// Repository-relative location of the bundled dictionary-review skill, also
+/// used as the bundle resource path on every platform.
+const DICTIONARY_SKILL_RESOURCE: &str = "skills/dictionary-review/SKILL.md";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DictionarySkillInfo {
+    pub path: String,
+    pub exists: bool,
+    pub text: String,
+}
+
+/// Resolve the bundled dictionary-review skill: prefer the installed bundle
+/// resource, then fall back to the in-repository copy for source builds.
+pub fn dictionary_skill_path(app: &AppHandle) -> PathBuf {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let candidate = resource_dir.join(DICTIONARY_SKILL_RESOURCE);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join(DICTIONARY_SKILL_RESOURCE)
+}
+
+#[tauri::command]
+pub fn dictionary_skill_info(app: AppHandle) -> DictionarySkillInfo {
+    let path = dictionary_skill_path(&app);
+    let exists = path.is_file();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    DictionarySkillInfo {
+        path: path.display().to_string(),
+        exists,
+        text,
+    }
+}
+
+/// Reveal the bundled skill file in the platform file manager so the user can
+/// add it to their own agent. UltraVox never writes outside its own install.
+#[tauri::command]
+pub fn reveal_dictionary_skill(app: AppHandle) -> Result<(), String> {
+    let path = dictionary_skill_path(&app);
+    if !path.is_file() {
+        return Err(format!(
+            "dictionary skill file is missing: {}",
+            path.display()
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .status();
+    #[cfg(target_os = "windows")]
+    let opened = std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opened = std::process::Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(&path))
+        .status();
+    match opened {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("file manager exited with {status}")),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[tauri::command]
 pub fn report_frontend_error(message: String) {
     let message: String = message

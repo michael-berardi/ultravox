@@ -435,6 +435,20 @@ export async function copyToClipboard(text: string): Promise<void> {
   return await invoke("copy_to_clipboard", { text });
 }
 
+export type DictionarySkillInfo = {
+  path: string;
+  exists: boolean;
+  text: string;
+};
+
+export async function dictionarySkillInfo(): Promise<DictionarySkillInfo> {
+  return await invoke<DictionarySkillInfo>("dictionary_skill_info");
+}
+
+export async function revealDictionarySkill(): Promise<void> {
+  return await invoke("reveal_dictionary_skill");
+}
+
 export async function startModifierHotkey(modifier: string): Promise<number> {
   return await invoke<number>("start_modifier_hotkey", { modifier });
 }
