@@ -17,18 +17,18 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 pub use commands::{
     bridge_version, cancel_download, check_for_update, copy_to_clipboard, delete_all_recordings,
-    delete_recording, dictionary_apply, export_recording, get_app_info, get_app_status,
-    get_audio_devices, get_audio_input_config, get_caret_position, get_download_progress,
-    get_downloads, get_input_level, get_model_catalog, get_model_progress, get_permission_status,
-    get_recording, get_settings, get_shortcut_settings, get_transcription_status,
-    get_update_preferences, hide_indicator, import_file, import_url, install_update,
-    is_model_downloaded, list_recordings, open_permission_settings, paste_text, prepare_model,
-    report_frontend_error, request_permission, retry_transcription, search_recordings,
-    set_settings, set_shortcut_settings, set_theme_material, show_indicator, start_download,
-    start_key_combination_hotkey, start_modifier_hotkey, start_recording,
-    stop_key_combination_hotkey, stop_modifier_hotkey, stop_recording, transcribe_file,
-    update_recording, AppInfo, AppStatus, BridgeVersion, CaretPosition, DictionaryApplyResult,
-    TranscriptionResult,
+    delete_recording, dictionary_apply, dictionary_skill_info, export_recording, get_app_info,
+    get_app_status, get_audio_devices, get_audio_input_config, get_caret_position,
+    get_download_progress, get_downloads, get_input_level, get_model_catalog, get_model_progress,
+    get_permission_status, get_recording, get_settings, get_shortcut_settings,
+    get_transcription_status, get_update_preferences, hide_indicator, import_file, import_url,
+    install_update, is_model_downloaded, list_recordings, open_permission_settings, paste_text,
+    prepare_model, report_frontend_error, request_permission, retry_transcription,
+    reveal_dictionary_skill, search_recordings, set_settings, set_shortcut_settings,
+    set_theme_material, show_indicator, start_download, start_key_combination_hotkey,
+    start_modifier_hotkey, start_recording, stop_key_combination_hotkey, stop_modifier_hotkey,
+    stop_recording, transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion,
+    CaretPosition, DictionaryApplyResult, TranscriptionResult,
 };
 
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<Wry>, Box<dyn std::error::Error>> {
@@ -255,6 +255,8 @@ pub fn run() {
             install_update,
             get_caret_position,
             copy_to_clipboard,
+            dictionary_skill_info,
+            reveal_dictionary_skill,
             set_theme_material,
             stop_modifier_hotkey,
             start_key_combination_hotkey,
@@ -311,4 +313,19 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod dictionary_skill_tests {
+    /// The bundled copy inside `src-tauri/resources` must always match the
+    /// canonical skill at the repository root so shipped installs never
+    /// diverge from the documented skill.
+    #[test]
+    fn bundled_dictionary_skill_matches_canonical_skill() {
+        let canonical = include_str!("../../../../skills/dictionary-review/SKILL.md");
+        let bundled = include_str!("../resources/skills/dictionary-review/SKILL.md");
+        assert_eq!(canonical, bundled);
+        assert!(canonical.contains("# UltraVox dictionary review"));
+        assert!(canonical.len() > 4_000);
+    }
 }

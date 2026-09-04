@@ -15,11 +15,15 @@ import {
   installUpdate,
   setUpdatePreferences,
   onSettingsChanged,
+  dictionarySkillInfo,
+  revealDictionarySkill,
+  copyToClipboard,
   type AppConfig,
   type ModelEntry,
   type ModifierKey,
   type ShortcutSettings as ShortcutSettingsPayload,
   type UpdateInfo,
+  type DictionarySkillInfo as DictionarySkillInfoPayload,
 } from "../ipc";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { THEMES } from "../themes";
@@ -700,6 +704,80 @@ function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
 
 const MAX_DICTIONARY_BYTES = 128 * 1024;
 
+function DictionaryAgentSkill() {
+  const [skill, setSkill] = useState<DictionarySkillInfoPayload | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    dictionarySkillInfo()
+      .then((value) => {
+        if (!cancelled) setSkill(value);
+      })
+      .catch(() => {
+        if (!cancelled) setSkill({ path: "", exists: false, text: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const reveal = async () => {
+    if (!skill?.exists) return;
+    setStatus(null);
+    try {
+      await revealDictionarySkill();
+    } catch (cause) {
+      setStatus(`Could not reveal the skill file: ${String(cause)}`);
+    }
+  };
+
+  const copy = async () => {
+    if (!skill?.exists) return;
+    setStatus(null);
+    try {
+      await copyToClipboard(skill.text);
+      setStatus("Skill contents copied. Paste them into your agent's skills folder or instructions.");
+    } catch (cause) {
+      setStatus(`Could not copy the skill: ${String(cause)}`);
+    }
+  };
+
+  return (
+    <section className="settings-card dictionary-card" aria-labelledby="dictionary-skill-heading">
+      <div className="settings-card-heading">
+        <div>
+          <h3 id="dictionary-skill-heading">Agent dictionary review</h3>
+          <p>Hand a safe, local transcript audit to your AI agent.</p>
+        </div>
+      </div>
+      <p className="description">
+        UltraVox bundles a skill file that walks any AI agent through reviewing your local transcripts and proposing verified dictionary corrections — fully on this device, nothing uploaded. UltraVox does not install anything into your agent: reveal the file, then add it to your agent yourself.
+      </p>
+      <div className="dictionary-skill-actions">
+        <button type="button" className="text-button" onClick={() => void reveal()} disabled={!skill?.exists}>
+          Reveal skill file
+        </button>
+        <button type="button" className="text-button" onClick={() => void copy()} disabled={!skill?.exists}>
+          Copy skill contents
+        </button>
+      </div>
+      {skill?.exists ? (
+        <p className="description dictionary-skill-path" title={skill.path}>
+          {skill.path}
+        </p>
+      ) : (
+        <p className="description dictionary-skill-path">Skill file unavailable in this install.</p>
+      )}
+      {status && (
+        <p className="description dictionary-status" role="status">
+          {status}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function DictionarySettings({ config, onChange }: SettingsSectionProps) {
   const byteCount = new TextEncoder().encode(config.custom_dictionary).length;
   const updateDictionary = (value: string) => {
@@ -739,6 +817,8 @@ function DictionarySettings({ config, onChange }: SettingsSectionProps) {
           UltraVox Light never scans Retex, contacts, files, or other apps for vocabulary.
         </p>
       </section>
+
+      <DictionaryAgentSkill />
     </div>
   );
 }

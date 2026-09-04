@@ -19,7 +19,7 @@ Private, on-device transcription for macOS, Windows, and Linux. UltraVox Light i
 - On-device microphone transcription with English and multilingual models.
 - Global recording shortcuts on macOS, plus in-app recording on every supported platform.
 - Transcription from supported URLs and local audio files.
-- A manual, local custom dictionary for preferred terms and spoken aliases.
+- A manual, local custom dictionary for preferred terms and spoken aliases, with a bundled [dictionary-review skill](#custom-dictionary) any AI agent can run locally.
 - Local history with search, copy, export, retry, and deletion controls.
 - Five free themes: Midnight, Silver Rack, Nord Frost, Vapor, and Obsidian Rite.
 - Public release updates verified with published SHA-256 checksums and platform identity checks.
@@ -64,6 +64,10 @@ A line may contain only the canonical term, or `Canonical term = alias one, alia
 The dictionary accepts up to 128 KiB and 512 canonical entries. Canonical and alias fields are limited to 128 bytes, with at most 16 aliases total for each canonical term.
 
 This feature is manual in UltraVox Light. It does not scan Retex, contacts, files, or other apps for vocabulary.
+
+### Review the dictionary with your AI agent
+
+UltraVox bundles a dictionary-review skill for AI agents at `skills/dictionary-review/SKILL.md`, also installed inside the app under `Resources/skills/dictionary-review/SKILL.md`. Open **Settings → Dictionary → Agent dictionary review** to reveal the file or copy its contents, then add it to your agent yourself — UltraVox never modifies your agent. The skill audits local transcripts read-only, proposes only verified corrections, and verifies each one before finishing; everything stays on your device.
 
 ## Privacy
 
