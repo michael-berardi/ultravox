@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "UltraVox",
   "identifier": "com.imploselabs.ultravox",
-  "version": "0.9.0",
+  "version": "0.11.0",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "UltraVox Light",
+        "title": "UltraVox",
         "width": 450,
         "height": 650,
         "minWidth": 400,
@@ -26,33 +26,59 @@
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 25 },
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 25
+        },
         "focus": true
+      },
+      {
+        "label": "meeting-reminder",
+        "title": "Meeting detected",
+        "width": 400,
+        "height": 240,
+        "minWidth": 360,
+        "minHeight": 200,
+        "resizable": false,
+        "center": true,
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false
       }
     ],
-    "security": { "csp": null, "capabilities": ["default"] },
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    },
     "trayIcon": {
       "id": "main-tray",
       "iconPath": "icons/tray-icon.png",
       "iconAsTemplate": true,
       "menuOnLeftClick": true,
-      "tooltip": "UltraVox Light"
+      "tooltip": "UltraVox"
     },
     "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
-    "resources": {"../../../skills/dictionary-review/SKILL.md": "skills/dictionary-review/SKILL.md"},
+    "resources": {"../../../skills/dictionary-review/SKILL.md": "skills/dictionary-review/SKILL.md", "../../../skills/voice-studio/SKILL.md": "skills/voice-studio/SKILL.md"},
     "targets": ["app", "dmg", "deb", "rpm", "appimage", "msi", "nsis"],
-    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
-    "copyright": "Copyright © 2026 UltraVox contributors",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "Copyright © 2024-present Implose Cybernetics",
     "category": "Productivity",
     "macOS": {
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist",
       "signingIdentity": "-"
     },
-    "shortDescription": "Private on-device transcription",
-    "longDescription": "UltraVox Light provides private real-time audio transcription using downloadable on-device models."
+    "shortDescription": "Real-time audio transcription",
+    "longDescription": "UltraVox provides real-time audio transcription using downloadable on-device models."
   }
 }

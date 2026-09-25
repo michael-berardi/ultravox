@@ -1,0 +1,23 @@
+# Paths dropped from the open-source export produced by
+# Scripts/export-open-source.sh.
+#
+# Format: one repo-relative path per line (a file or a directory; a trailing
+# "/" is optional). Blank lines and lines starting with "#" are ignored.
+# A path matches itself and everything below it.
+#
+# Use this list for Pro-only core files that must not ship in the public
+# source tree (for example a voice-studio core file if it moves behind the
+# Pro module). The export script additionally always drops the two Pro module
+# roots (apps/desktop/src-tauri/src/pro/ and apps/desktop/src/pro/) and the
+# release/ artifacts.
+
+# Private release, notary, and organization tooling:
+Scripts/build-organization-bundle
+Scripts/mirror-control
+Scripts/publish-release.sh
+
+# Internal licensing contract (names private keychain items):
+docs/pro-licensing.md
+
+# Voice Studio core (compiled only with the Pro feature):
+crates/ultravox-core/src/voice_studio.rs

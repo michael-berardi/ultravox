@@ -1,11 +1,13 @@
 [package]
 name = "ultravox-core"
-version = "0.9.0"
+version = "0.11.0"
 edition = "2021"
-authors = ["UltraVox contributors"]
+authors = ["Implose Cybernetics"]
 license = "MIT"
 description = "Core Rust library for UltraVox (audio, transcription, config, history, model catalog)"
-repository = "https://github.com/michael-berardi/ultravox-light"
+repository = "https://github.com/michael-berardi/ultravox"
+
+[features]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

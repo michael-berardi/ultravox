@@ -13,15 +13,17 @@ pub mod history;
 pub mod model_catalog;
 pub mod shortcuts;
 pub mod transcription;
+#[cfg(feature = "voice-studio")]
+pub mod voice_studio;
 
 pub use audio::{
     decode_media_file_to_wav, AudioBackend, AudioDeviceInfo, AudioError, AudioInputConfig,
-    AudioRecording, CpalAudioBackend, IMPORT_MAX_BYTES, IMPORT_SAMPLE_RATE,
+    AudioRecording, CpalAudioBackend, StubAudioBackend, IMPORT_MAX_BYTES, IMPORT_SAMPLE_RATE,
 };
 pub use config::{AppConfig, ConfigError, ConfigManager, Engine, Language};
 pub use dictionary::{
-    CustomDictionary, DictionaryError, MAX_ALIASES_PER_ENTRY, MAX_DICTIONARY_BYTES,
-    MAX_DICTIONARY_ENTRIES, MAX_DICTIONARY_FIELD_BYTES,
+    CustomDictionary, DictionaryEntry, DictionaryError, MAX_ALIASES_PER_ENTRY,
+    MAX_DICTIONARY_BYTES, MAX_DICTIONARY_ENTRIES, MAX_DICTIONARY_FIELD_BYTES,
 };
 pub use download::{
     DownloadError, DownloadHandle, DownloadManager, DownloadProgress, DownloadState, ModelDownload,

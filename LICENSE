@@ -1,7 +1,15 @@
 MIT License
 
 Copyright (c) 2024 OpenSuperWhisper
-Copyright (c) 2026 UltraVox contributors
+Copyright (c) 2026 Implose Cybernetics
+
+This license applies to the source code and documentation distributed in this
+repository. The Pro module linked into official UltraVox builds is not part of
+this repository: it is proprietary software licensed separately by Implose
+Cybernetics. This license does not grant permission to use the UltraVox or
+Implose Cybernetics names, logos, product identity, signing identities, hosted
+services, or commercial release channels. UltraVox Pro licenses, binaries, and
+services are offered separately under terms provided by Implose Cybernetics.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

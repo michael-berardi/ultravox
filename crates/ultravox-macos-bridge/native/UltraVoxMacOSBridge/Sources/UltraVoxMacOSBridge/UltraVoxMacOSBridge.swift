@@ -13,11 +13,13 @@
 import AppKit
 @preconcurrency import ApplicationServices
 import AVFoundation
+import Accelerate
 import Carbon
 import Cocoa
 import Darwin
 import Foundation
 
+@preconcurrency import ScreenCaptureKit
 
 #if canImport(FluidAudio)
 import FluidAudio
@@ -262,8 +264,1294 @@ private final class ResultBox<T: Sendable>: @unchecked Sendable {
     }
 }
 
+@available(macOS 15.0, *)
+private enum MeetingCaptureError: LocalizedError {
+    case noDisplay
+    case alreadyRecording
+    case notRecording
+    case recordingDidNotFinish
+    case exportUnavailable
+    case exportFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noDisplay:
+            return "UltraVox could not find a display to capture."
+        case .alreadyRecording:
+            return "Meeting mode is already recording."
+        case .notRecording:
+            return "Meeting mode is not recording."
+        case .recordingDidNotFinish:
+            return "The meeting recording did not finish writing."
+        case .exportUnavailable:
+            return "UltraVox could not prepare the meeting audio track."
+        case let .exportFailed(details):
+            return "UltraVox could not extract meeting audio: \(details)"
+        }
+    }
+}
+
+@available(macOS 15.0, *)
+private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, @unchecked Sendable {
+    static let shared = MeetingCaptureManager()
+
+    private let lock = NSLock()
+    private var stream: SCStream?
+    private var recordingOutput: SCRecordingOutput?
+    private var videoURL: URL?
+    private var finishSignal: DispatchSemaphore?
+    private var finishError: Error?
+    private var recordingStarted = false
+    private var recordingFinished = false
+    private var startContinuation: CheckedContinuation<Void, Error>?
+    private var failureCallback: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
+
+    func setFailureCallback(
+        _ callback: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
+    ) {
+        lock.withLock {
+            failureCallback = callback
+        }
+    }
+
+    private func notifyFailure(_ error: Error) {
+        let callback = lock.withLock { failureCallback }
+        guard let callback else { return }
+        let cString = error.localizedDescription.duplicateAsCChar()
+        callback(cString)
+        free(cString)
+    }
+
+    private func waitForRecordingStart() async throws {
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            lock.lock()
+            if let finishError {
+                lock.unlock()
+                continuation.resume(throwing: finishError)
+            } else if recordingStarted {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                startContinuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func start(outputURL: URL, captureMicrophone: Bool) async throws {
+        let alreadyRecording = lock.withLock { self.stream != nil }
+        if alreadyRecording {
+            throw MeetingCaptureError.alreadyRecording
+        }
+
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        guard let display = content.displays.first else {
+            throw MeetingCaptureError.noDisplay
+        }
+
+        try? FileManager.default.removeItem(at: outputURL)
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let streamConfiguration = SCStreamConfiguration()
+        streamConfiguration.width = 16
+        streamConfiguration.height = 16
+        streamConfiguration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        streamConfiguration.queueDepth = 1
+        streamConfiguration.showsCursor = false
+        streamConfiguration.capturesAudio = true
+        streamConfiguration.excludesCurrentProcessAudio = true
+        streamConfiguration.captureMicrophone = captureMicrophone
+        // SCRecordingOutput requires a video stream. Keep it deliberately tiny;
+        // only the mixed audio track survives after stop().
+        streamConfiguration.width = 16
+        streamConfiguration.height = 16
+        streamConfiguration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        streamConfiguration.queueDepth = 3
+
+        let recordingConfiguration = SCRecordingOutputConfiguration()
+        if recordingConfiguration.availableOutputFileTypes.contains(.mp4) {
+            recordingConfiguration.outputFileType = .mp4
+        } else if let firstType = recordingConfiguration.availableOutputFileTypes.first {
+            recordingConfiguration.outputFileType = firstType
+        }
+        recordingConfiguration.outputURL = outputURL
+        if recordingConfiguration.availableVideoCodecTypes.contains(.h264) {
+            recordingConfiguration.videoCodecType = .h264
+        }
+
+        let recordingOutput = SCRecordingOutput(
+            configuration: recordingConfiguration,
+            delegate: self
+        )
+        let stream = SCStream(filter: filter, configuration: streamConfiguration, delegate: nil)
+        try stream.addRecordingOutput(recordingOutput)
+
+        lock.withLock {
+            self.stream = stream
+            self.recordingOutput = recordingOutput
+            self.videoURL = outputURL
+            finishError = nil
+            recordingStarted = false
+            recordingFinished = false
+            startContinuation = nil
+        }
+
+        do {
+            try await stream.startCapture()
+            try await waitForRecordingStart()
+        } catch {
+            try? await stream.stopCapture()
+            lock.withLock {
+                self.stream = nil
+                self.recordingOutput = nil
+                self.videoURL = nil
+                finishSignal = nil
+                finishError = nil
+                recordingStarted = false
+                recordingFinished = false
+                startContinuation = nil
+            }
+            try? FileManager.default.removeItem(at: outputURL)
+            throw error
+        }
+    }
+
+    func stop() async throws -> URL {
+        let activeCapture = lock.withLock {
+            () -> (SCStream, URL, DispatchSemaphore, Bool, Error?)? in
+            guard let stream, let videoURL else { return nil }
+            let signal = DispatchSemaphore(value: 0)
+            finishSignal = signal
+            return (stream, videoURL, signal, recordingFinished, finishError)
+        }
+        guard let (stream, videoURL, signal, alreadyFinished, existingRecordingError) = activeCapture else {
+            throw MeetingCaptureError.notRecording
+        }
+
+        var stopError: Error?
+        do {
+            try await stream.stopCapture()
+        } catch {
+            stopError = error
+        }
+        // A successful stopCapture() is always answered by either
+        // recordingOutputDidFinishRecording or didFailWithError, and both signal
+        // this semaphore. Long recordings can take tens of seconds to finalize
+        // after stopCapture returns, so wait without an arbitrary timeout. The
+        // finish callback may also have fired before stop() was called; the
+        // recordingFinished flag covers that case so a retry can still succeed.
+        let didFinish: Bool
+        if alreadyFinished || stopError != nil || existingRecordingError != nil {
+            didFinish = alreadyFinished
+        } else {
+            await Task.detached {
+                Self.waitForFinish(signal)
+            }.value
+            didFinish = true
+        }
+
+        let recordingError = lock.withLock { () -> Error? in
+            defer {
+                self.stream = nil
+                recordingOutput = nil
+                self.videoURL = nil
+                finishSignal = nil
+                finishError = nil
+                recordingStarted = false
+                recordingFinished = false
+                startContinuation = nil
+            }
+            return finishError
+        }
+
+        if let stopError {
+            throw stopError
+        }
+        if let recordingError {
+            throw recordingError
+        }
+        guard didFinish else {
+            throw MeetingCaptureError.recordingDidNotFinish
+        }
+        return try await exportAudio(from: videoURL)
+    }
+
+    private static func waitForFinish(_ signal: DispatchSemaphore) {
+        signal.wait()
+    }
+
+    private func exportAudio(from videoURL: URL) async throws -> URL {
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("m4a")
+        try? FileManager.default.removeItem(at: audioURL)
+        let asset = AVURLAsset(url: videoURL)
+        let sourceTracks = try await asset.loadTracks(withMediaType: .audio)
+        guard !sourceTracks.isEmpty else {
+            throw MeetingCaptureError.exportUnavailable
+        }
+        print("[UltraVoxMacOSBridge] exporting \(sourceTracks.count) captured audio track(s)")
+
+        let composition = AVMutableComposition()
+        var inputParameters: [AVMutableAudioMixInputParameters] = []
+        let volume: Float = sourceTracks.count > 1 ? 0.7 : 1
+        for sourceTrack in sourceTracks {
+            guard let compositionTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                throw MeetingCaptureError.exportUnavailable
+            }
+            let sourceRange = try await sourceTrack.load(.timeRange)
+            try compositionTrack.insertTimeRange(sourceRange, of: sourceTrack, at: .zero)
+            let parameters = AVMutableAudioMixInputParameters(track: compositionTrack)
+            parameters.setVolume(volume, at: .zero)
+            inputParameters.append(parameters)
+        }
+
+        guard let exporter = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetAppleM4A
+        ) else {
+            throw MeetingCaptureError.exportUnavailable
+        }
+        let audioMix = AVMutableAudioMix()
+        audioMix.inputParameters = inputParameters
+        exporter.audioMix = audioMix
+        exporter.outputURL = audioURL
+        exporter.outputFileType = .m4a
+        await exporter.export()
+        guard exporter.status == .completed else {
+            throw MeetingCaptureError.exportFailed(
+                exporter.error?.localizedDescription ?? "unknown export error"
+            )
+        }
+        try? FileManager.default.removeItem(at: videoURL)
+        return audioURL
+    }
+
+    func recordingOutputDidStartRecording(_ recordingOutput: SCRecordingOutput) {
+        lock.lock()
+        recordingStarted = true
+        let continuation = startContinuation
+        startContinuation = nil
+        lock.unlock()
+        continuation?.resume()
+    }
+
+    func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
+        lock.lock()
+        recordingFinished = true
+        let signal = finishSignal
+        lock.unlock()
+        signal?.signal()
+    }
+
+    func recordingOutput(
+        _ recordingOutput: SCRecordingOutput,
+        didFailWithError error: any Error
+    ) {
+        lock.lock()
+        finishError = error
+        let continuation = startContinuation
+        startContinuation = nil
+        let signal = finishSignal
+        lock.unlock()
+        continuation?.resume(throwing: error)
+        signal?.signal()
+        notifyFailure(error)
+    }
+}
+
+import CoreAudio
+
+// MARK: - System output spectrum meter
+
+/// Frequency bins used by the UI, ordered low to high. Each value comes from
+/// the corresponding PCM frequency magnitude; no decorative bar curve is
+/// applied later in the frontend.
+internal enum SystemAudioSignal {
+    static let bandFrequencies: [Double] = [
+        63, 125, 250, 500, 1_000, 2_000, 3_500, 5_000, 7_500, 10_000, 14_000,
+    ]
+
+    static func normalizedLevel(rms: Double) -> Float {
+        guard rms.isFinite, rms > 0 else { return 0 }
+        let decibels = 20 * log10(rms)
+        return Float(min(1, max(0, (decibels + 60) / 60)))
+    }
+
+    /// Accumulates real Goertzel magnitudes for the fixed visual frequency
+    /// bins. This avoids an FFT allocation/setup on every ScreenCaptureKit
+    /// callback while preserving frequency-selective response.
+    static func accumulateSpectrum(
+        samples: UnsafePointer<Float>,
+        count: Int,
+        sampleRate: Double,
+        into spectrum: inout [Float]
+    ) {
+        guard count > 0, sampleRate.isFinite, sampleRate > 0,
+            spectrum.count == bandFrequencies.count
+        else { return }
+
+        for (bandIndex, frequency) in bandFrequencies.enumerated() {
+            guard frequency < sampleRate / 2 else { continue }
+            let coefficient = 2 * cos(2 * Double.pi * frequency / sampleRate)
+            var previous = 0.0
+            var previousPrevious = 0.0
+            for sampleIndex in 0..<count {
+                let current =
+                    Double(samples[sampleIndex]) + coefficient * previous - previousPrevious
+                previousPrevious = previous
+                previous = current
+            }
+            let power = max(
+                0,
+                previous * previous + previousPrevious * previousPrevious
+                    - coefficient * previous * previousPrevious
+            )
+            let amplitude = 2 * sqrt(power) / Double(count)
+            spectrum[bandIndex] = max(
+                spectrum[bandIndex],
+                normalizedLevel(rms: amplitude)
+            )
+        }
+    }
+}
+
+private final class SystemAudioLevelStore: @unchecked Sendable {
+    static let shared = SystemAudioLevelStore()
+
+    private let lock = NSLock()
+    private var storedLevel: Float = 0
+    private var storedSpectrum = [Float](
+        repeating: 0,
+        count: SystemAudioSignal.bandFrequencies.count
+    )
+
+    var level: Float {
+        lock.withLock { storedLevel }
+    }
+
+    var spectrum: [Float] {
+        lock.withLock { storedSpectrum }
+    }
+
+    func set(level: Float, spectrum: [Float]) {
+        lock.withLock {
+            storedLevel = min(1, max(0, level))
+            guard spectrum.count == storedSpectrum.count else { return }
+            for index in storedSpectrum.indices {
+                let target = min(1, max(0, spectrum[index]))
+                // Immediate attack, short release. Both values still derive
+                // exclusively from PCM; smoothing only prevents visual chatter.
+                storedSpectrum[index] =
+                    target >= storedSpectrum[index]
+                    ? target
+                    : storedSpectrum[index] * 0.68 + target * 0.32
+            }
+        }
+    }
+
+    func reset() {
+        lock.withLock {
+            storedLevel = 0
+            storedSpectrum = [Float](
+                repeating: 0,
+                count: SystemAudioSignal.bandFrequencies.count
+            )
+        }
+    }
+}
+
+@available(macOS 15.0, *)
+private final class SystemAudioLevelOutput: NSObject, SCStreamOutput, @unchecked Sendable {
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of outputType: SCStreamOutputType
+    ) {
+        guard outputType == .audio,
+            sampleBuffer.isValid,
+            let description = sampleBuffer.formatDescription
+        else { return }
+        let format = AVAudioFormat(cmAudioFormatDescription: description)
+
+        let frameCount = AVAudioFrameCount(sampleBuffer.numSamples)
+        guard frameCount > 0,
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+        else { return }
+        buffer.frameLength = frameCount
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer,
+            at: 0,
+            frameCount: Int32(frameCount),
+            into: buffer.mutableAudioBufferList
+        ) == noErr,
+            let channels = buffer.floatChannelData
+        else { return }
+
+        let channelCount = Int(format.channelCount)
+        let sampleCount = Int(frameCount)
+        guard channelCount > 0, sampleCount > 0 else { return }
+        var meanSquareTotal: Float = 0
+        var spectrum = [Float](
+            repeating: 0,
+            count: SystemAudioSignal.bandFrequencies.count
+        )
+        for channelIndex in 0..<channelCount {
+            var channelMeanSquare: Float = 0
+            vDSP_measqv(
+                channels[channelIndex],
+                1,
+                &channelMeanSquare,
+                vDSP_Length(sampleCount)
+            )
+            meanSquareTotal += channelMeanSquare
+            SystemAudioSignal.accumulateSpectrum(
+                samples: channels[channelIndex],
+                count: sampleCount,
+                sampleRate: format.sampleRate,
+                into: &spectrum
+            )
+        }
+        let rms = sqrt(Double(meanSquareTotal) / Double(channelCount))
+        SystemAudioLevelStore.shared.set(
+            level: SystemAudioSignal.normalizedLevel(rms: rms),
+            spectrum: spectrum
+        )
+    }
+}
+
+@available(macOS 15.0, *)
+private actor SystemAudioLevelMeter {
+    static let shared = SystemAudioLevelMeter()
+
+    private let output = SystemAudioLevelOutput()
+    private let sampleQueue = DispatchQueue(
+        label: "studio.libertydesign.ultravox.system-audio-meter",
+        qos: .userInteractive
+    )
+    private var stream: SCStream?
+
+    func start() async throws {
+        guard stream == nil else { return }
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        guard let display = content.displays.first else {
+            throw MeetingCaptureError.noDisplay
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let configuration = SCStreamConfiguration()
+        configuration.width = 16
+        configuration.height = 16
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        configuration.queueDepth = 1
+        configuration.showsCursor = false
+        configuration.capturesAudio = true
+        configuration.excludesCurrentProcessAudio = true
+        configuration.captureMicrophone = false
+
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: sampleQueue)
+        self.stream = stream
+        do {
+            try await stream.startCapture()
+        } catch {
+            self.stream = nil
+            SystemAudioLevelStore.shared.reset()
+            throw error
+        }
+    }
+
+    func stop() async {
+        guard let stream else {
+            SystemAudioLevelStore.shared.reset()
+            return
+        }
+        self.stream = nil
+        try? await stream.stopCapture()
+        try? stream.removeStreamOutput(output, type: .audio)
+        SystemAudioLevelStore.shared.reset()
+    }
+}
+
+// MARK: - Media activity and system output controls
+
+/// One other application detected through public CoreAudio process state.
+internal struct MediaProcessSource: Equatable, Sendable {
+    let processID: pid_t
+    let appName: String?
+    let bundleIdentifier: String?
+}
+
+/// Capture-free detection of processes currently running audio output.
+///
+/// Uses only `kAudioHardwarePropertyProcessObjectList` and
+/// `kAudioProcessPropertyIsRunningOutput`; no PCM is read and no new
+/// permission is required. The caller's own process is excluded so UltraVox
+/// never reports itself as the media source (no hidden recording).
+internal enum MediaActivity {
+    private static func processIDs() -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        let systemObject = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(systemObject, &address, 0, nil, &size) == noErr,
+            size > 0
+        else { return [] }
+        var ids = [AudioObjectID](
+            repeating: AudioObjectID(0), count: Int(size) / MemoryLayout<AudioObjectID>.stride)
+        guard AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &ids) == noErr else {
+            return []
+        }
+        return ids
+    }
+
+    private static func processPID(_ objectID: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var pid: pid_t = 0
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        guard AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &pid) == noErr else {
+            return nil
+        }
+        return pid
+    }
+
+    private static func isRunningOutput(_ objectID: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningOutput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &running) == noErr
+            && running != 0
+    }
+
+    private static func parentProcessID(_ processID: pid_t) -> pid_t? {
+        var info = proc_bsdinfo()
+        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let actualSize = withUnsafeMutablePointer(to: &info) { pointer in
+            proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, pointer, expectedSize)
+        }
+        guard actualSize == expectedSize, info.pbi_ppid > 0 else { return nil }
+        return pid_t(info.pbi_ppid)
+    }
+
+    /// CoreAudio and MediaRemote can attribute browser playback to a sandboxed
+    /// helper with no usable app identity. Walk the bounded parent chain to
+    /// the regular host app so the UI can name Chrome/Safari/etc.
+    static func owningApplication(_ processID: pid_t) -> NSRunningApplication? {
+        var current = processID
+        var visited = Set<pid_t>()
+        var fallback: NSRunningApplication?
+        for _ in 0..<8 {
+            guard current > 0, visited.insert(current).inserted else { break }
+            if let app = NSRunningApplication(processIdentifier: current),
+                app.bundleIdentifier != nil
+            {
+                fallback = fallback ?? app
+                if app.activationPolicy == .regular { return app }
+            }
+            guard let parent = parentProcessID(current) else { break }
+            current = parent
+        }
+        return fallback
+    }
+
+    /// Prefer the exact now-playing client, then a known browser's helper
+    /// process, and only then fall back to the first active process.
+    static func activeSource(preferredProcessID: pid_t? = nil) -> MediaProcessSource? {
+        let selfPID = getpid()
+        let candidates = processIDs().compactMap { objectID -> MediaProcessSource? in
+            guard isRunningOutput(objectID), let pid = processPID(objectID),
+                pid != selfPID, pid != 0
+            else { return nil }
+            let app = owningApplication(pid)
+            return MediaProcessSource(
+                processID: pid,
+                appName: app?.localizedName,
+                bundleIdentifier: app?.bundleIdentifier)
+        }
+        guard !candidates.isEmpty else { return nil }
+        if let preferredProcessID,
+            let exact = candidates.first(where: { $0.processID == preferredProcessID })
+        {
+            return exact
+        }
+        if let preferredProcessID,
+            let preferredBundle = NSRunningApplication(processIdentifier: preferredProcessID)?
+                .bundleIdentifier,
+            let familyMatch = candidates.first(where: {
+                BundleFamily.matches($0.bundleIdentifier, preferredBundle)
+            })
+        {
+            return familyMatch
+        }
+        return candidates[0]
+    }
+}
+
+/// Conservative browser helper/main bundle matching. Arbitrary bundle ID
+/// prefixes are intentionally not treated as the same application.
+internal enum BundleFamily {
+    private static let browserBases = [
+        "com.google.Chrome",
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+        "company.thebrowser.Browser",
+        "org.mozilla.firefox",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+    ]
+    private static let safariFamily = Set([
+        "com.apple.Safari",
+        "com.apple.WebKit.Networking",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.GPU",
+    ])
+
+    static func matches(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs, let rhs, !lhs.isEmpty, !rhs.isEmpty else { return false }
+        if lhs == rhs { return true }
+        guard let left = family(for: lhs), let right = family(for: rhs) else { return false }
+        return left == right
+    }
+
+    private static func family(for bundleIdentifier: String) -> String? {
+        if safariFamily.contains(bundleIdentifier) { return "com.apple.Safari" }
+        for base in browserBases where bundleIdentifier == base
+            || bundleIdentifier.hasPrefix("\(base).helper")
+                && (bundleIdentifier == "\(base).helper"
+                    || bundleIdentifier.hasPrefix("\(base).helper."))
+        {
+            return base
+        }
+        return nil
+    }
+}
+
+/// Default-output device volume and mute through public HAL properties.
+/// A device without a volume or mute control yields nil (unsupported state)
+/// rather than a fabricated value.
+internal enum SystemOutput {
+    static func defaultDevice() -> AudioObjectID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var device = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
+        guard status == noErr, device != kAudioObjectUnknown, device != 0 else { return nil }
+        return device
+    }
+
+    private static func volumeAddress(_ element: UInt32) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: element)
+    }
+
+    /// Prefer the master control; otherwise use the available stereo channels.
+    static func volumeElements(in device: AudioObjectID) -> [UInt32] {
+        var master = volumeAddress(kAudioObjectPropertyElementMain)
+        if AudioObjectHasProperty(device, &master) {
+            return [kAudioObjectPropertyElementMain]
+        }
+        return [UInt32(1), 2].filter { element in
+            var address = volumeAddress(element)
+            return AudioObjectHasProperty(device, &address)
+        }
+    }
+
+    private static func scalarValue(_ device: AudioObjectID, _ element: UInt32) -> Double? {
+        var address = volumeAddress(element)
+        var scalar: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &scalar) == noErr else {
+            return nil
+        }
+        return Double(scalar)
+    }
+
+    /// Mean volume across controlled elements, or nil when unsupported.
+    static func volume() -> Double? {
+        guard let device = defaultDevice() else { return nil }
+        let elements = volumeElements(in: device)
+        guard !elements.isEmpty else { return nil }
+        var total = 0.0
+        for element in elements {
+            guard let scalar = scalarValue(device, element) else { return nil }
+            total += scalar
+        }
+        return total / Double(elements.count)
+    }
+
+    /// Sets every settable volume element; returns false when nothing was written.
+    static func setVolume(_ newValue: Double) -> Bool {
+        let clamped = min(max(newValue, 0), 1)
+        guard let device = defaultDevice(), !volumeElements(in: device).isEmpty else { return false }
+        var wroteAny = false
+        for element in volumeElements(in: device) {
+            var address = volumeAddress(element)
+            var settable = DarwinBoolean(false)
+            guard AudioObjectIsPropertySettable(device, &address, &settable) == noErr,
+                settable.boolValue
+            else { continue }
+            var scalar = Float32(clamped)
+            let status = AudioObjectSetPropertyData(
+                device, &address, 0, nil, UInt32(MemoryLayout<Float32>.size), &scalar)
+            if status == noErr { wroteAny = true }
+        }
+        return wroteAny
+    }
+
+    private static func muteAddress() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+    }
+
+    static func muted() -> Bool? {
+        guard let device = defaultDevice() else { return nil }
+        var address = muteAddress()
+        guard AudioObjectHasProperty(device, &address) else { return nil }
+        var muted: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &muted) == noErr else {
+            return nil
+        }
+        return muted != 0
+    }
+
+    static func setMuted(_ muted: Bool) -> Bool {
+        guard let device = defaultDevice() else { return false }
+        var address = muteAddress()
+        guard AudioObjectHasProperty(device, &address) else { return false }
+        var settable = DarwinBoolean(false)
+        guard AudioObjectIsPropertySettable(device, &address, &settable) == noErr,
+            settable.boolValue
+        else { return false }
+        var value: UInt32 = muted ? 1 : 0
+        return AudioObjectSetPropertyData(
+            device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value) == noErr
+    }
+}
+
+// MARK: - Optional MediaRemote access (runtime-only)
+
+/// Transport commands mapped to MediaRemote send-command codes.
+internal enum MediaTransportCommand: String {
+    case playPause = "play_pause"
+    case previous
+    case next
+
+    /// Zero-based `MRMediaRemoteCommand` values.
+    var sendCommandCode: UInt32 {
+        switch self {
+        case .playPause: return 2
+        case .next: return 4
+        case .previous: return 5
+        }
+    }
+}
+
+internal struct MediaTransportCapabilities: Equatable, Sendable {
+    let playPause: Bool
+    let previous: Bool
+    let next: Bool
+
+    static func resolve(
+        sendAvailable: Bool,
+        supported: Set<UInt32>?,
+        enabled: Set<UInt32>?
+    ) -> MediaTransportCapabilities {
+        guard let supported, let enabled else {
+            return MediaTransportCapabilities(
+                playPause: sendAvailable, previous: false, next: false)
+        }
+        return MediaTransportCapabilities(
+            playPause: sendAvailable,
+            previous: sendAvailable
+                && supported.contains(MediaTransportCommand.previous.sendCommandCode)
+                && enabled.contains(MediaTransportCommand.previous.sendCommandCode),
+            next: sendAvailable
+                && supported.contains(MediaTransportCommand.next.sendCommandCode)
+                && enabled.contains(MediaTransportCommand.next.sendCommandCode))
+    }
+}
+
+private enum NowPlayingKey {
+    static let title = "kMRMediaRemoteNowPlayingInfoTitle"
+    static let artist = "kMRMediaRemoteNowPlayingInfoArtist"
+    static let album = "kMRMediaRemoteNowPlayingInfoAlbum"
+    static let elapsedTime = "kMRMediaRemoteNowPlayingInfoElapsedTime"
+    static let duration = "kMRMediaRemoteNowPlayingInfoDuration"
+    static let playbackRate = "kMRMediaRemoteNowPlayingInfoPlaybackRate"
+    static let applicationIsPlaying = "kMRMediaRemoteNowPlayingApplicationIsPlaying"
+}
+
+internal struct NowPlayingSnapshot: Equatable, Sendable {
+    let processID: pid_t?
+    let appName: String?
+    let bundleIdentifier: String?
+    let title: String?
+    let artist: String?
+    let album: String?
+    let elapsedSeconds: Double?
+    let durationSeconds: Double?
+    let isPlaying: Bool?
+
+    /// Playback rate above zero means playing; falls back to the explicit
+    /// playing flag when the rate key is absent.
+    static func playingState(from info: [String: Any]) -> Bool? {
+        if let rate = info[NowPlayingKey.playbackRate] as? Double {
+            return rate > 0
+        }
+        if let rate = info[NowPlayingKey.playbackRate] as? NSNumber {
+            return rate.doubleValue > 0
+        }
+        if let playing = info[NowPlayingKey.applicationIsPlaying] as? Bool {
+            return playing
+        }
+        return nil
+    }
+
+    static func time(_ key: String, from info: [String: Any]) -> Double? {
+        let value: Double
+        if let number = info[key] as? Double {
+            value = number
+        } else if let number = info[key] as? NSNumber {
+            value = number.doubleValue
+        } else {
+            return nil
+        }
+        return value.isFinite && value >= 0 ? value : nil
+    }
+}
+
+/// Thread-safe handoff box for the async MediaRemote callback.
+private final class NowPlayingBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: NowPlayingSnapshot?
+
+    func set(_ newValue: NowPlayingSnapshot?) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
+    }
+
+    func get() -> NowPlayingSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+/// Thread-safe handoff box for the async now-playing PID callback.
+private final class NowPlayingPIDBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: pid_t?
+
+    func set(_ newValue: pid_t) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
+    }
+
+    func get() -> pid_t? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+private final class SupportedCommandsBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Set<UInt32>?
+
+    func set(_ newValue: Set<UInt32>) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
+    }
+
+    func get() -> Set<UInt32>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+/// Runtime-only access to the private MediaRemote framework via dlopen/dlsym.
+/// Nothing is statically linked; when the framework or symbols are absent the
+/// controller degrades to unavailable and callers must not fake results.
+internal final class MediaRemoteController: @unchecked Sendable {
+    static let shared = MediaRemoteController()
+
+    private typealias SendCommandFn = @convention(c) (UInt32, AnyObject?) -> UInt8
+    private typealias GetNowPlayingInfoFn = @convention(c) (
+        DispatchQueue, @escaping @convention(block) (AnyObject?) -> Void
+    ) -> Void
+    private typealias GetNowPlayingApplicationPIDFn = @convention(c) (
+        DispatchQueue, @escaping @convention(block) (pid_t) -> Void
+    ) -> Void
+    private typealias CopySupportedCommandsFn = @convention(c) (
+        DispatchQueue, @escaping @convention(block) (AnyObject?) -> Void
+    ) -> Void
+    private typealias CommandInfoGetCommandFn = @convention(c) (AnyObject) -> UInt32
+    private typealias CommandInfoGetEnabledFn = @convention(c) (AnyObject) -> UInt8
+    private typealias RegisterForNotificationsFn = @convention(c) (DispatchQueue) -> Void
+    private typealias SetWantsNotificationsFn = @convention(c) (UInt8) -> Void
+
+    private let sendCommand: SendCommandFn?
+    private let getNowPlayingInfo: GetNowPlayingInfoFn?
+    private let getNowPlayingApplicationPID: GetNowPlayingApplicationPIDFn?
+    private let copySupportedCommands: CopySupportedCommandsFn?
+    private let commandInfoGetCommand: CommandInfoGetCommandFn?
+    private let commandInfoGetEnabled: CommandInfoGetEnabledFn?
+
+    private init() {
+        guard let handle = dlopen(
+            "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY)
+        else {
+            sendCommand = nil
+            getNowPlayingInfo = nil
+            getNowPlayingApplicationPID = nil
+            copySupportedCommands = nil
+            commandInfoGetCommand = nil
+            commandInfoGetEnabled = nil
+            return
+        }
+        sendCommand = dlsym(handle, "MRMediaRemoteSendCommand").map {
+            unsafeBitCast($0, to: SendCommandFn.self)
+        }
+        getNowPlayingInfo = dlsym(handle, "MRMediaRemoteGetNowPlayingInfo").map {
+            unsafeBitCast($0, to: GetNowPlayingInfoFn.self)
+        }
+        getNowPlayingApplicationPID = dlsym(
+            handle, "MRMediaRemoteGetNowPlayingApplicationPID"
+        ).map {
+            unsafeBitCast($0, to: GetNowPlayingApplicationPIDFn.self)
+        }
+        copySupportedCommands = dlsym(handle, "MRMediaRemoteCopySupportedCommands").map {
+            unsafeBitCast($0, to: CopySupportedCommandsFn.self)
+        }
+        commandInfoGetCommand = dlsym(
+            handle, "MRMediaRemoteCommandInfoGetCommand"
+        ).map {
+            unsafeBitCast($0, to: CommandInfoGetCommandFn.self)
+        }
+        commandInfoGetEnabled = dlsym(
+            handle, "MRMediaRemoteCommandInfoGetEnabled"
+        ).map {
+            unsafeBitCast($0, to: CommandInfoGetEnabledFn.self)
+        }
+        if let symbol = dlsym(handle, "MRMediaRemoteRegisterForNowPlayingNotifications") {
+            let register = unsafeBitCast(symbol, to: RegisterForNotificationsFn.self)
+            register(DispatchQueue.main)
+        }
+        if let symbol = dlsym(handle, "MRMediaRemoteSetWantsNowPlayingNotifications") {
+            let setWants = unsafeBitCast(symbol, to: SetWantsNotificationsFn.self)
+            setWants(1)
+        }
+    }
+
+    /// Transport delivery is independent of metadata availability.
+    var available: Bool {
+        sendCommand != nil
+    }
+
+    /// Sends a transport command and reports MediaRemote's UInt8 Boolean result.
+    func send(_ command: MediaTransportCommand) -> Bool {
+        guard let send = sendCommand else { return false }
+        return send(command.sendCommandCode, nil) != 0
+    }
+
+    /// Reads enabled transport commands through MediaRemote's asynchronous
+    /// supported-command callback. Missing symbols or timeout safely disable
+    /// secondary controls.
+    private func enabledCommandCodes(timeout: TimeInterval = 0.5) -> Set<UInt32>? {
+        guard let copySupportedCommands,
+            let getCommand = commandInfoGetCommand,
+            let getEnabled = commandInfoGetEnabled
+        else { return nil }
+        let box = SupportedCommandsBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        copySupportedCommands(DispatchQueue.global(qos: .userInitiated)) { commands in
+            defer { semaphore.signal() }
+            guard let array = commands as? [AnyObject] else { return }
+            box.set(Set(array.compactMap { info in
+                getEnabled(info) != 0 ? getCommand(info) : nil
+            }))
+        }
+        guard semaphore.wait(timeout: .now() + timeout) == .success else { return nil }
+        return box.get()
+    }
+
+    func capabilities() -> MediaTransportCapabilities {
+        let enabled = enabledCommandCodes()
+        return MediaTransportCapabilities.resolve(
+            sendAvailable: sendCommand != nil,
+            supported: enabled,
+            enabled: enabled)
+    }
+
+    /// Fetches the now-playing client PID without requiring metadata.
+    func nowPlayingProcessID(timeout: TimeInterval = 0.25) -> pid_t? {
+        guard let getPID = getNowPlayingApplicationPID else { return nil }
+        let pidBox = NowPlayingPIDBox()
+        let group = DispatchGroup()
+        group.enter()
+        getPID(DispatchQueue.global(qos: .userInitiated)) {
+            pidBox.set($0)
+            group.leave()
+        }
+        guard group.wait(timeout: .now() + timeout) == .success else { return nil }
+        return pidBox.get().flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// Fetches canonical now-playing metadata. The owning PID is best-effort:
+    /// some browser sessions expose metadata but withhold or delay the PID.
+    /// Metadata remains usable because MediaRemote itself is the system's
+    /// canonical now-playing session.
+    func nowPlayingSnapshot(timeout: TimeInterval = 0.75) -> NowPlayingSnapshot? {
+        guard let getInfo = getNowPlayingInfo else { return nil }
+        let infoBox = NowPlayingBox()
+        let pidBox = NowPlayingPIDBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        let queue = DispatchQueue.global(qos: .userInitiated)
+
+        getInfo(queue) { info in
+            defer { semaphore.signal() }
+            guard let dict = info as? [String: Any] else { return }
+            infoBox.set(NowPlayingSnapshot(
+                processID: nil,
+                appName: nil,
+                bundleIdentifier: nil,
+                title: dict[NowPlayingKey.title] as? String,
+                artist: dict[NowPlayingKey.artist] as? String,
+                album: dict[NowPlayingKey.album] as? String,
+                elapsedSeconds: NowPlayingSnapshot.time(NowPlayingKey.elapsedTime, from: dict),
+                durationSeconds: NowPlayingSnapshot.time(NowPlayingKey.duration, from: dict),
+                isPlaying: NowPlayingSnapshot.playingState(from: dict)))
+        }
+
+        getNowPlayingApplicationPID?(queue) { pid in
+            pidBox.set(pid)
+        }
+
+        guard semaphore.wait(timeout: .now() + timeout) == .success,
+            let info = infoBox.get()
+        else { return nil }
+        let processID = pidBox.get().flatMap { $0 > 0 ? $0 : nil }
+        let app = processID.flatMap(MediaActivity.owningApplication)
+        return NowPlayingSnapshot(
+            processID: processID,
+            appName: app?.localizedName,
+            bundleIdentifier: app?.bundleIdentifier,
+            title: info.title,
+            artist: info.artist,
+            album: info.album,
+            elapsedSeconds: info.elapsedSeconds,
+            durationSeconds: info.durationSeconds,
+            isPlaying: info.isPlaying)
+    }
+}
 
 // MARK: - Public C ABI
+
+// MARK: - Media activity, output controls, and optional transport
+
+/// Reports one other process currently running audio output through public
+/// CoreAudio process state. Returns 1 when a source was found and fills
+/// app_name / bundle_id (either may stay NULL when unknown), 0 when no other
+/// process is active. MediaRemote's client PID is preferred when available;
+/// known browser helper/main bundle families are the only fallback match.
+/// Never captures audio; caller frees strings.
+@_cdecl("ultravox_macos_bridge_active_audio_process")
+public func ultravox_macos_bridge_active_audio_process(
+    _ processIDOut: UnsafeMutablePointer<pid_t>?,
+    _ appNameOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ bundleIdOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    let preferredPID = MediaRemoteController.shared.nowPlayingProcessID()
+    guard let source = MediaActivity.activeSource(preferredProcessID: preferredPID) else { return 0 }
+    processIDOut?.pointee = source.processID
+    appNameOut?.pointee = source.appName?.duplicateAsCChar()
+    bundleIdOut?.pointee = source.bundleIdentifier?.duplicateAsCChar()
+    return 1
+}
+
+/// Starts or stops a ScreenCaptureKit audio-only stream used exclusively for
+/// the reactive output meter. The stream excludes UltraVox and never captures
+/// the microphone. Returns 1 on success and fills `errorOut` on failure.
+@_cdecl("ultravox_macos_bridge_set_system_audio_meter_enabled")
+public func ultravox_macos_bridge_set_system_audio_meter_enabled(
+    _ enabled: Int32,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    errorOut?.pointee = nil
+    guard #available(macOS 15.0, *) else {
+        errorOut?.pointee = "System audio metering requires macOS 15 or later.".duplicateAsCChar()
+        return 0
+    }
+    do {
+        if enabled != 0 {
+            try runAsyncAndBlock {
+                try await SystemAudioLevelMeter.shared.start()
+            }
+        } else {
+            try runAsyncAndBlock {
+                await SystemAudioLevelMeter.shared.stop()
+            }
+        }
+        return 1
+    } catch {
+        errorOut?.pointee = error.localizedDescription.duplicateAsCChar()
+        return 0
+    }
+}
+
+/// Current RMS-derived system-output level in [0, 1].
+@_cdecl("ultravox_macos_bridge_get_system_audio_level")
+public func ultravox_macos_bridge_get_system_audio_level() -> Double {
+    Double(SystemAudioLevelStore.shared.level)
+}
+
+/// Copies the latest low-to-high PCM frequency magnitudes into `bandsOut` and
+/// returns the number written. A missing/short buffer safely truncates output.
+@_cdecl("ultravox_macos_bridge_get_system_audio_spectrum")
+public func ultravox_macos_bridge_get_system_audio_spectrum(
+    _ bandsOut: UnsafeMutablePointer<Double>?,
+    _ capacity: Int32
+) -> Int32 {
+    guard let bandsOut, capacity > 0 else { return 0 }
+    let spectrum = SystemAudioLevelStore.shared.spectrum
+    let count = min(Int(capacity), spectrum.count)
+    for index in 0..<count {
+        bandsOut[index] = Double(spectrum[index])
+    }
+    return Int32(count)
+}
+
+/// Default-output volume in [0, 1]. Returns 1 on success, 0 when no default
+/// output device exists or it has no volume control (unsupported state).
+@_cdecl("ultravox_macos_bridge_get_output_volume")
+public func ultravox_macos_bridge_get_output_volume(
+    _ volumeOut: UnsafeMutablePointer<Double>?
+) -> Int32 {
+    guard let out = volumeOut, let volume = SystemOutput.volume(), volume.isFinite else {
+        return 0
+    }
+    out.pointee = min(max(volume, 0), 1)
+    return 1
+}
+
+/// Sets default-output volume (clamped to [0, 1]). Returns 1 on success,
+/// 0 when unsupported or nothing was written.
+@_cdecl("ultravox_macos_bridge_set_output_volume")
+public func ultravox_macos_bridge_set_output_volume(_ volume: Double) -> Int32 {
+    SystemOutput.setVolume(volume) ? 1 : 0
+}
+
+/// Default-output mute state. Returns 1 with *muted_out set, 0 when
+/// unsupported. Devices without a mute control report unsupported.
+@_cdecl("ultravox_macos_bridge_get_output_muted")
+public func ultravox_macos_bridge_get_output_muted(
+    _ mutedOut: UnsafeMutablePointer<Int32>?
+) -> Int32 {
+    guard let out = mutedOut, let muted = SystemOutput.muted() else { return 0 }
+    out.pointee = muted ? 1 : 0
+    return 1
+}
+
+/// Sets default-output mute. Returns 1 on success, 0 when unsupported.
+@_cdecl("ultravox_macos_bridge_set_output_muted")
+public func ultravox_macos_bridge_set_output_muted(_ muted: Int32) -> Int32 {
+    SystemOutput.setMuted(muted != 0) ? 1 : 0
+}
+
+/// Returns 1 when runtime MediaRemote access is available, 0 otherwise.
+@_cdecl("ultravox_macos_bridge_media_remote_available")
+public func ultravox_macos_bridge_media_remote_available() -> Int32 {
+    MediaRemoteController.shared.available ? 1 : 0
+}
+/// Returns transport capabilities from the optional MediaRemote command
+/// discovery API. Each output is 1 only when the command is supported and
+/// enabled; unsupported runtimes leave the output at 0.
+@_cdecl("ultravox_macos_bridge_media_transport_capabilities")
+public func ultravox_macos_bridge_media_transport_capabilities(
+    _ playPauseOut: UnsafeMutablePointer<Int32>?,
+    _ previousOut: UnsafeMutablePointer<Int32>?,
+    _ nextOut: UnsafeMutablePointer<Int32>?
+) -> Int32 {
+    let capabilities = MediaRemoteController.shared.capabilities()
+    playPauseOut?.pointee = capabilities.playPause ? 1 : 0
+    previousOut?.pointee = capabilities.previous ? 1 : 0
+    nextOut?.pointee = capabilities.next ? 1 : 0
+    return 1
+}
+
+/// Fetches now-playing metadata and owning process via runtime-only
+/// MediaRemote access. Returns 1 and fills process ID, app name / bundle ID,
+/// title / artist / album (NULL when absent), elapsed/duration seconds
+/// (-1 when unknown), plus *is_playing (1 playing, 0 not, -1 unknown); 0
+/// when MediaRemote is unavailable or the reply did not arrive in time.
+@_cdecl("ultravox_macos_bridge_now_playing")
+public func ultravox_macos_bridge_now_playing(
+    _ processIDOut: UnsafeMutablePointer<pid_t>?,
+    _ appNameOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ bundleIdOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ titleOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ artistOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ albumOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ elapsedSecondsOut: UnsafeMutablePointer<Double>?,
+    _ durationSecondsOut: UnsafeMutablePointer<Double>?,
+    _ isPlayingOut: UnsafeMutablePointer<Int32>?
+) -> Int32 {
+    guard let snapshot = MediaRemoteController.shared.nowPlayingSnapshot() else { return 0 }
+    processIDOut?.pointee = snapshot.processID ?? 0
+    appNameOut?.pointee = snapshot.appName?.duplicateAsCChar()
+    bundleIdOut?.pointee = snapshot.bundleIdentifier?.duplicateAsCChar()
+    titleOut?.pointee = snapshot.title?.duplicateAsCChar()
+    artistOut?.pointee = snapshot.artist?.duplicateAsCChar()
+    albumOut?.pointee = snapshot.album?.duplicateAsCChar()
+    elapsedSecondsOut?.pointee = snapshot.elapsedSeconds ?? -1
+    durationSecondsOut?.pointee = snapshot.durationSeconds ?? -1
+    if let out = isPlayingOut {
+        switch snapshot.isPlaying {
+        case .some(true): out.pointee = 1
+        case .some(false): out.pointee = 0
+        case .none: out.pointee = -1
+        }
+    }
+    return 1
+}
+
+/// Sends a transport command through runtime-only MediaRemote access.
+/// Returns 1 when sent, 0 when unavailable/failed, -1 for an unknown command.
+@_cdecl("ultravox_macos_bridge_media_transport")
+public func ultravox_macos_bridge_media_transport(
+    _ command: UnsafePointer<CChar>?
+) -> Int32 {
+    guard let command, let parsed = MediaTransportCommand(rawValue: String(cString: command))
+    else { return -1 }
+    return MediaRemoteController.shared.send(parsed) ? 1 : 0
+}
 
 /// Returns the bridge version string.
 @_cdecl("ultravox_macos_bridge_version")
@@ -337,6 +1625,82 @@ public func ultravox_macos_bridge_request_microphone_access() -> Int32 {
     }
     return granted.load() ? 1 : 0
 }
+
+/// Uses Apple's runtime preflight rather than stale TCC database rows.
+@_cdecl("ultravox_macos_bridge_screen_recording_authorization_status")
+public func ultravox_macos_bridge_screen_recording_authorization_status() -> Int32 {
+    CGPreflightScreenCaptureAccess() ? 1 : 0
+}
+
+/// Requests Screen Recording access only when the user explicitly asks.
+@_cdecl("ultravox_macos_bridge_request_screen_recording_access")
+public func ultravox_macos_bridge_request_screen_recording_access() -> Int32 {
+    CGRequestScreenCaptureAccess() ? 1 : 0
+}
+
+// MARK: - Meeting capture
+
+@_cdecl("ultravox_macos_bridge_start_meeting_capture")
+public func ultravox_macos_bridge_start_meeting_capture(
+    _ path: UnsafePointer<CChar>?,
+    _ includeMicrophone: Int32,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    errorOut?.pointee = nil
+    guard #available(macOS 15.0, *) else {
+        errorOut?.pointee = "Meeting mode requires macOS 15 or later.".duplicateAsCChar()
+        return 0
+    }
+    let rawPath = path.map { String(cString: $0) } ?? ""
+    guard !rawPath.isEmpty else {
+        errorOut?.pointee = "Meeting recording path is empty.".duplicateAsCChar()
+        return 0
+    }
+    do {
+        try runAsyncAndBlock {
+            try await MeetingCaptureManager.shared.start(
+                outputURL: URL(fileURLWithPath: rawPath),
+                captureMicrophone: includeMicrophone != 0
+            )
+        }
+        return 1
+    } catch {
+        errorOut?.pointee = error.localizedDescription.duplicateAsCChar()
+        return 0
+    }
+}
+
+@_cdecl("ultravox_macos_bridge_stop_meeting_capture")
+public func ultravox_macos_bridge_stop_meeting_capture(
+    _ outputPath: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    outputPath?.pointee = nil
+    errorOut?.pointee = nil
+    guard #available(macOS 15.0, *) else {
+        errorOut?.pointee = "Meeting mode requires macOS 15 or later.".duplicateAsCChar()
+        return 0
+    }
+    do {
+        let audioURL = try runAsyncAndBlock {
+            try await MeetingCaptureManager.shared.stop()
+        }
+        outputPath?.pointee = audioURL.path.duplicateAsCChar()
+        return 1
+    } catch {
+        errorOut?.pointee = error.localizedDescription.duplicateAsCChar()
+        return 0
+    }
+}
+
+@_cdecl("ultravox_macos_bridge_set_meeting_capture_failure_callback")
+public func ultravox_macos_bridge_set_meeting_capture_failure_callback(
+    _ callback: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
+) {
+    guard #available(macOS 15.0, *) else { return }
+    MeetingCaptureManager.shared.setFailureCallback(callback)
+}
+
 // MARK: - Accessibility and focus targeting
 
 /// Returns whether UltraVox can inspect and edit the focused accessibility element.
@@ -391,6 +1755,20 @@ public func ultravox_macos_bridge_clear_insertion_target() {
         FocusTargetManager.shared.clear()
     }
 }
+
+/// Reports the frontmost application bundle identifier via NSWorkspace.
+/// Returns NULL when unavailable or unknown; the caller frees a non-NULL
+/// result with ultravox_macos_bridge_free_string.
+@_cdecl("ultravox_macos_bridge_frontmost_application_bundle_id")
+public func ultravox_macos_bridge_frontmost_application_bundle_id()
+    -> UnsafeMutablePointer<CChar>?
+{
+    let bundleIdentifier = runOnMainActor {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+    return bundleIdentifier?.duplicateAsCChar()
+}
+
 // MARK: - CGEvent paste
 
 /// Pastes the given text via the clipboard and a Cmd+V CGEvent keyboard event.
@@ -467,6 +1845,34 @@ public func ultravox_macos_bridge_set_key_combination_callback(
 ) {
     KeyCombinationMonitor.shared.setCallback(callback)
 }
+
+/// Starts a separate key-combination tap for toggling meeting mode.
+@_cdecl("ultravox_macos_bridge_start_meeting_hotkey")
+public func ultravox_macos_bridge_start_meeting_hotkey(
+    _ combo: UnsafePointer<CChar>?
+) -> Int32 {
+    let rawCombo = combo.map { String(cString: $0) } ?? "Control+M"
+    let started = runOnMainActor {
+        KeyCombinationMonitor.meeting.start(combo: rawCombo, holdToRecord: false)
+    }
+    return started ? 1 : 0
+}
+
+@_cdecl("ultravox_macos_bridge_stop_meeting_hotkey")
+public func ultravox_macos_bridge_stop_meeting_hotkey() -> Int32 {
+    runOnMainActor {
+        KeyCombinationMonitor.meeting.stop()
+    }
+    return 1
+}
+
+@_cdecl("ultravox_macos_bridge_set_meeting_hotkey_callback")
+public func ultravox_macos_bridge_set_meeting_hotkey_callback(
+    _ callback: (@convention(c) (Int32, UnsafePointer<CChar>?) -> Void)?
+) {
+    KeyCombinationMonitor.meeting.setCallback(callback)
+}
+
 // MARK: - Nonactivating indicator
 
 /// Shows a nonactivating indicator panel near the given point.
@@ -757,8 +2163,16 @@ private enum ClipboardUtil {
         keyUp.flags = .maskCommand
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.35)
-        restore(savedContents, to: pasteboard)
+        // The target reads the pasteboard asynchronously (Electron apps can take
+        // well over 300 ms). Restore later without blocking the main run loop,
+        // and never clobber something the user copied in the meantime.
+        let transcriptChangeCount = pasteboard.changeCount
+        nonisolated(unsafe) let saved = savedContents
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            let general = NSPasteboard.general
+            guard general.changeCount == transcriptChangeCount else { return }
+            restore(saved, to: general)
+        }
         return true
     }
 
@@ -825,6 +2239,12 @@ private final class FocusTargetManager {
     func capture() -> FocusCapture {
         clear()
         let pointerPosition = NSEvent.mouseLocation
+        // Remember the frontmost app even when Accessibility cannot expose a
+        // focused element, so delivery can still fall back to Cmd+V there.
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            processIdentifier = frontmost.processIdentifier
+        }
         guard AXIsProcessTrusted(), let focused = Self.focusedElement() else {
             return FocusCapture(x: pointerPosition.x, y: pointerPosition.y, hasTarget: false)
         }
@@ -846,30 +2266,58 @@ private final class FocusTargetManager {
 
     func insert(_ text: String) -> Bool {
         defer { clear() }
-        guard AXIsProcessTrusted(), let element else { return false }
+        guard AXIsProcessTrusted() else {
+            NSLog("[UltraVoxMacOSBridge] paste: accessibility not trusted")
+            return false
+        }
 
-        let result = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            text as CFTypeRef
-        )
-        if result == .success {
-            return true
+        if let element {
+            // Many Chromium/Electron and web fields report success for
+            // kAXSelectedText without changing their value. Only trust the
+            // accessibility path when the field's value observably changed.
+            let before = Self.stringValue(of: element)
+            let result = AXUIElementSetAttributeValue(
+                element,
+                kAXSelectedTextAttribute as CFString,
+                text as CFTypeRef
+            )
+            if result == .success {
+                let after = Self.stringValue(of: element)
+                if before == nil || after == nil || before != after {
+                    NSLog("[UltraVoxMacOSBridge] paste: inserted via accessibility (verified=%@)", (before != nil && after != nil) ? "yes" : "unverifiable")
+                    return true
+                }
+                NSLog("[UltraVoxMacOSBridge] accessibility insert reported success without a change; using Cmd+V")
+            }
         }
 
         guard let processIdentifier,
-              let application = NSRunningApplication(processIdentifier: processIdentifier)
+              let application = NSRunningApplication(processIdentifier: processIdentifier),
+              !application.isTerminated
         else {
+            NSLog("[UltraVoxMacOSBridge] paste: no target application for Cmd+V fallback")
             return false
         }
-        application.activate()
-        _ = AXUIElementSetAttributeValue(
-            element,
-            kAXFocusedAttribute as CFString,
-            kCFBooleanTrue
-        )
+        NSLog("[UltraVoxMacOSBridge] paste: Cmd+V fallback into %@", application.bundleIdentifier ?? "unknown")
+        if !application.isActive {
+            application.activate()
+        }
+        if let element {
+            _ = AXUIElementSetAttributeValue(
+                element,
+                kAXFocusedAttribute as CFString,
+                kCFBooleanTrue
+            )
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(0.08))
         return ClipboardUtil.insertWithCommandV(text)
+    }
+
+    private static func stringValue(of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success
+        else { return nil }
+        return value as? String
     }
 
     func clear() {
@@ -1071,6 +2519,7 @@ internal struct PhysicalModifier {
 
 private final class KeyCombinationMonitor: @unchecked Sendable {
     static let shared = KeyCombinationMonitor(identifier: 1)
+    static let meeting = KeyCombinationMonitor(identifier: 2)
 
     private static let signature: OSType = 0x44494354 // "DICT"
 
@@ -1323,15 +2772,17 @@ struct KeyCombination {
     }
 }
 
-private enum IndicatorState {
+private enum IndicatorState: Equatable {
     case recording
     case transcribing
+    case inserted
     case failed
     case pasteFailed
 
     init(rawValue: String) {
         switch rawValue.lowercased() {
         case "transcribing": self = .transcribing
+        case "inserted": self = .inserted
         case "failed": self = .failed
         case "paste-failed": self = .pasteFailed
         default: self = .recording
@@ -1340,19 +2791,29 @@ private enum IndicatorState {
 
     var label: String {
         switch self {
-        case .recording: return "Recording"
+        case .recording: return "Listening"
         case .transcribing: return "Transcribing"
-        case .failed: return "Failed"
-        case .pasteFailed: return "Paste failed"
+        case .inserted: return "Inserted"
+        case .failed: return "Transcription failed"
+        case .pasteFailed: return "Copied \u{2014} paste with \u{2318}V"
         }
     }
 
     var color: NSColor {
         switch self {
-        case .recording: return .systemRed
-        case .transcribing: return .controlAccentColor
-        case .failed: return .systemOrange
-        case .pasteFailed: return .systemOrange
+        case .recording: return NSColor(calibratedRed: 1.0, green: 0.33, blue: 0.38, alpha: 1)
+        case .transcribing: return NSColor(calibratedRed: 0.55, green: 0.72, blue: 1.0, alpha: 1)
+        case .inserted: return NSColor(calibratedRed: 0.36, green: 0.84, blue: 0.52, alpha: 1)
+        case .failed, .pasteFailed: return NSColor(calibratedRed: 1.0, green: 0.68, blue: 0.28, alpha: 1)
+        }
+    }
+
+    /// Terminal states stay readable briefly before the panel fades out.
+    var holdBeforeHide: TimeInterval {
+        switch self {
+        case .inserted: return 0.55
+        case .failed, .pasteFailed: return 1.6
+        default: return 0
         }
     }
 }
@@ -1390,23 +2851,31 @@ internal enum IndicatorGeometry {
 private final class IndicatorManager {
     static let shared = IndicatorManager()
 
-    private let size = NSSize(width: 128, height: 28)
+    private let height: CGFloat = 30
     private let horizontalPadding: CGFloat = 8
     private let verticalOffset: CGFloat = 14
     private var panel: NSPanel?
     private var indicatorView: IndicatorView?
+    private var anchor = NSPoint.zero
+    /// Bumped on every show so a pending delayed hide never closes a newer session.
+    private var generation = 0
 
     private init() {}
 
+    private var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     func show(at point: NSPoint) {
         if panel == nil {
+            let initial = NSSize(width: 120, height: height)
             let panel = NSPanel(
-                contentRect: NSRect(origin: .zero, size: size),
+                contentRect: NSRect(origin: .zero, size: initial),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
             )
-            let indicatorView = IndicatorView(frame: NSRect(origin: .zero, size: size))
+            let indicatorView = IndicatorView(frame: NSRect(origin: .zero, size: initial))
             panel.isFloatingPanel = true
             panel.backgroundColor = .clear
             panel.isOpaque = false
@@ -1415,34 +2884,87 @@ private final class IndicatorManager {
             panel.hidesOnDeactivate = false
             panel.level = .statusBar
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-            panel.animationBehavior = .utilityWindow
+            panel.animationBehavior = .none
             panel.contentView = indicatorView
             self.panel = panel
             self.indicatorView = indicatorView
         }
 
-        guard let panel else { return }
-        let screen = screenContaining(point)
-        guard let screen else { return }
+        guard let panel, let indicatorView else { return }
+        generation += 1
+        anchor = point
+        indicatorView.reduceMotion = reduceMotion
+        indicatorView.state = .recording
+        layout(panel: panel, view: indicatorView)
 
+        if reduceMotion {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            return
+        }
+        let target = panel.frame
+        panel.alphaValue = 0
+        panel.setFrame(target.offsetBy(dx: 0, dy: -4), display: false)
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+            panel.animator().setFrame(target, display: true)
+        }
+    }
+
+    func update(state rawValue: String) {
+        guard let panel, let indicatorView, panel.isVisible else { return }
+        let next = IndicatorState(rawValue: rawValue)
+        guard next != indicatorView.state else { return }
+        indicatorView.state = next
+        layout(panel: panel, view: indicatorView)
+    }
+
+    func hide() {
+        guard let panel, panel.isVisible else { return }
+        let hold = indicatorView?.state.holdBeforeHide ?? 0
+        let token = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + hold) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.generation == token else { return }
+                self.fadeOut(panel, token: token)
+            }
+        }
+    }
+
+    private func fadeOut(_ panel: NSPanel, token: Int) {
+        if reduceMotion {
+            panel.orderOut(nil)
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.generation == token else { return }
+                panel.orderOut(nil)
+                panel.alphaValue = 1
+            }
+        })
+    }
+
+    /// Sizes the pill to its label and keeps it centred on the caret anchor.
+    private func layout(panel: NSPanel, view: IndicatorView) {
+        let size = NSSize(width: view.preferredWidth, height: height)
+        guard let screen = screenContaining(anchor) else { return }
         let origin = IndicatorGeometry.clampedOrigin(
-            point: point,
-            size: panel.frame.size,
+            point: anchor,
+            size: size,
             visibleFrame: screen.visibleFrame,
             verticalOffset: verticalOffset,
             padding: horizontalPadding
         )
-        panel.setFrameOrigin(origin)
-        indicatorView?.state = .recording
-        panel.orderFrontRegardless()
-    }
-
-    func update(state rawValue: String) {
-        indicatorView?.state = IndicatorState(rawValue: rawValue)
-    }
-
-    func hide() {
-        panel?.orderOut(nil)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        view.frame = NSRect(origin: .zero, size: size)
     }
 
     private func screenContaining(_ point: NSPoint) -> NSScreen? {
@@ -1463,48 +2985,341 @@ private final class IndicatorManager {
     }
 }
 
+/// The pill: a status glyph (pulsing dot, spinning arc or check) and a label.
 private final class IndicatorView: NSView {
+    private static let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+    private let glyphSize: CGFloat = 12
+    private let glyphLeading: CGFloat = 12
+    private let labelLeading: CGFloat = 32
+    private let trailing: CGFloat = 14
+
+    private let dotLayer = CALayer()
+    private let ringLayer = CALayer()
+    private let arcLayer = CAShapeLayer()
+    private let checkLayer = CAShapeLayer()
+    var reduceMotion = false
+
     var state: IndicatorState = .recording {
-        didSet { needsDisplay = true }
+        didSet {
+            needsDisplay = true
+            applyGlyph()
+        }
+    }
+
+    var preferredWidth: CGFloat {
+        let text = state.label as NSString
+        let width = text.size(withAttributes: [.font: Self.font]).width
+        return ceil(labelLeading + width + trailing)
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        for layer in [ringLayer, dotLayer, arcLayer, checkLayer] {
+            layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+            self.layer?.addSublayer(layer)
+        }
+        arcLayer.fillColor = nil
+        arcLayer.lineWidth = 2
+        arcLayer.lineCap = .round
+        checkLayer.fillColor = nil
+        checkLayer.lineWidth = 2
+        checkLayer.lineCap = .round
+        checkLayer.lineJoin = .round
+        applyGlyph()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { false }
+
+    override func layout() {
+        super.layout()
+        applyGlyph()
+    }
+
+    private func applyGlyph() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let glyphRect = NSRect(
+            x: glyphLeading,
+            y: bounds.midY - glyphSize / 2,
+            width: glyphSize,
+            height: glyphSize
+        )
+        let color = state.color.cgColor
+        for layer in [dotLayer, ringLayer, arcLayer, checkLayer] {
+            layer.removeAllAnimations()
+            layer.isHidden = true
+        }
+
+        switch state {
+        case .recording, .failed, .pasteFailed:
+            let dot = glyphRect.insetBy(dx: 2, dy: 2)
+            dotLayer.frame = dot
+            dotLayer.cornerRadius = dot.width / 2
+            dotLayer.backgroundColor = color
+            dotLayer.isHidden = false
+            if state == .recording && !reduceMotion {
+                ringLayer.frame = dot
+                ringLayer.cornerRadius = dot.width / 2
+                ringLayer.borderColor = color
+                ringLayer.borderWidth = 1.5
+                ringLayer.isHidden = false
+                let grow = CABasicAnimation(keyPath: "transform.scale")
+                grow.fromValue = 1
+                grow.toValue = 2.2
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0.7
+                fade.toValue = 0
+                let ripple = CAAnimationGroup()
+                ripple.animations = [grow, fade]
+                ripple.duration = 1.2
+                ripple.repeatCount = .infinity
+                ripple.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ringLayer.add(ripple, forKey: "ripple")
+
+                let breathe = CABasicAnimation(keyPath: "opacity")
+                breathe.fromValue = 1
+                breathe.toValue = 0.55
+                breathe.duration = 0.6
+                breathe.autoreverses = true
+                breathe.repeatCount = .infinity
+                dotLayer.add(breathe, forKey: "breathe")
+            }
+        case .transcribing:
+            arcLayer.frame = glyphRect
+            arcLayer.strokeColor = color
+            let path = CGMutablePath()
+            path.addArc(
+                center: CGPoint(x: glyphSize / 2, y: glyphSize / 2),
+                radius: glyphSize / 2 - 1,
+                startAngle: 0,
+                endAngle: .pi * 1.4,
+                clockwise: false
+            )
+            arcLayer.path = path
+            arcLayer.isHidden = false
+            if !reduceMotion {
+                let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+                spin.fromValue = 0
+                spin.toValue = -Double.pi * 2
+                spin.duration = 0.9
+                spin.repeatCount = .infinity
+                arcLayer.add(spin, forKey: "spin")
+            }
+        case .inserted:
+            checkLayer.frame = glyphRect
+            checkLayer.strokeColor = color
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: 1.5, y: glyphSize * 0.5))
+            path.addLine(to: CGPoint(x: glyphSize * 0.4, y: glyphSize * 0.18))
+            path.addLine(to: CGPoint(x: glyphSize - 1, y: glyphSize * 0.85))
+            checkLayer.path = path
+            checkLayer.isHidden = false
+            if !reduceMotion {
+                let draw = CABasicAnimation(keyPath: "strokeEnd")
+                draw.fromValue = 0
+                draw.toValue = 1
+                draw.duration = 0.22
+                draw.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                checkLayer.add(draw, forKey: "draw")
+            }
+        }
+        CATransaction.commit()
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        let cornerRadius = bounds.height / 2
         let backgroundRect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let cornerRadius = backgroundRect.height / 2
         let background = NSBezierPath(
             roundedRect: backgroundRect,
             xRadius: cornerRadius,
             yRadius: cornerRadius
         )
-
-        NSColor(calibratedWhite: 0.06, alpha: 0.92).setFill()
+        NSColor(calibratedWhite: 0.07, alpha: 0.94).setFill()
         background.fill()
 
-        NSColor.white.withAlphaComponent(0.14).setStroke()
+        // Soft top highlight gives the pill a glass edge on any wallpaper.
+        NSGraphicsContext.saveGraphicsState()
+        background.addClip()
+        let sheen = NSGradient(colors: [
+            NSColor.white.withAlphaComponent(0.10),
+            NSColor.white.withAlphaComponent(0.0)
+        ])
+        sheen?.draw(in: NSRect(x: 0, y: bounds.midY, width: bounds.width, height: bounds.height / 2), angle: 90)
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.white.withAlphaComponent(0.16).setStroke()
         background.lineWidth = 1
         background.stroke()
 
-        let dotSize: CGFloat = 8
-        let dotRect = NSRect(
-            x: 12,
-            y: bounds.midY - dotSize / 2,
-            width: dotSize,
-            height: dotSize
-        )
-        state.color.setFill()
-        NSBezierPath(ovalIn: dotRect).fill()
-
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor.white
+            .font: Self.font,
+            .foregroundColor: NSColor.white.withAlphaComponent(0.94)
         ]
         let label = state.label as NSString
         let textSize = label.size(withAttributes: attributes)
         label.draw(
-            at: NSPoint(x: 28, y: bounds.midY - textSize.height / 2),
+            at: NSPoint(x: labelLeading, y: bounds.midY - textSize.height / 2),
             withAttributes: attributes
         )
+    }
+}
+
+// MARK: - On-device Voice Studio
+
+#if canImport(FluidAudio)
+private actor PocketTtsEngine {
+    static let shared = PocketTtsEngine()
+    private var managers: [String: PocketTtsManager] = [:]
+    // Actor methods are reentrant across awaits. Hold a FIFO async gate over
+    // entire operations because FluidAudio's synthesizer uses shared state.
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+
+    private func manager(language: String, int8: Bool) throws -> PocketTtsManager {
+        guard let pack = PocketTtsLanguage(rawValue: language) else {
+            throw PocketTTSError.processingFailed("Unsupported PocketTTS language pack: \(language)")
+        }
+        let key = "\(language):\(int8)"
+        if let manager = managers[key] { return manager }
+        let manager = PocketTtsManager(language: pack, precision: int8 ? .int8 : .fp16)
+        managers[key] = manager
+        return manager
+    }
+
+    func prepare(language: String, int8: Bool) async throws {
+        await acquire()
+        defer { release() }
+        let manager = try manager(language: language, int8: int8)
+        if !(await manager.isAvailable) { try await manager.initialize() }
+    }
+
+    func clone(reference: String, output: String) async throws {
+        await acquire()
+        defer { release() }
+        // The shared Mimi encoder is language-independent; no synthesis model
+        // download is needed for cloning alone.
+        let manager = try manager(language: "english", int8: false)
+        let voice = try await manager.cloneVoice(from: URL(fileURLWithPath: reference))
+        try manager.saveClonedVoice(voice, to: URL(fileURLWithPath: output))
+    }
+
+    func synthesize(text: String, embeddings: String?, builtin: String?, language: String,
+                    int8: Bool, output: String) async throws {
+        await acquire()
+        defer { release() }
+        // Prefer full precision for voice fidelity; precision is not a user knob.
+        let manager = try manager(language: language, int8: false)
+        if !(await manager.isAvailable) { try await manager.initialize() }
+        var samples: [Float] = []
+        if let embeddings {
+            let voice = try manager.loadClonedVoice(from: URL(fileURLWithPath: embeddings))
+            let stream = try await manager.synthesizeStreaming(text: text, voiceData: voice)
+            for try await frame in stream { samples.append(contentsOf: frame.samples) }
+        } else {
+            let stream = try await manager.synthesizeStreaming(text: text, voice: builtin)
+            for try await frame in stream { samples.append(contentsOf: frame.samples) }
+        }
+        guard !samples.isEmpty, samples.allSatisfy({ $0.isFinite }) else {
+            throw PocketTTSError.processingFailed("Model returned empty or non-finite audio")
+        }
+        // Preserve native gain below -1 dBFS. Attenuate overshoots before PCM
+        // quantization, never amplify quiet/noisy output to full scale.
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        let gain: Float = peak > 0.89 ? 0.89 / peak : 1
+        let leveled = samples.map { max(-0.89, min(0.89, $0 * gain)) }
+        let data = try AudioWAV.data(from: leveled, sampleRate: 24000, normalize: false)
+        // Foundation's atomic option writes a sibling temporary file then renames.
+        try data.write(to: URL(fileURLWithPath: output), options: .atomic)
+    }
+}
+#endif
+
+private func ttsRequired(_ pointer: UnsafePointer<CChar>?, _ label: String) throws -> String {
+    let value = pointer.map { String(cString: $0) } ?? ""
+    guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw NSError(domain: "UltraVox.VoiceStudio", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "\(label) must not be empty"])
+    }
+    return value
+}
+
+private func ttsBoundary(_ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+                         operation: () throws -> Void) -> Int32 {
+    errorOut?.pointee = nil
+    do { try operation(); return 0 }
+    catch {
+        let message = "PocketTTS: \(error.localizedDescription) (\(error))"
+        errorOut?.pointee = message.duplicateAsCChar()
+        return 1
+    }
+}
+
+@_cdecl("ultravox_macos_bridge_tts_clone_voice")
+public func ultravox_macos_bridge_tts_clone_voice(
+    _ refWavPath: UnsafePointer<CChar>?, _ outEmbeddingsPath: UnsafePointer<CChar>?,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    ttsBoundary(errorOut) {
+        let reference = try ttsRequired(refWavPath, "Reference audio path")
+        let output = try ttsRequired(outEmbeddingsPath, "Embeddings output path")
+#if canImport(FluidAudio)
+        try runAsyncAndBlock { try await PocketTtsEngine.shared.clone(reference: reference, output: output) }
+#else
+        throw NSError(domain: "FluidAudio unavailable", code: 1)
+#endif
+    }
+}
+
+@_cdecl("ultravox_macos_bridge_tts_prepare_models")
+public func ultravox_macos_bridge_tts_prepare_models(
+    _ language: UnsafePointer<CChar>?, _ useInt8: Int32,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    ttsBoundary(errorOut) {
+        let language = try ttsRequired(language, "Language")
+#if canImport(FluidAudio)
+        try runAsyncAndBlock { try await PocketTtsEngine.shared.prepare(language: language, int8: useInt8 != 0) }
+#else
+        throw NSError(domain: "FluidAudio unavailable", code: 1)
+#endif
+    }
+}
+
+@_cdecl("ultravox_macos_bridge_tts_synthesize")
+public func ultravox_macos_bridge_tts_synthesize(
+    _ text: UnsafePointer<CChar>?, _ embeddingsPath: UnsafePointer<CChar>?,
+    _ builtinVoice: UnsafePointer<CChar>?, _ language: UnsafePointer<CChar>?,
+    _ useInt8: Int32, _ outWavPath: UnsafePointer<CChar>?,
+    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    ttsBoundary(errorOut) {
+        let text = try ttsRequired(text, "Text")
+        let language = try ttsRequired(language, "Language")
+        let output = try ttsRequired(outWavPath, "WAV output path")
+        let embeddings = try embeddingsPath.map { try ttsRequired($0, "Embeddings path") }
+        let builtin = try builtinVoice.map { try ttsRequired($0, "Builtin voice") }
+#if canImport(FluidAudio)
+        try runAsyncAndBlock {
+            try await PocketTtsEngine.shared.synthesize(text: text, embeddings: embeddings,
+                builtin: builtin, language: language, int8: useInt8 != 0, output: output)
+        }
+#else
+        throw NSError(domain: "FluidAudio unavailable", code: 1)
+#endif
     }
 }

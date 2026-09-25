@@ -1,12 +1,12 @@
 [package]
 name = "ultravox"
-version = "0.9.0"
-description = "UltraVox Light — real-time audio transcription with on-device models"
-authors = ["UltraVox contributors"]
+version = "0.11.0"
+description = "UltraVox — real-time audio transcription with on-device models"
+authors = ["Implose Cybernetics"]
 license = "MIT"
-repository = "https://github.com/michael-berardi/ultravox-light"
+repository = "https://github.com/michael-berardi/ultravox"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.80"
 default-run = "ultravox"
 
 [lib]
@@ -41,10 +41,24 @@ libc = "0.2"
 tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
+# Implose distribution: revocable device licenses and signed requests.
+base64 = "0.22"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 ultravox-macos-bridge = { path = "../../../crates/ultravox-macos-bridge" }
+ultra-media-remote = { git = "https://github.com/michael-berardi/ultra-media-remote", rev = "a3bd35d83a9c117616840dd74efbff754c276753" }
+window-vibrancy = "0.6"
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }
+hound = "3.5"
+whisper-rs = "0.16"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 hound = "3.5"
 whisper-rs = "0.16"
 
@@ -54,4 +68,5 @@ tempfile = "3"
 [features]
 default = ["custom-protocol"]
 cli = []
+mirror-debug = []
 custom-protocol = ["tauri/custom-protocol"]

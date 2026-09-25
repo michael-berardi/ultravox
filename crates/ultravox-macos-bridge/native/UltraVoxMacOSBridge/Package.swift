@@ -5,7 +5,7 @@
 // Native macOS capabilities for the Rust/Tauri desktop app.
 //
 // The package exposes a C-compatible ABI so the Rust bridge crate can call
-// Accessibility, AppKit, and FluidAudio/Core ML.
+// Accessibility, CoreAudio, AppKit, ScreenCaptureKit, and FluidAudio/Core ML.
 //
 //  License: MIT (see /LICENSE in the repository root)
 

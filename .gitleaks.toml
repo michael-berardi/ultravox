@@ -6,6 +6,8 @@
 #                       fixtures and bundled yarn runtime, not LDS secrets
 # - crates/ultravox-macos-bridge/native/**/checkouts  upstream FluidAudio
 #                       checkout documentation examples
+# - placeholder stripe tokens in test fixtures (sequential digits) are
+#   deliberately fake; never add real ones here.
 #
 # If any real credential ever appears here, rotate it first; never add it
 # to this file.
