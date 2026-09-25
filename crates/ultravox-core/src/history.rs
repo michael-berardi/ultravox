@@ -519,12 +519,12 @@ mod tests {
     fn search_finds_by_title_and_preview() {
         let mut history = in_memory_history();
         let mut row = sample_row();
-        row.title = "project notes".to_string();
+        row.title = "meeting notes".to_string();
         row.preview = "action items from today".to_string();
         row.transcription = "action items from today".to_string();
         history.insert(&row).unwrap();
 
-        let by_title = history.search("project", 10, 0).unwrap();
+        let by_title = history.search("meeting", 10, 0).unwrap();
         assert_eq!(by_title.len(), 1);
 
         let by_preview = history.search("action items", 10, 0).unwrap();

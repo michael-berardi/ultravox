@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BrandMark, startHeaderDrag } from "../components/BrandMark";
+import { MediaPanel } from "../components/MediaPanel";
+import { BrandMark, proBrandSuffix, startHeaderDrag } from "../components/BrandMark";
+import { ProLockBadge, ProLockPrompt } from "../components/ProLock";
 import { DropOverlay } from "../components/DropOverlay";
 import { RecordingMeter } from "../components/ReactiveMeter";
 import {
@@ -9,6 +11,7 @@ import {
 import { ThinkingOrb } from "thinking-orbs";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { AppStatus } from "../App";
+import { isProLockedError, proLockedMessage, type ProStatus } from "../lib/proStatus";
 import {
   listRecordings,
   searchRecordings,
@@ -18,6 +21,9 @@ import {
   stopRecording,
   importUrl,
   importFile,
+  startMeeting,
+  startLecture,
+  stopMeeting,
   exportRecording,
   retryTranscription,
   copyToClipboard,
@@ -33,6 +39,7 @@ import {
   onRecordingStarted,
   onRecordingStopped,
   onSettingsChanged,
+  onMeetingStateChanged,
   onUrlImportProgress,
   type RecordingRow,
   type AppConfig,
@@ -43,7 +50,11 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 interface MainWindowProps {
   status: AppStatus;
   initialRecording: boolean;
+  initialMeeting: boolean;
+  pro: ProStatus;
+  onOpenPro: () => void;
   onOpenSettings: () => void;
+  onOpenStudio?: () => void;
 }
 
 
@@ -63,9 +74,19 @@ function importablePaths(paths: string[]): string[] {
 export function MainWindow({
   status,
   initialRecording,
+  initialMeeting,
+  pro,
+  onOpenPro,
   onOpenSettings,
+  onOpenStudio,
 }: MainWindowProps) {
+  const proUnlocked = pro.unlocked;
+  const proLocked = pro.available && !pro.unlocked;
   const [recording, setRecording] = useState(initialRecording);
+  const [meeting, setMeeting] = useState(initialMeeting);
+  const [lecture, setLecture] = useState(false);
+  const [meetingPending, setMeetingPending] = useState(false);
+  const [lecturePending, setLecturePending] = useState(false);
   const [urlOpen, setUrlOpen] = useState(false);
   const [urlValue, setUrlValue] = useState("");
   const [urlImporting, setUrlImporting] = useState(false);
@@ -85,6 +106,7 @@ export function MainWindow({
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
   const [modelError, setModelError] = useState<string | null>(null);
   const [activityError, setActivityError] = useState<string | null>(null);
+  const [proLockNotice, setProLockNotice] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
@@ -93,6 +115,7 @@ export function MainWindow({
   const [inputLevel, setInputLevel] = useState(0);
   const searchRef = useRef(search);
   const configRef = useRef<AppConfig | null>(null);
+  const lectureRef = useRef(false);
   const recordingsRequestRef = useRef(0);
 
   const mainRef = useRef<HTMLElement>(null);
@@ -167,6 +190,10 @@ export function MainWindow({
   }, [initialRecording]);
 
   useEffect(() => {
+    setMeeting(initialMeeting);
+  }, [initialMeeting]);
+
+  useEffect(() => {
     searchRef.current = search;
     setLoading(true);
     void refreshRecordings();
@@ -194,6 +221,15 @@ export function MainWindow({
         onRecordingDeleted(() => void refreshRecordings()),
         onRecordingStarted(() => setRecording(true)),
         onRecordingStopped(() => setRecording(false)),
+        onMeetingStateChanged((active) => {
+          if (!active) {
+            lectureRef.current = false;
+            setLecture(false);
+            setMeeting(false);
+          } else if (!lectureRef.current) {
+            setMeeting(true);
+          }
+        }),
         onUrlImportProgress((payload) => {
           setUrlProgress(payload.progress);
           setUrlStatus(payload.status);
@@ -211,7 +247,7 @@ export function MainWindow({
       );
       const failed = results.find((result) => result.status === "rejected");
       if (failed?.status === "rejected") {
-        setActivityError(`Could not connect to app events: ${String(failed.reason)}`);
+        console.warn("Could not connect to app events", failed.reason);
       }
       if (cancelled) {
         listeners.forEach((stopListening) => stopListening());
@@ -228,6 +264,10 @@ export function MainWindow({
       unlisten.forEach((stopListening) => stopListening());
     };
   }, [refreshCatalog, refreshRecordings]);
+
+  useEffect(() => {
+    lectureRef.current = lecture;
+  }, [lecture]);
 
   useEffect(() => {
     let cancelled = false;
@@ -400,8 +440,19 @@ export function MainWindow({
     }
   }, [urlImporting]);
 
+  /** A `pro-locked:` rejection becomes the lock prompt, never a raw error. */
+  const activityFailure = (feature: string, message: string, cause: unknown) => {
+    if (isProLockedError(cause)) {
+      setActivityError(null);
+      setProLockNotice(proLockedMessage(feature));
+      return;
+    }
+    setActivityError(`${message}: ${String(cause)}`);
+  };
+
   const toggleRecording = async () => {
     setActivityError(null);
+    setProLockNotice(null);
     try {
       if (recording) {
         await stopRecording();
@@ -409,9 +460,64 @@ export function MainWindow({
         await startRecording();
       }
     } catch (recordingError) {
-      setActivityError(
-        `${recording ? "Could not stop recording" : "Could not start recording"}: ${String(recordingError)}`,
+      activityFailure(
+        "Dictation",
+        `${recording ? "Could not stop recording" : "Could not start recording"}`,
+        recordingError,
       );
+    }
+  };
+
+  const toggleMeeting = async () => {
+    if (meetingPending) return;
+    setMeetingPending(true);
+    setActivityError(null);
+    setProLockNotice(null);
+    try {
+      if (meeting) {
+        await stopMeeting();
+        setMeeting(false);
+        await refreshRecordings();
+      } else {
+        await startMeeting();
+        setMeeting(true);
+      }
+    } catch (meetingError) {
+      activityFailure(
+        "Meeting mode",
+        `${meeting ? "Could not stop meeting mode" : "Could not start meeting mode"}`,
+        meetingError,
+      );
+    } finally {
+      setMeetingPending(false);
+    }
+  };
+
+  const toggleLecture = async () => {
+    if (meetingPending || lecturePending) return;
+    setLecturePending(true);
+    setActivityError(null);
+    setProLockNotice(null);
+    try {
+      if (lecture) {
+        await stopMeeting();
+        lectureRef.current = false;
+        setLecture(false);
+        await refreshRecordings();
+      } else {
+        await startLecture();
+        lectureRef.current = true;
+        setLecture(true);
+        setMeeting(false);
+      }
+    } catch (lectureError) {
+      activityFailure(
+        "Lecture mode",
+        `${lecture ? "Could not stop lecture mode" : "Could not start lecture mode"}`,
+        lectureError,
+      );
+    } finally {
+      setLecturePending(false);
     }
   };
 
@@ -426,7 +532,7 @@ export function MainWindow({
   const submitUrlImport = async () => {
     const value = urlValue.trim();
     if (!value) {
-      setUrlError("Enter a YouTube or direct URL.");
+      setUrlError("Enter a YouTube or direct media URL.");
       return;
     }
     setUrlImporting(true);
@@ -545,7 +651,7 @@ export function MainWindow({
   }, [preparingModelId]);
 
   const startModelDownload = async (model: ModelEntry) => {
-    const mode = model.id === "fluidaudio-multilingual-v3" ? "multilingual" : "english";
+    const mode = model.id.includes("multilingual") ? "multilingual" : "english";
     if (!(await selectLanguage(mode))) return;
 
     setModelError(null);
@@ -604,9 +710,11 @@ export function MainWindow({
     transcribingId,
     TRANSCRIBING_INDICATOR_DELAY_MS,
   );
-  let statusKind: AppStatus | "recording" | "transcribing" = status;
+  let statusKind: AppStatus | "recording" | "meeting" | "transcribing" = status;
   if (recording) {
     statusKind = "recording";
+  } else if (meeting || lecture || meetingPending || lecturePending) {
+    statusKind = "meeting";
   } else if (showTranscribing) {
     statusKind = "transcribing";
   } else if (modelStatusLoading) {
@@ -616,6 +724,15 @@ export function MainWindow({
   let statusText = "Unavailable";
   if (recording) {
     statusText = "Recording";
+  } else if (meetingPending || lecturePending) {
+    const pendingLecture = lecture || lecturePending;
+    statusText = pendingLecture
+      ? (lecture ? "Finishing lecture…" : "Starting lecture…")
+      : (meeting ? "Finishing meeting…" : "Starting meeting…");
+  } else if (lecture) {
+    statusText = "Lecture mode";
+  } else if (meeting) {
+    statusText = "Meeting mode";
   } else if (showTranscribing) {
     if (latestRecording?.status === "converting") {
       statusText = "Preparing audio";
@@ -636,8 +753,20 @@ export function MainWindow({
       {/* macOS overlay chrome: this strip hosts the traffic-light inset and
           starts native window dragging from its non-interactive surface. */}
       <header className="header" onMouseDown={startHeaderDrag}>
-        <BrandMark />
+        <BrandMark suffix={proBrandSuffix(pro)} />
         <div className="header-actions">
+          {onOpenStudio && pro.available && (
+            <button
+              className={`icon-button studio-button${proLocked ? " pro-locked" : ""}`}
+              type="button"
+              title={proUnlocked ? "Voice Studio (Cmd/Ctrl+Shift+V)" : "Voice Studio is part of UltraVox Pro"}
+              aria-label="Open Voice Studio"
+              onClick={() => (proUnlocked ? onOpenStudio() : onOpenPro())}
+            >
+              <StudioIcon />
+              {proLocked && <ProLockBadge />}
+            </button>
+          )}
           <button
             className="icon-button"
             type="button"
@@ -699,6 +828,9 @@ export function MainWindow({
               {statusKind === "recording" && (
                 <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden="true" />
               )}
+              {statusKind === "meeting" && (
+                <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden="true" />
+              )}
               {statusKind === "transcribing" && (
                 <ThinkingOrb state="composing" size={20} theme="dark" aria-hidden="true" />
               )}
@@ -709,23 +841,95 @@ export function MainWindow({
             )}
 
             <button
-              className={`record-button ${recording ? "recording" : ""}`}
-              onClick={() => void toggleRecording()}
-              aria-label={recording ? "Stop recording" : "Start recording"}
-              disabled={!recording && (modelStatusLoading || status !== "ready" || transcribing)}
+              className={`record-button ${recording || meeting || lecture ? "recording" : ""}`}
+              onClick={() => void (lecture ? toggleLecture() : meeting ? toggleMeeting() : toggleRecording())}
+              aria-label={lecture ? "Stop lecture" : meeting ? "Stop meeting" : recording ? "Stop recording" : "Start recording"}
+              disabled={
+                meetingPending ||
+                lecturePending ||
+                (!recording &&
+                  !meeting &&
+                  !lecture &&
+                  (modelStatusLoading || status !== "ready" || transcribing))
+              }
               aria-describedby={activityError ? "activity-error" : undefined}
             >
-              {recording ? <StopIcon /> : <MicIcon />}
+              {recording || meeting || lecture ? <StopIcon /> : <MicIcon />}
             </button>
 
             <div className="secondary-actions">
-              {(config?.show_transcribe_url ?? false) && (
-                <button type="button" className="secondary-action" ref={transcribeUrlRef} onClick={openUrlImport} disabled={recording || transcribing}>
-                  Transcribe URL
-                </button>
+              {meeting || lecture ? (
+                <span className="capture-note">
+                  {lecture ? "System audio only" : "System audio + microphone"}
+                </span>
+              ) : (
+                <>
+                  {pro.available && (config?.show_meeting_mode ?? true) && (
+                    <button
+                      type="button"
+                      className={`secondary-action${proLocked ? " pro-locked" : ""}`}
+                      onClick={() => void (proUnlocked ? toggleMeeting() : onOpenPro())}
+                      title={proUnlocked ? undefined : "Meeting mode is part of UltraVox Pro"}
+                      disabled={
+                        proUnlocked &&
+                        (meetingPending ||
+                          lecturePending ||
+                          recording ||
+                          transcribing ||
+                          modelStatusLoading ||
+                          status !== "ready")
+                      }
+                    >
+                      {proLocked && <ProLockBadge />}
+                      {meetingPending ? "Starting…" : "Meeting mode"}
+                    </button>
+                  )}
+                  {pro.available && (config?.show_lecture_mode ?? true) && (
+                    <button
+                      type="button"
+                      className={`secondary-action${proLocked ? " pro-locked" : ""}`}
+                      onClick={() => void (proUnlocked ? toggleLecture() : onOpenPro())}
+                      title={proUnlocked ? undefined : "Lecture mode is part of UltraVox Pro"}
+                      disabled={
+                        proUnlocked &&
+                        (meetingPending ||
+                          lecturePending ||
+                          recording ||
+                          transcribing ||
+                          modelStatusLoading ||
+                          status !== "ready")
+                      }
+                    >
+                      {proLocked && <ProLockBadge />}
+                      {lecturePending ? "Starting…" : "Lecture mode"}
+                    </button>
+                  )}
+                  {(config?.show_transcribe_url ?? false) && (
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      ref={transcribeUrlRef}
+                      onClick={openUrlImport}
+                      disabled={recording || meetingPending || lecturePending || transcribing}
+                    >
+                      Transcribe URL
+                    </button>
+                  )}
+                </>
               )}
             </div>
-            {activityError && <p id="activity-error" className="activity-error" role="alert">{activityError}</p>}
+            {activityError && !proLockNotice && (
+              <p id="activity-error" className="activity-error" role="alert">{activityError}</p>
+            )}
+            {proLockNotice && (
+              <ProLockPrompt
+                copy={proLockNotice}
+                onOpenPro={() => {
+                  setProLockNotice(null);
+                  onOpenPro();
+                }}
+              />
+            )}
           </section>
         )}
 
@@ -764,10 +968,25 @@ export function MainWindow({
               context="latest"
               onCopy={onCopy}
               onRetry={onRetry}
-              retryDisabled={recording || transcribing}
+              retryDisabled={meeting || lecture}
               onExport={onExport}
               onDelete={onDelete}
             />
+          )}
+          {proUnlocked ? (
+            <MediaPanel
+              enabled={config?.media_panel_enabled ?? false}
+              reactive={reactiveVisualsEnabled}
+              suppressed={recording || meeting || lecture || needsOnboarding}
+            />
+          ) : (
+            pro.available &&
+            (config?.media_panel_enabled ?? false) && (
+              <ProLockPrompt
+                copy="The media console is part of UltraVox Pro."
+                onOpenPro={onOpenPro}
+              />
+            )
           )}
         </section>
       </main>
@@ -871,7 +1090,7 @@ export function MainWindow({
                       context="history"
                       onCopy={onCopy}
                       onRetry={onRetry}
-                      retryDisabled={recording || transcribing}
+                      retryDisabled={meeting || lecture}
                       onExport={onExport}
                       onDelete={onDelete}
                     />
@@ -908,7 +1127,7 @@ export function MainWindow({
               </button>
             </div>
             <p className="compact-modal-copy">
-              Paste a YouTube link or direct URL. UltraVox downloads only the audio, then uses your selected on-device model.
+              Paste a YouTube link or direct media URL. UltraVox downloads only the audio, then uses your selected on-device model.
             </p>
             <form
               className="url-import-form"
@@ -923,7 +1142,7 @@ export function MainWindow({
                 value={urlValue}
                 onChange={(event) => setUrlValue(event.target.value)}
                 placeholder="https://…"
-                aria-label="Audio URL"
+                aria-label="Media URL"
                 autoFocus
                 disabled={urlImporting}
               />
@@ -1050,7 +1269,7 @@ function RecordingCard({
           <button
             className="btn btn-small"
             onClick={() => onRetry(row.id)}
-            title={retryDisabled ? "Wait for transcription to finish before retrying" : "Retry transcription"}
+            title={retryDisabled ? "Stop capture mode before retrying" : "Retry transcription"}
             disabled={retryDisabled}
           >
             Retry
@@ -1180,6 +1399,18 @@ function ModelCard({
         </button>
       )}
     </div>
+  );
+}
+
+function StudioIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 10v4" />
+      <path d="M8 7v10" />
+      <path d="M12 4v16" />
+      <path d="M16 8v8" />
+      <path d="M20 11v2" />
+    </svg>
   );
 }
 

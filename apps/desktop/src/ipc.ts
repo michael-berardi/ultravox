@@ -1,5 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
+import { wrapIpcForMirror } from "./lib/nativeMirror";
+import { mapProStatus, PRO_STATUS_EVENT, type ProState, type ProStatus } from "./lib/proStatus";
+
+export type { ProState, ProStatus };
+
+// Mirror builds route every app command through the mirror wrapper (license
+// simulation + suppression); consumer builds pass straight through.
+const invoke = wrapIpcForMirror(tauriInvoke);
 
 export type Engine = "whisper" | "fluidaudio";
 
@@ -47,19 +55,81 @@ export type AppConfig = {
   show_lecture_mode: boolean;
   show_transcribe_url: boolean;
 };
-export type AppInfoResponse = { name: string; version: string; identifier: string };
+export type MediaTransportCommand = "play_pause" | "previous" | "next";
+
+export type MediaState = {
+  active: boolean;
+  appName?: string | null;
+  bundleId?: string | null;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  /** Bounded in-memory `data:image/…` artwork from the canonical adapter.
+   *  The renderer must reject anything else; remote URLs are never sent. */
+  artworkDataUrl?: string | null;
+  elapsedSeconds?: number | null;
+  durationSeconds?: number | null;
+  isPlaying?: boolean | null;
+  volume?: number | null;
+  muted?: boolean | null;
+  volumeAvailable: boolean;
+  transportAvailable: boolean;
+  previousAvailable: boolean;
+  nextAvailable: boolean;
+};
+
+/** Which flavor of the one product this binary is: the public source build
+ * (no Pro module) or the official build we sign and distribute. */
+export type BuildFlavor = "open-source" | "official";
+
+export type AppInfoResponse = {
+  name: string;
+  version: string;
+  identifier: string;
+  build: BuildFlavor;
+};
+
+export type LicenseStatus = {
+  configured: boolean;
+  active: boolean;
+  entitlementId?: string | null;
+  label?: string | null;
+  plan?: string | null;
+  expiresAt?: string | null;
+  maxDevices?: number | null;
+  unlimitedDevices: boolean;
+  licenseState?: string | null;
+  trialUntil?: string | null;
+  updatesUntil?: string | null;
+  promotion?: string | null;
+  organizationId?: string | null;
+  product?: string | null;
+  error?: string | null;
+};
 
 export type AppStatusResponse = {
   status: "ready" | "loading" | "error";
   recording: boolean;
+  meeting: boolean;
   transcription: string;
 };
 
 export type PermissionState = "granted" | "denied" | "not_determined" | "unavailable";
 
-export type PermissionStatus = { microphone: PermissionState; accessibility: PermissionState };
+export type PermissionStatus = {
+  microphone: PermissionState;
+  accessibility: PermissionState;
+  screen_recording: PermissionState;
+};
 
-export type PermissionKind = "microphone" | "accessibility";
+export type PermissionKind = "microphone" | "accessibility" | "screen_recording";
+
+export type RetexScanStatus = {
+  vault_count: number;
+  record_count: number;
+  term_count: number;
+  last_refresh_at: string;
+};
 
 export type UpdatePreferences = { automatic: boolean };
 export type UpdateInfo = {
@@ -67,6 +137,8 @@ export type UpdateInfo = {
   latest_version: string;
   release_url: string;
 };
+
+export type TelemetryStatus = { consent: "undecided" | "accepted" | "declined"; enabled: boolean };
 
 export type CaretPosition = {
   x: number;
@@ -77,11 +149,6 @@ export type CaretPosition = {
 export type TranscriptionResult = {
   text: string;
   success: boolean;
-};
-
-export type DictionaryApplyResult = {
-  text: string;
-  canonical_terms: string[];
 };
 
 export type BridgeVersion = {
@@ -152,6 +219,7 @@ export type ShortcutSettings = {
   modifier_only_hotkey: ModifierKey;
   hold_to_record: boolean;
   key_combination: string | null;
+  meeting_key_combination: string;
 };
 
 export type AudioRecording = {
@@ -252,6 +320,16 @@ export type RecordingDeletedPayload = {
   id: string;
 };
 
+export type MeetingProvider = "google_meet" | "zoom";
+
+export type MeetingDetectionPendingPayload = {
+  version: 1;
+  detection_id: string;
+  provider: MeetingProvider;
+  detected_at_ms: number;
+  expires_at_ms: number;
+};
+
 export type EventName =
   | "recording-started"
   | "recording-stopped"
@@ -260,11 +338,26 @@ export type EventName =
   | "shortcut-triggered"
   | "indicator-show"
   | "recording-added"
+  | "meeting-state-changed"
+  | "meeting-detection-pending"
   | "url-import-progress"
   | "recording-deleted";
 
 export async function getAppInfo(): Promise<AppInfoResponse> {
   return await invoke<AppInfoResponse>("get_app_info");
+}
+
+/** Verified Pro entitlement as reported by the Pro module. */
+export async function getProStatus(): Promise<ProStatus> {
+  return mapProStatus(await invoke<unknown>("get_pro_status"));
+}
+
+export async function onProStatusChanged(
+  handler: (payload: ProStatus) => void
+): Promise<UnlistenFn> {
+  return listen<ProStatus>(PRO_STATUS_EVENT, (event: Event<ProStatus>) =>
+    handler(mapProStatus(event.payload))
+  );
 }
 
 export async function getAppStatus(): Promise<AppStatusResponse> {
@@ -297,6 +390,15 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 export async function installUpdate(info: UpdateInfo): Promise<void> {
   return await invoke("install_update", { info });
 }
+export async function getAppTelemetryStatus(): Promise<TelemetryStatus> {
+  return await invoke<TelemetryStatus>("get_app_telemetry_status");
+}
+
+export async function setAppTelemetryEnabled(enabled: boolean): Promise<TelemetryStatus> {
+  return await invoke<TelemetryStatus>("set_app_telemetry_enabled", { enabled });
+}
+
+
 export async function getSettings(): Promise<AppConfig> {
   return await invoke<AppConfig>("get_settings");
 }
@@ -305,24 +407,77 @@ export async function setThemeMaterial(theme: string): Promise<void> {
   return await invoke("set_theme_material", { theme });
 }
 
+export async function getLicenseStatus(): Promise<LicenseStatus> {
+  return await invoke<LicenseStatus>("distribution_access_status");
+}
+
+export async function activateLicense(accessKey: string): Promise<LicenseStatus> {
+  return await invoke<LicenseStatus>("activate_distribution_access", { accessKey });
+}
+
+/** Registers this install's revocable device grant; idempotent. */
+export async function registerDeviceLicense(): Promise<LicenseStatus | null> {
+  return await invoke<LicenseStatus | null>("register_device_license");
+}
+
+/** Consumes a one-time organization access file before trial registration. */
+export async function bootstrapDistributionAccess(): Promise<LicenseStatus | null> {
+  return await invoke<LicenseStatus | null>("bootstrap_distribution_access");
+}
+
 export async function setSettings(config: AppConfig): Promise<void> {
   return await invoke("set_settings", { config });
 }
 
-export async function dictionaryApply(
-  dictionary: string,
-  text: string,
-): Promise<DictionaryApplyResult> {
-  return await invoke<DictionaryApplyResult>("dictionary_apply", { dictionary, text });
+export async function chooseRetexVaults(): Promise<void> {
+  return await invoke("choose_retex_vaults");
+}
+
+export async function revokeRetexVault(path: string): Promise<void> {
+  return await invoke("revoke_retex_vault", { path });
+}
+
+export async function setRetexAutoRefresh(enabled: boolean): Promise<void> {
+  return await invoke("set_retex_auto_refresh", { enabled });
+}
+
+export async function scanRetexDictionary(): Promise<RetexScanStatus> {
+  return await invoke<RetexScanStatus>("scan_retex_dictionary");
 }
 
 export async function getModelCatalog(): Promise<ModelCatalog> {
   return await invoke<ModelCatalog>("get_model_catalog");
 }
 
+export async function getMediaState(): Promise<MediaState> {
+  return await invoke<MediaState>("get_media_state");
+}
+
+
 export async function getInputLevel(): Promise<number> {
   return await invoke<number>("get_input_level");
 }
+export async function setSystemAudioMeterEnabled(enabled: boolean): Promise<void> {
+  return await invoke("set_system_audio_meter_enabled", { enabled });
+}
+
+/** Eleven normalized [0,1] bands, low to high frequency. */
+export async function getSystemAudioSpectrum(): Promise<number[]> {
+  return await invoke<number[]>("get_system_audio_spectrum");
+}
+
+export async function setSystemVolume(volume: number): Promise<void> {
+  return await invoke("set_system_volume", { volume });
+}
+
+export async function setSystemMuted(muted: boolean): Promise<void> {
+  return await invoke("set_system_muted", { muted });
+}
+
+export async function mediaTransport(command: MediaTransportCommand): Promise<void> {
+  return await invoke("media_transport", { command });
+}
+
 export async function getDownloadProgress(id: string): Promise<DownloadProgress> {
   return await invoke<DownloadProgress>("get_download_progress", { id });
 }
@@ -389,6 +544,32 @@ export async function importUrl(url: string): Promise<string> {
 
 export async function importFile(path: string): Promise<string> {
   return await invoke<string>("import_file", { path });
+}
+
+export async function startMeeting(): Promise<string> {
+  return await invoke<string>("start_meeting");
+}
+
+
+export async function startLecture(): Promise<string> {
+  return await invoke<string>("start_lecture");
+}
+export type MeetingDetectionDecision = "accept" | "decline";
+
+export async function respondMeetingDetection(
+  detectionId: string,
+  decision: MeetingDetectionDecision,
+): Promise<string> {
+  return await invoke<string>("respond_meeting_detection", {
+    detectionId,
+    decision,
+  });
+}
+export async function getPendingMeetingDetection(): Promise<MeetingDetectionPendingPayload | null> {
+  return await invoke<MeetingDetectionPendingPayload | null>("get_pending_meeting_detection");
+}
+export async function stopMeeting(): Promise<AudioRecording> {
+  return await invoke<AudioRecording>("stop_meeting");
 }
 
 export async function getTranscriptionStatus(): Promise<string> {
@@ -539,6 +720,15 @@ export async function onSettingsChanged(
   );
 }
 
+export async function onMeetingDetectionPending(
+  handler: (payload: MeetingDetectionPendingPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<MeetingDetectionPendingPayload>(
+    "meeting-detection-pending",
+    (event: Event<MeetingDetectionPendingPayload>) => handler(event.payload),
+  );
+}
+
 export async function onRecordingAdded(
   handler: (payload: RecordingAddedPayload) => void
 ): Promise<UnlistenFn> {
@@ -556,6 +746,14 @@ export async function onRecordingDeleted(
 }
 
 
+export async function onMeetingStateChanged(
+  handler: (active: boolean) => void
+): Promise<UnlistenFn> {
+  return listen<boolean>("meeting-state-changed", (event: Event<boolean>) =>
+    handler(event.payload)
+  );
+}
+
 export async function onUrlImportProgress(
   handler: (payload: UrlImportProgressPayload) => void
 ): Promise<UnlistenFn> {
@@ -563,4 +761,54 @@ export async function onUrlImportProgress(
     "url-import-progress",
     (event: Event<UrlImportProgressPayload>) => handler(event.payload)
   );
+}
+
+// Voice Studio: UUIDs and RFC3339 dates cross IPC as strings.
+export type VoiceProfile = {
+  id: string; name: string; created_at: string; language: string;
+  source_recording_ids: string[]; source_paths: string[];
+  reference_seconds: number; embeddings_path: string; builtin: boolean;
+};
+export type CorpusCandidate = {
+  recording_id: string; path: string; duration_seconds: number; selected: boolean;
+};
+export type GenerationEntry = {
+  id: string; path: string; kind: string; text: string | null;
+  created_at: number; size: number;
+};
+export async function voiceGenerationsList(): Promise<GenerationEntry[]> {
+  return await invoke("voice_generations_list");
+}
+export async function voiceGenerationDelete(pathOrId: string): Promise<void> {
+  return await invoke("voice_generation_delete", { pathOrId });
+}
+export async function voiceGenerationsDeleteAll(): Promise<void> {
+  return await invoke("voice_generations_delete_all");
+}
+export type SpeakResult = { wav_path: string; seconds: number };
+export type TtsStatus = { models_ready: boolean; voice_count: number };
+export async function vsListVoices(): Promise<VoiceProfile[]> {
+  return await invoke("vs_list_voices");
+}
+export async function vsCorpusCandidates(): Promise<CorpusCandidate[]> {
+  return await invoke("vs_corpus_candidates");
+}
+export async function vsCreateVoice(name: string, recordingIds: string[] | null, importPath: string | null, language: string): Promise<VoiceProfile> {
+  return await invoke("vs_create_voice", { name, recordingIds, importPath, language });
+}
+export async function vsDeleteVoice(id: string): Promise<void> {
+  return await invoke("vs_delete_voice", { id });
+}
+export async function vsRenameVoice(id: string, name: string): Promise<void> {
+  return await invoke("vs_rename_voice", { id, name });
+}
+export async function vsSpeak(voiceId: string | null, builtin: string | null, text: string, language: string): Promise<SpeakResult> {
+  return await invoke("vs_speak", { voiceId, builtin, text, language, useInt8: false });
+}
+export async function vsTtsStatus(): Promise<TtsStatus> {
+  return await invoke("vs_tts_status");
+}
+export async function voiceStudioAudioUrl(path: string): Promise<string> {
+  const bytes = await invoke<number[]>("vs_read_audio", { path });
+  return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "audio/wav" }));
 }

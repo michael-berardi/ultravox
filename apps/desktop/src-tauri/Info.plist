@@ -7,8 +7,10 @@
   <key>CFBundleName</key>
   <string>UltraVox</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>UltraVox Light needs microphone access to transcribe your speech.</string>
+  <string>UltraVox needs microphone access to transcribe your speech.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>UltraVox uses Screen &amp; System Audio Recording access for Meeting mode, Lecture mode, and, when enabled, visible system-audio spectrum effects.</string>
   <key>NSAccessibilityUsageDescription</key>
-  <string>UltraVox Light uses accessibility access to integrate with system text fields.</string>
+  <string>UltraVox uses accessibility access to integrate with system text fields.</string>
 </dict>
 </plist>

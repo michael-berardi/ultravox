@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
   setSettings,
   getSettings,
@@ -14,25 +12,38 @@ import {
   getUpdatePreferences,
   installUpdate,
   setUpdatePreferences,
+  getAppTelemetryStatus,
+  setAppTelemetryEnabled,
+  getAudioDevices,
   onSettingsChanged,
+  type AppConfig,
+  type AudioDeviceInfo,
+  type BuildFlavor,
+  type ModelEntry,
+  type ModifierKey,
+  type ProStatus,
+  type ShortcutSettings as ShortcutSettingsPayload,
+  type UpdateInfo,
   dictionarySkillInfo,
   revealDictionarySkill,
   copyToClipboard,
-  type AppConfig,
-  type ModelEntry,
-  type ModifierKey,
-  type ShortcutSettings as ShortcutSettingsPayload,
-  type UpdateInfo,
   type DictionarySkillInfo as DictionarySkillInfoPayload,
 } from "../ipc";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { THEMES } from "../themes";
+import { THEMES, isFreeTheme } from "../themes";
 import { BrandMark, startHeaderDrag } from "../components/BrandMark";
-export type SettingsTab = "shortcut" | "model" | "transcription" | "dictionary" | "privacy" | "appearance" | "support";
+import { LockIcon, ProLockPrompt } from "../components/ProLock";
+import { ToggleRow } from "../components/ToggleRow";
+import { openStorefront } from "../lib/storefront";
+import { ProLicensePanel, RetexDictionarySettings } from "@pro";
+export type SettingsTab = "shortcut" | "model" | "transcription" | "dictionary" | "privacy" | "appearance" | "pro";
 
 interface SettingsPageProps {
   initialConfig: AppConfig;
   initialTab?: SettingsTab;
+  pro: ProStatus;
+  build?: BuildFlavor | null;
+  onProRefresh?: () => Promise<void>;
   qaMode?: boolean;
   onClose: () => void;
 }
@@ -40,7 +51,7 @@ interface SettingsPageProps {
 type ShortcutConfigPatch = Partial<
   Pick<
     AppConfig,
-    "modifier_only_hotkey" | "key_combination" | "hold_to_record"
+    "modifier_only_hotkey" | "key_combination" | "hold_to_record" | "meeting_key_combination"
   >
 >;
 
@@ -61,7 +72,23 @@ function normalizeModifier(value: string): ModifierKey {
 }
 
 
-export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = false, onClose }: SettingsPageProps) {
+function mergeAuthoritativeRetex(pending: AppConfig, authoritative: AppConfig): AppConfig {
+  return {
+    ...pending,
+    config_version: authoritative.config_version,
+    retex_dictionary: authoritative.retex_dictionary,
+    retex_vault_paths: authoritative.retex_vault_paths,
+    retex_vault_identities: authoritative.retex_vault_identities,
+    retex_auto_refresh: authoritative.retex_auto_refresh,
+    retex_last_refresh_at: authoritative.retex_last_refresh_at,
+  };
+}
+
+function sameRendererOwnedSettings(left: AppConfig, right: AppConfig): boolean {
+  return JSON.stringify(mergeAuthoritativeRetex(left, right)) === JSON.stringify(right);
+}
+
+export function SettingsPage({ initialConfig, initialTab = "shortcut", pro, build = null, onProRefresh, qaMode = false, onClose }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [config, setConfig] = useState<AppConfig>(initialConfig);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +97,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = 
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => setActiveTab(initialTab), [initialTab]);
+
   useEffect(() => {
     if (qaMode) return;
     let cancelled = false;
@@ -79,7 +107,11 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = 
       try {
         const stopListening = await onSettingsChanged((payload) => {
           const pending = pendingConfigRef.current;
-          if (pending && JSON.stringify(payload.config) !== JSON.stringify(pending)) {
+          if (pending && !sameRendererOwnedSettings(pending, payload.config)) {
+            const merged = mergeAuthoritativeRetex(pending, payload.config);
+            pendingConfigRef.current = merged;
+            configRef.current = merged;
+            setConfig(merged);
             return;
           }
           pendingConfigRef.current = null;
@@ -142,6 +174,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = 
       modifier_only_hotkey: normalizeModifier(next.modifier_only_hotkey),
       key_combination: next.key_combination,
       hold_to_record: next.hold_to_record,
+      meeting_key_combination: next.meeting_key_combination,
     };
     persist(next, () => setShortcutSettings(settings));
   }, [persist]);
@@ -171,7 +204,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = 
         <TabButton id="dictionary" label="Dictionary" active={activeTab} onClick={setActiveTab} />
         <TabButton id="privacy" label="Privacy" active={activeTab} onClick={setActiveTab} />
         <TabButton id="appearance" label="Appearance" active={activeTab} onClick={setActiveTab} />
-        <TabButton id="support" label="Support" active={activeTab} onClick={setActiveTab} />
+        <TabButton id="pro" label="Pro" active={activeTab} onClick={setActiveTab} />
       </div>
       {error && <div className="settings-error" role="alert">{error}</div>}
 
@@ -179,10 +212,10 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", qaMode = 
         {activeTab === "shortcut" && <ShortcutSettings config={cfg} onChange={updateShortcut} />}
         {activeTab === "model" && <ModelSettings config={cfg} onChange={updateConfig} />}
         {activeTab === "transcription" && <TranscriptionSettings config={cfg} onChange={updateConfig} />}
-        {activeTab === "dictionary" && <DictionarySettings config={cfg} onChange={updateConfig} />}
+        {activeTab === "dictionary" && <DictionarySettings config={cfg} pro={pro} onChange={updateConfig} onOpenPro={() => setActiveTab("pro")} />}
         {activeTab === "privacy" && <PrivacySettings config={cfg} onChange={updateConfig} />}
-        {activeTab === "appearance" && <AppearanceSettings config={cfg} onChange={updateConfig} />}
-        {activeTab === "support" && <SupportSettings />}
+        {activeTab === "appearance" && <AppearanceSettings config={cfg} pro={pro} onChange={updateConfig} onOpenPro={() => setActiveTab("pro")} />}
+        {activeTab === "pro" && <ProSettings pro={pro} build={build} onProRefresh={onProRefresh} />}
       </div>
 
     </div>
@@ -276,37 +309,55 @@ function ShortcutSettings({
   config: AppConfig;
   onChange: (patch: ShortcutConfigPatch) => void;
 }) {
-  const [capturing, setCapturing] = useState<"recording" | null>(null);
+  const [capturing, setCapturing] = useState<"recording" | "meeting" | null>(null);
   const [captureMessage, setCaptureMessage] = useState("Esc to cancel");
   const modifierValue = normalizeModifier(config.modifier_only_hotkey);
+
   useEffect(() => {
     if (!capturing) return;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.repeat) return;
+
       const hasModifier = event.metaKey || event.altKey || event.ctrlKey || event.shiftKey;
       if (event.code === "Escape" && !hasModifier) {
         setCapturing(null);
         setCaptureMessage("Esc to cancel");
         return;
       }
-      const shortcut = shortcutFromKeyboardEvent(event, config.hold_to_record);
+
+      const shortcut = shortcutFromKeyboardEvent(
+        event,
+        capturing === "recording" && config.hold_to_record,
+      );
       if (!shortcut) {
-        if (event.code === "Space" && !config.hold_to_record) {
+        if (event.code === "Space" && capturing === "recording" && !config.hold_to_record) {
           setCaptureMessage("Turn on Hold shortcut to use Space alone");
         } else if (!["MetaLeft", "MetaRight", "AltLeft", "AltRight", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
           setCaptureMessage("Use one modifier and one supported key");
         }
         return;
       }
-      onChange({ key_combination: shortcut });
+      const otherShortcut =
+        capturing === "meeting" ? config.key_combination : config.meeting_key_combination;
+      if (shortcut === otherShortcut) {
+        setCaptureMessage("Choose a different shortcut");
+        return;
+      }
+      onChange(
+        capturing === "meeting"
+          ? { meeting_key_combination: shortcut }
+          : { key_combination: shortcut },
+      );
       setCapturing(null);
       setCaptureMessage("Esc to cancel");
     };
+
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [capturing, config.hold_to_record, onChange]);
+  }, [capturing, config.hold_to_record, config.key_combination, config.meeting_key_combination, onChange]);
 
   return (
     <div className="settings-group" role="tabpanel" id="panel-shortcut" aria-labelledby="tab-shortcut">
@@ -339,6 +390,34 @@ function ShortcutSettings({
             </span>
             <small aria-live="polite">
               {capturing === "recording" ? captureMessage : "Change"}
+            </small>
+          </button>
+        </SettingsRow>
+        <SettingsRow
+          label="Meeting shortcut"
+          description="Start or stop capture of system audio and your microphone."
+        >
+          <button
+            type="button"
+            className={`shortcut-capture${capturing === "meeting" ? " is-capturing" : ""}`}
+            onClick={() => {
+              setCaptureMessage("Esc to cancel");
+              setCapturing("meeting");
+            }}
+            aria-label={
+              capturing === "meeting"
+                ? "Press a new meeting shortcut"
+                : `Meeting shortcut ${config.meeting_key_combination}`
+            }
+            aria-pressed={capturing === "meeting"}
+          >
+            <span>
+              {capturing === "meeting"
+                ? "Press keys…"
+                : formatShortcut(config.meeting_key_combination)}
+            </span>
+            <small aria-live="polite">
+              {capturing === "meeting" ? captureMessage : "Change"}
             </small>
           </button>
         </SettingsRow>
@@ -622,8 +701,53 @@ function formatBytes(bytes: number | null): string {
 
 
 function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
+  const [audioDevices, setAudioDevices] = useState<AudioDeviceInfo[]>([]);
+  const [audioDevicesError, setAudioDevicesError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getAudioDevices()
+      .then((devices) => {
+        if (!cancelled) setAudioDevices(devices);
+      })
+      .catch((deviceError) => {
+        if (!cancelled)
+          setAudioDevicesError(`Could not list microphones: ${String(deviceError)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <div className="settings-group" role="tabpanel" id="panel-transcription" aria-labelledby="tab-transcription">
+      <section className="settings-card">
+        <div className="settings-card-heading">
+          <div>
+            <h3>Microphone</h3>
+            <p>Select the live input UltraVox records for transcription.</p>
+          </div>
+        </div>
+        <SettingsRow
+          label="Audio input"
+          description="Choose a specific microphone when the system default is muted or virtual."
+        >
+          <select
+            className="select"
+            value={config.audio_input_device_id ?? ""}
+            onChange={(event) =>
+              onChange({ audio_input_device_id: event.target.value || null })
+            }
+            aria-label="Audio input device"
+          >
+            <option value="">System default</option>
+            {audioDevices.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.name}{device.is_default ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+        </SettingsRow>
+        {audioDevicesError && <p className="settings-error">{audioDevicesError}</p>}
+      </section>
       <section className="settings-card">
         <div className="settings-card-heading">
           <div>
@@ -631,6 +755,18 @@ function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
             <p>Choose which quick actions sit under the record button.</p>
           </div>
         </div>
+        <ToggleRow
+          label="Show Meeting mode"
+          description="Pro feature: capture system audio and your microphone together for meetings."
+          checked={config.show_meeting_mode}
+          onChange={(checked) => onChange({ show_meeting_mode: checked })}
+        />
+        <ToggleRow
+          label="Show Lecture mode"
+          description="Pro feature: transcribe system audio without capturing your microphone."
+          checked={config.show_lecture_mode}
+          onChange={(checked) => onChange({ show_lecture_mode: checked })}
+        />
         <ToggleRow
           label="Show Transcribe URL"
           description="Free feature: add a one-click action to transcribe audio from a URL."
@@ -701,8 +837,6 @@ function TranscriptionSettings({ config, onChange }: SettingsSectionProps) {
     </div>
   );
 }
-
-const MAX_DICTIONARY_BYTES = 128 * 1024;
 
 function DictionaryAgentSkill() {
   const [skill, setSkill] = useState<DictionarySkillInfoPayload | null>(null);
@@ -778,21 +912,19 @@ function DictionaryAgentSkill() {
   );
 }
 
-function DictionarySettings({ config, onChange }: SettingsSectionProps) {
-  const byteCount = new TextEncoder().encode(config.custom_dictionary).length;
-  const updateDictionary = (value: string) => {
-    if (new TextEncoder().encode(value).length <= MAX_DICTIONARY_BYTES) {
-      onChange({ custom_dictionary: value });
-    }
-  };
-
+function DictionarySettings({
+  config,
+  pro,
+  onChange,
+  onOpenPro,
+}: SettingsSectionProps & { pro: ProStatus; onOpenPro: () => void }) {
   return (
     <div className="settings-group" role="tabpanel" id="panel-dictionary" aria-labelledby="tab-dictionary">
       <section className="settings-card dictionary-card">
         <div className="settings-card-heading">
           <div>
             <h3>Custom dictionary</h3>
-            <p id="dictionary-local-help">Manual and local. Corrections run on this device before history, copy, or paste.</p>
+            <p>Applied on-device to every completed transcript.</p>
           </div>
         </div>
         <label className="dictionary-label" htmlFor="custom-dictionary">Terms and aliases</label>
@@ -800,39 +932,174 @@ function DictionarySettings({ config, onChange }: SettingsSectionProps) {
           id="custom-dictionary"
           className="input dictionary-editor"
           value={config.custom_dictionary}
-          onChange={(event) => updateDictionary(event.target.value)}
-          maxLength={MAX_DICTIONARY_BYTES}
-          rows={10}
-          spellCheck={false}
-          aria-describedby="dictionary-local-help dictionary-format-help dictionary-limit"
+          onChange={(event) => onChange({ custom_dictionary: event.target.value })}
+          maxLength={128 * 1024}
           placeholder={"Retex = retext\nUltraVox = Ultra Box"}
+          spellCheck={false}
         />
-        <p className="dictionary-help" id="dictionary-format-help">
-          One entry per line: <code>Canonical term</code> or <code>Canonical term = alias one, alias two</code>. Blank lines and lines beginning with # or // are ignored. Exact aliases ignore case; distinctive terms also receive conservative typo correction.
-        </p>
-        <p className="dictionary-limit" id="dictionary-limit" aria-live="polite">
-          {byteCount.toLocaleString()} / {MAX_DICTIONARY_BYTES.toLocaleString()} bytes
-        </p>
-        <p className="dictionary-help">
-          UltraVox Light never scans Retex, contacts, files, or other apps for vocabulary.
+        <p className="description dictionary-help">
+          One entry per line: <code>Canonical term</code> or <code>Canonical term = alias one, alias two</code>. Lines beginning with # are comments.
         </p>
       </section>
 
       <DictionaryAgentSkill />
+
+      {pro.unlocked ? (
+        <RetexDictionarySettings config={config} />
+      ) : pro.available ? (
+        <section className="settings-card dictionary-card">
+          <div className="settings-card-heading">
+            <div>
+              <h3>Retex vocabulary</h3>
+              <p>Optional, permissioned vocabulary included with UltraVox Pro.</p>
+            </div>
+          </div>
+          <ProLockPrompt
+            copy="Retex vault scanning is part of UltraVox Pro."
+            onOpenPro={onOpenPro}
+          />
+        </section>
+      ) : null}
     </div>
   );
 }
 
-function PrivacySettings({}: SettingsSectionProps) {
+function PrivacySettings({ config, onChange }: SettingsSectionProps) {
   const [automatic, setAutomatic] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
-  useEffect(() => { let cancelled = false; void Promise.all([getUpdatePreferences(), checkForUpdate()]).then(([preferences, candidate]) => { if (!cancelled) { setAutomatic(preferences.automatic); setUpdate(candidate); } }).catch(error => { if (!cancelled) setUpdateMessage(`Update check unavailable: ${String(error)}`); }); return () => { cancelled = true; }; }, []);
-  const updateAutomatic = async (enabled: boolean) => { const previous = automatic; setAutomatic(enabled); try { await setUpdatePreferences({ automatic: enabled }); } catch (error) { setAutomatic(previous); setUpdateMessage(`Could not update automatic updates: ${String(error)}`); } };
-  const installCandidate = async () => { if (!update) return; setUpdateBusy(true); try { await installUpdate(update); } catch (error) { setUpdateMessage(`Update was not installed: ${String(error)}`); } finally { setUpdateBusy(false); } };
-  return <div className="settings-group" role="tabpanel" id="panel-privacy" aria-labelledby="tab-privacy"><div className="settings-card"><h3>Updates</h3><p className="description">Stable public releases are checked at launch and daily. Updates are verified with SHA-256 before installation.</p><ToggleRow label="Install updates automatically" description="Opt in to automatic public updates." checked={automatic} onChange={checked => void updateAutomatic(checked)} />{update && <div className="settings-row"><div className="settings-row-label"><label>UltraVox Light {update.latest_version} is available</label><p className="description">A failed check leaves the current app untouched.</p></div><button className="btn btn-primary" type="button" disabled={updateBusy} onClick={() => void installCandidate()}>{updateBusy ? "Verifying…" : "Update now"}</button></div>}{updateMessage && <p className="description" role="status">{updateMessage}</p>}</div></div>;
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAppTelemetryStatus()
+      .then((telemetry) => {
+        if (!cancelled) setTelemetryEnabled(telemetry.enabled);
+      })
+      .catch((error) => {
+        if (!cancelled) setUpdateMessage(`Telemetry status unavailable: ${String(error)}`);
+      });
+    void Promise.all([getUpdatePreferences(), checkForUpdate()])
+      .then(([preferences, candidate]) => {
+        if (!cancelled) {
+          setAutomatic(preferences.automatic);
+          setUpdate(candidate);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setUpdateMessage(`Update check unavailable: ${String(error)}`);
+      });
+    return () => { cancelled = true; };
+  }, []);
+  const updateTelemetry = async (enabled: boolean) => {
+    const previous = telemetryEnabled;
+    setTelemetryEnabled(enabled);
+    try {
+      const next = await setAppTelemetryEnabled(enabled);
+      setTelemetryEnabled(next.enabled);
+    } catch (error) {
+      setTelemetryEnabled(enabled ? previous : false);
+      const prefix = enabled
+        ? 'Could not enable telemetry'
+        : 'Telemetry is disabled for this run, but the preference could not be saved';
+      setUpdateMessage(`${prefix}: ${String(error)}`);
+    }
+  };
+
+
+  const updateAutomatic = async (enabled: boolean) => {
+    const previous = automatic;
+    setAutomatic(enabled);
+    try {
+      await setUpdatePreferences({ automatic: enabled });
+    } catch (error) {
+      setAutomatic(previous);
+      setUpdateMessage(`Could not update automatic updates: ${String(error)}`);
+      return;
+    }
+    if (enabled && update) {
+      setUpdateBusy(true);
+      try {
+        await installUpdate(update);
+        setUpdateMessage("Update installed. UltraVox is relaunching.");
+      } catch (error) {
+        setUpdateMessage(`Update was not installed: ${String(error)}`);
+      } finally {
+        setUpdateBusy(false);
+      }
+    }
+  };
+
+  const installCandidate = async () => {
+    if (!update) return;
+    setUpdateBusy(true);
+    try {
+      await installUpdate(update);
+      setUpdateMessage("Update installed. UltraVox is relaunching.");
+    } catch (error) {
+      setUpdateMessage(`Update was not installed: ${String(error)}`);
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-privacy" aria-labelledby="tab-privacy">
+      <div className="settings-card">
+        <h3>Privacy</h3>
+        <p className="description">
+          Optional telemetry is off until you explicitly accept it. It contains a random
+          app-install ID, coarse platform details, and daily feature counts—never transcripts,
+          audio, prompts, URLs, paths, errors, or hardware identifiers. Identifier rows expire
+          within 34 UTC days; ID-free daily totals within 360 days.
+        </p>
+        <ToggleRow
+          label="Share anonymous usage aggregates"
+          description="You can disable this at any time; disabling clears the install identifier and queued events."
+          checked={telemetryEnabled}
+          onChange={(checked) => void updateTelemetry(checked)}
+        />
+      </div>
+      <div className="settings-card">
+        <h3>Updates</h3>
+        <p className="description">Stable releases are checked at launch and daily. Updates are staged and verified before /Applications/UltraVox.app is touched.</p>
+        <ToggleRow
+          label="Install updates automatically"
+          description="Opt in to automatic installation after checksum, identity, sealed-code, and notarization checks."
+          checked={automatic}
+          onChange={(checked) => void updateAutomatic(checked)}
+        />
+        {update && (
+          <div className="settings-row">
+            <div className="settings-row-label">
+              <label>UltraVox {update.latest_version} is available</label>
+              <p className="description">Choose Update now or Later. A failed check leaves the current app untouched.</p>
+            </div>
+            <button className="btn btn-primary" type="button" disabled={updateBusy} onClick={() => void installCandidate()}>
+              {updateBusy ? "Verifying…" : "Update now"}
+            </button>
+          </div>
+        )}
+        {updateMessage && <p className="description" role="status">{updateMessage}</p>}
+      </div>
+      <div className="settings-card">
+        <h3>Meeting detection</h3>
+        <p className="description">
+          UltraVox can receive a privacy-preserving signal from the connected browser extension.
+          It uses only a local opaque meeting key; URLs, titles, participants, and meeting content never leave your device.
+        </p>
+        <ToggleRow
+          label="Show meeting reminders"
+          description="Ask before recording when a Google Meet or Zoom meeting is detected. Recording never starts automatically."
+          checked={config.meeting_detection_enabled}
+          onChange={(checked) => onChange({ meeting_detection_enabled: checked })}
+        />
+      </div>
+    </div>
+  );
 }
+
 
 function SettingsRow({
   label,
@@ -841,7 +1108,7 @@ function SettingsRow({
 }: {
   label: string;
   description?: string;
-  children: ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <div className="settings-row">
@@ -854,86 +1121,99 @@ function SettingsRow({
   );
 }
 
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
+function AppearanceSettings({ config, pro, onChange, onOpenPro }: SettingsSectionProps & { pro: ProStatus; onOpenPro: () => void }) {
+  const visibleThemes = pro.available ? THEMES : THEMES.filter((theme) => isFreeTheme(theme.id));
   return (
-    <div className="settings-row">
-      <div className="settings-row-label">
-        <label>{label}</label>
-        {description && <p className="description">{description}</p>}
-      </div>
-      <label className="toggle" aria-label={label}>
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        <span className="toggle-track">
-          <span className="toggle-thumb" />
-        </span>
-      </label>
-    </div>
-  );
-}
-
-function AppearanceSettings({ config, onChange }: SettingsSectionProps) {
-  return <div className="settings-group" role="tabpanel" id="panel-appearance" aria-labelledby="tab-appearance">
-    <div className="settings-card"><div className="settings-card-heading"><h3>Theme</h3></div><ul className="theme-grid">{THEMES.map(theme => <li key={theme.id}><button type="button" className={`theme-card ${config.theme === theme.id ? "selected" : ""}`} onClick={() => onChange({ theme: theme.id })} aria-pressed={config.theme === theme.id}><span className="theme-card-preview" style={{ background: `linear-gradient(135deg, ${theme.swatch[1]}, ${theme.swatch[2]}) bottom / 100% 12px no-repeat, ${theme.swatch[0]}` }} /><span className="theme-card-name">{theme.name}</span><span className="theme-card-tagline">{theme.tagline}</span></button></li>)}</ul></div>
-    <div className="settings-card"><div className="settings-card-heading"><h3>Recording meter</h3></div><ToggleRow label="Reactive microphone meter" description="Show the live microphone level while recording." checked={config.reactive_visuals_enabled} onChange={checked => onChange({ reactive_visuals_enabled: checked })} /></div>
-  </div>;
-}
-
-const STORE_URL = "https://implosecybernetics.com/software/?product=ultravox";
-
-async function openStorefront(): Promise<void> {
-  try {
-    await openExternal(STORE_URL);
-  } catch {
-    window.open(STORE_URL, "_blank");
-  }
-}
-
-function SupportSettings() {
-  return (
-    <div className="settings-group" role="tabpanel" id="panel-support" aria-labelledby="tab-support">
-      <section className="settings-card support-mission">
-        <span className="eyebrow">Sustainable independent software</span>
-        <h3>Help keep UltraVox maintained</h3>
-        <p>
-          UltraVox Light is free and open source. A one-time Pro license directly funds
-          code signing, Windows and Linux packaging, compatibility work, support, and
-          continued improvements to both editions.
-        </p>
-        <p>
-          Light stays fully usable whether you upgrade or not. Pro is the practical way
-          to support long-term development if UltraVox saves you time.
-        </p>
-        <button type="button" className="btn btn-primary" onClick={() => void openStorefront()}>
-          Get a Pro license — $25
-        </button>
-        <span className="description">One-time purchase · perpetual license · updates included</span>
-      </section>
-      <section className="settings-card">
+    <div className="settings-group" role="tabpanel" id="panel-appearance" aria-labelledby="tab-appearance">
+      <div className="settings-card">
         <div className="settings-card-heading">
-          <h3>What Pro adds</h3>
-          <p>The extras are secondary to keeping the project healthy.</p>
+          <div>
+            <h3>Theme</h3>
+          </div>
         </div>
-        <ul className="support-perks">
-          <li>Meeting mode for mixed system and microphone audio, plus system-only Lecture mode</li>
-          <li>The complete signature theme collection</li>
-          <li>The now-playing media console with live transport and spectrum</li>
-          <li>Authenticated releases through the Implose distribution channel</li>
+        <ul className="theme-grid">
+          {visibleThemes.map((theme) => {
+            const locked = !pro.unlocked && !isFreeTheme(theme.id);
+            return (
+              <li key={theme.id}>
+                <button
+                  type="button"
+                  className={`theme-card ${config.theme === theme.id ? "selected" : ""} ${locked ? "locked" : ""}`}
+                  onClick={() => {
+                    if (locked) return;
+                    onChange({ theme: theme.id });
+                  }}
+                  aria-pressed={config.theme === theme.id}
+                  aria-disabled={locked}
+                >
+                  <span
+                    className="theme-card-preview"
+                    style={{
+                      background: `linear-gradient(135deg, ${theme.swatch[1]}, ${theme.swatch[2]}) bottom / 100% 12px no-repeat, ${theme.swatch[0]}`,
+                    }}
+                  />
+                  <span className="theme-card-name">{theme.name}</span>
+                  <span className="theme-card-tagline">{theme.tagline}</span>
+                  {locked && (
+                    <>
+                      <span className="theme-lock-badge" aria-hidden="true">
+                        <LockIcon />
+                      </span>
+                      <span className="theme-lock" role="presentation">
+                        <span className="theme-lock-title">{theme.name} is a Pro theme</span>
+                        <span className="theme-lock-copy">
+                          Pro unlocks Meeting mode, Lecture mode, Voice Studio, custom dictionaries, the media console and all {THEMES.length - THEMES.filter((t) => isFreeTheme(t.id)).length} signature themes.
+                        </span>
+                        <span className="theme-lock-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onOpenPro();
+                            }}
+                          >
+                            Open Pro settings
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void openStorefront();
+                            }}
+                          >
+                            Buy Pro — $25
+                          </button>
+                        </span>
+                      </span>
+                    </>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
-      </section>
+      </div>
+      <div className="settings-card">
+        <div className="settings-card-heading">
+          <div>
+            <h3>Media panel</h3>
+          </div>
+        </div>
+        <ToggleRow
+          label="Show media panel"
+          description="Show now-playing source, transport, and system volume below your latest message while another app plays audio."
+          checked={config.media_panel_enabled}
+          onChange={(checked) => onChange({ media_panel_enabled: checked })}
+        />
+        <ToggleRow
+          label="Reactive meters"
+          description="Visualize your live microphone level while recording and the real 11-band system-audio frequency spectrum during media playback, with theme-specific effects. Off by default; disabling removes the meters and every audio-driven effect."
+          checked={config.reactive_visuals_enabled}
+          onChange={(checked) => onChange({ reactive_visuals_enabled: checked })}
+        />
+      </div>
     </div>
   );
 }
@@ -947,3 +1227,17 @@ function CloseIcon() {
   );
 }
 
+function ProSettings({
+  pro,
+  onProRefresh,
+}: {
+  pro: ProStatus;
+  build: BuildFlavor | null;
+  onProRefresh?: () => Promise<void>;
+}) {
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-pro" aria-labelledby="tab-pro">
+      <ProLicensePanel pro={pro} onRefresh={onProRefresh ?? (async () => undefined)} />
+    </div>
+  );
+}

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>UltraVox Light</title>
+    <title>UltraVox</title>
     <style>
       /* Transparent root: themes paint .app/.settings; the window must
          stay see-through for native vibrancy/CSS glass to show. */
@@ -32,7 +32,7 @@
       function reportBootFailure(message) {
         const bounded = String(message || "Unknown startup error").slice(0, 2048);
         const status = document.getElementById("boot-status");
-        if (status) status.textContent = `UltraVox Light could not start: ${bounded}`;
+        if (status) status.textContent = `UltraVox could not start: ${bounded}`;
         try {
           window.__TAURI_INTERNALS__
             ?.invoke("report_frontend_error", { message: bounded })
@@ -42,15 +42,21 @@
         }
       }
       window.addEventListener("error", (event) =>
-        reportBootFailure(event.message || event.type)
+        reportBootFailure(
+          event.message + (event.error?.stack ? `\n${String(event.error.stack).slice(0, 1200)}` : ""),
+        )
       );
       window.addEventListener("unhandledrejection", (event) =>
-        reportBootFailure(event.reason instanceof Error ? event.reason.message : event.reason)
+        reportBootFailure(
+          (event.reason instanceof Error
+            ? `${event.reason.message}\n${String(event.reason.stack).slice(0, 1200)}`
+            : event.reason) || event.type,
+        )
       );
     </script>
   </head>
   <body>
-    <div id="boot-status" role="status">Starting UltraVox Light…</div>
+    <div id="boot-status" role="status">Starting UltraVox…</div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

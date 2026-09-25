@@ -59,6 +59,7 @@ pub struct ShortcutSettings {
     pub modifier_only_hotkey: ModifierKey,
     pub key_combination: Option<String>,
     pub hold_to_record: bool,
+    pub meeting_key_combination: String,
 }
 
 impl Default for ShortcutSettings {
@@ -67,6 +68,7 @@ impl Default for ShortcutSettings {
             modifier_only_hotkey: ModifierKey::None,
             key_combination: Some("Option+Backtick".to_string()),
             hold_to_record: false,
+            meeting_key_combination: "Control+M".to_string(),
         }
     }
 }
@@ -90,5 +92,6 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains("none"));
         assert!(json.contains("Option+Backtick"));
+        assert!(json.contains("Control+M"));
     }
 }

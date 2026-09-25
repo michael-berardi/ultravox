@@ -3,6 +3,7 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     process::Stdio,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -17,20 +18,54 @@ use ultravox_core::{
 };
 
 #[cfg(target_os = "macos")]
+use ultra_media_remote::TransportCommand;
+#[cfg(target_os = "macos")]
 use ultravox_macos_bridge as bridge;
 
 use crate::state::AppState;
 use crate::update::{self, UpdateInfo, UpdatePreferences};
 
-pub const APP_NAME: &str = "UltraVox Light";
+pub const APP_NAME: &str = "UltraVox";
 pub const APP_IDENTIFIER: &str = "com.imploselabs.ultravox";
+/// Bundle identifier used to decide whether the global recording shortcut
+/// hands off to UltraTerm instead of the native mini-recorder flow.
+pub const ULTRATERM_BUNDLE_IDENTIFIER: &str = "com.libertydesignstudio.ultraterm";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Build flavor compiled into this binary: `official` links the closed Pro
+/// module, `open-source` is the public build (see docs/pro-licensing.md).
+pub const APP_BUILD: &str = crate::pro_api::APP_BUILD;
+
+/// Theme ids that ship in every build. Any other theme is a Pro theme and is
+/// only kept when the Pro entitlement verifies right now.
+pub const FREE_THEMES: &[&str] = &[
+    "midnight",
+    "winamp-hifi",
+    "nord-frost",
+    "vapor",
+    "obsidian-rite",
+];
+/// Fallback theme whenever a stored or requested theme is not available.
+pub const DEFAULT_THEME: &str = "midnight";
+
+/// Keep Pro themes only while Pro is unlocked; otherwise fall back to the
+/// default theme. Applied on every config save and load.
+pub(crate) fn enforce_theme(theme: &str) -> String {
+    if FREE_THEMES.contains(&theme) {
+        return theme.to_string();
+    }
+    if crate::pro_api::verify_unlocked().is_ok() {
+        theme.to_string()
+    } else {
+        DEFAULT_THEME.to_string()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutSettings {
     pub modifier_only_hotkey: String,
     pub key_combination: Option<String>,
     pub hold_to_record: bool,
+    pub meeting_key_combination: String,
 }
 
 fn remove_managed_recording_file(state: &AppState, file_name: &str) -> Result<(), String> {
@@ -45,7 +80,7 @@ fn remove_managed_recording_file(state: &AppState, file_name: &str) -> Result<()
     }
 }
 
-fn recording_is_tracked(state: &AppState, id: Uuid) -> bool {
+pub(crate) fn recording_is_tracked(state: &AppState, id: Uuid) -> bool {
     state
         .history
         .lock()
@@ -173,12 +208,15 @@ pub struct AppInfo {
     pub name: String,
     pub version: String,
     pub identifier: String,
+    /// `open-source` for the public build, `official` for the Pro-enabled build.
+    pub build: &'static str,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct AppStatus {
     pub status: String,
     pub recording: bool,
+    pub meeting: bool,
     pub transcription: String,
 }
 
@@ -187,6 +225,7 @@ pub struct AppStatus {
 pub struct PermissionStatus {
     pub microphone: PermissionState,
     pub accessibility: PermissionState,
+    pub screen_recording: PermissionState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,9 +242,25 @@ pub enum PermissionState {
 pub enum PermissionKind {
     Microphone,
     Accessibility,
+    ScreenRecording,
+}
+
+/// Used by the Pro build's Meeting/Lecture capture flow.
+#[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+pub(crate) fn screen_recording_permission_error() -> String {
+    "Screen Recording access is disabled for UltraVox. Enable UltraVox in System Settings > Privacy & Security > Screen Recording, then choose Recheck permissions."
+        .to_string()
 }
 
 fn permission_status() -> PermissionStatus {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("ULTRAVOX_QA_PERMISSIONS_GRANTED").is_some() {
+        return PermissionStatus {
+            microphone: PermissionState::Granted,
+            accessibility: PermissionState::Granted,
+            screen_recording: PermissionState::Granted,
+        };
+    }
     #[cfg(target_os = "macos")]
     {
         let microphone = match bridge::microphone_authorization_status() {
@@ -221,6 +276,11 @@ fn permission_status() -> PermissionStatus {
             } else {
                 PermissionState::Denied
             },
+            screen_recording: if bridge::screen_recording_authorized() {
+                PermissionState::Granted
+            } else {
+                PermissionState::Denied
+            },
         };
     }
     #[cfg(not(target_os = "macos"))]
@@ -228,6 +288,7 @@ fn permission_status() -> PermissionStatus {
         PermissionStatus {
             microphone: PermissionState::Unavailable,
             accessibility: PermissionState::Unavailable,
+            screen_recording: PermissionState::Unavailable,
         }
     }
 }
@@ -247,6 +308,9 @@ pub async fn request_permission(kind: PermissionKind) -> Result<PermissionStatus
         PermissionKind::Accessibility => {
             let _ = bridge::is_accessibility_trusted(true);
         }
+        PermissionKind::ScreenRecording => {
+            let _ = bridge::request_screen_recording_access();
+        }
     })
     .await
     .map_err(|error| format!("permission request task failed: {error}"))?;
@@ -259,6 +323,7 @@ fn permission_settings_pane(kind: &PermissionKind) -> &'static str {
     match kind {
         PermissionKind::Microphone => "Privacy_Microphone",
         PermissionKind::Accessibility => "Privacy_Accessibility",
+        PermissionKind::ScreenRecording => "Privacy_ScreenCapture",
     }
 }
 
@@ -307,20 +372,55 @@ pub async fn install_update(app: AppHandle, info: UpdateInfo) -> Result<(), Stri
     update::install(app, info).await
 }
 #[tauri::command]
+pub async fn get_app_telemetry_status(
+    state: State<'_, AppState>,
+) -> Result<crate::telemetry::TelemetryStatus, String> {
+    Ok(state.telemetry.status().await)
+}
+
+#[tauri::command]
+pub async fn set_app_telemetry_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<crate::telemetry::TelemetryStatus, String> {
+    let status = state.telemetry.set_enabled(enabled).await?;
+    if enabled {
+        let app = state.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _ = state.telemetry.launch().await;
+            let _ = state.telemetry.heartbeat().await;
+        });
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn record_app_telemetry_usage(
+    state: State<'_, AppState>,
+    counters: crate::telemetry::UsageCounters,
+) -> Result<(), String> {
+    state.telemetry.usage(counters).await
+}
+
+#[tauri::command]
 pub fn get_app_info() -> AppInfo {
     AppInfo {
         name: APP_NAME.to_string(),
         version: APP_VERSION.to_string(),
         identifier: APP_IDENTIFIER.to_string(),
+        build: APP_BUILD,
     }
 }
 
 #[tauri::command]
 pub async fn get_app_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
     let recording = state.session.lock().await.is_some();
+    let meeting = state.meeting_session.lock().await.is_some();
     Ok(AppStatus {
         status: "ready".to_string(),
         recording,
+        meeting,
         transcription: "idle".to_string(),
     })
 }
@@ -392,6 +492,45 @@ pub fn paste_text(text: String) -> i32 {
 #[tauri::command]
 pub fn paste_text(_text: String) -> i32 {
     0
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardVoiceTriggerStatus {
+    pub handled: bool,
+}
+
+/// Publishes a `recordingTriggered` push frame to every live voice-IPC
+/// `listen` subscriber (UltraTerm). `handled` is true only when at least one
+/// live subscriber existed at publish time, letting the caller suppress the
+/// native recorder flow solely on successful handoff.
+#[tauri::command]
+pub fn forward_voice_trigger(combo: String, action: String) -> ForwardVoiceTriggerStatus {
+    ForwardVoiceTriggerStatus {
+        handled: crate::voice_ipc::publish_voice_trigger(&combo, &action),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontmostAppBundleIdentifier {
+    pub bundle_identifier: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn frontmost_app() -> FrontmostAppBundleIdentifier {
+    FrontmostAppBundleIdentifier {
+        bundle_identifier: bridge::frontmost_application_bundle_id(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn frontmost_app() -> FrontmostAppBundleIdentifier {
+    FrontmostAppBundleIdentifier {
+        bundle_identifier: None,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -494,26 +633,10 @@ pub fn transcribe_file(_path: String) -> TranscriptionResult {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
-pub struct DictionaryApplyResult {
-    pub text: String,
-    pub canonical_terms: Vec<String>,
-}
-
-/// Deterministic smoke-test surface for the same local matcher used by the
-/// transcription pipeline.
-#[tauri::command]
-pub fn dictionary_apply(dictionary: String, text: String) -> Result<DictionaryApplyResult, String> {
-    let dictionary = CustomDictionary::parse(&dictionary).map_err(|error| error.to_string())?;
-    Ok(DictionaryApplyResult {
-        text: dictionary.apply(&text),
-        canonical_terms: dictionary
-            .canonical_terms()
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-    })
-}
+// Core command stubs wired into the Tauri invoke handler. These implement the
+// contract expected by the frontend so the app builds and the desktop shell is
+// functional. Real implementations will replace the no-op bodies in later
+// milestones.
 
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> Result<AppConfig, String> {
@@ -521,20 +644,36 @@ pub fn get_settings(state: State<AppState>) -> Result<AppConfig, String> {
         .config
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
-    Ok(manager.get().clone())
+    let mut config = manager.get().clone();
+    // Pro themes fall back to the default theme unless Pro verifies right now.
+    config.theme = enforce_theme(&config.theme);
+    Ok(config)
 }
 
 #[tauri::command]
-pub fn set_settings(state: State<AppState>, config: AppConfig) -> Result<(), String> {
-    CustomDictionary::parse(&config.custom_dictionary).map_err(|error| error.to_string())?;
+pub fn set_settings(state: State<AppState>, mut config: AppConfig) -> Result<(), String> {
+    CustomDictionary::parse(&config.custom_dictionary)
+        .map_err(|error| format!("Custom dictionary: {error}"))?;
+    // Pro themes fall back to the default theme unless Pro verifies right now.
+    config.theme = enforce_theme(&config.theme);
+
+    let mut manager = state
+        .config
+        .lock()
+        .map_err(|error| format!("lock poisoned: {error}"))?;
+    let previous = manager.get().clone();
+    // Retex consent and scan results are server-owned. The webview may not
+    // manufacture vault grants or overwrite a concurrent refresh snapshot.
+    config.config_version = previous.config_version;
+    config.retex_dictionary = previous.retex_dictionary.clone();
+    config.retex_vault_paths = previous.retex_vault_paths.clone();
+    config.retex_vault_identities = previous.retex_vault_identities.clone();
+    config.retex_last_refresh_at = previous.retex_last_refresh_at;
+    config.retex_auto_refresh = previous.retex_auto_refresh;
+
     let models_dir = match config.models_directory.as_ref() {
         Some(directory) => directory.clone(),
-        None => state
-            .app
-            .path()
-            .app_data_dir()
-            .map_err(|error| error.to_string())?
-            .join("models"),
+        None => crate::state::data_dir(&state.app)?.join("models"),
     };
     std::fs::create_dir_all(&models_dir).map_err(|error| {
         format!(
@@ -543,11 +682,6 @@ pub fn set_settings(state: State<AppState>, config: AppConfig) -> Result<(), Str
         )
     })?;
 
-    let mut manager = state
-        .config
-        .lock()
-        .map_err(|error| format!("lock poisoned: {error}"))?;
-    let previous = manager.get();
     let models_directory_changed = previous.models_directory != config.models_directory;
     let selected_model_changed = models_directory_changed
         || previous.selected_engine != config.selected_engine
@@ -571,6 +705,59 @@ pub fn set_settings(state: State<AppState>, config: AppConfig) -> Result<(), Str
     }
     state.emit_settings_changed(&config)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn revoke_retex_vault(state: State<'_, AppState>, path: PathBuf) -> Result<(), String> {
+    let mut manager = state
+        .config
+        .lock()
+        .map_err(|error| format!("lock poisoned: {error}"))?;
+    let mut updated = manager.get().clone();
+    let Some(index) = updated
+        .retex_vault_paths
+        .iter()
+        .position(|candidate| candidate == &path)
+    else {
+        return Err("That directory does not have Retex vocabulary permission.".to_string());
+    };
+    updated.retex_vault_paths.remove(index);
+    if index < updated.retex_vault_identities.len() {
+        updated.retex_vault_identities.remove(index);
+    }
+    updated.retex_dictionary.clear();
+    updated.retex_last_refresh_at = None;
+    if updated.retex_vault_paths.is_empty() {
+        updated.retex_auto_refresh = false;
+    }
+    manager
+        .set(updated.clone())
+        .map_err(|error| error.to_string())?;
+    drop(manager);
+    if let Some(cancel) = state
+        .retex_scan_cancel
+        .lock()
+        .map_err(|error| format!("lock poisoned: {error}"))?
+        .take()
+    {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    state.emit_settings_changed(&updated)
+}
+
+#[tauri::command]
+pub fn set_retex_auto_refresh(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut manager = state
+        .config
+        .lock()
+        .map_err(|error| format!("lock poisoned: {error}"))?;
+    let mut updated = manager.get().clone();
+    updated.retex_auto_refresh = enabled && !updated.retex_vault_paths.is_empty();
+    manager
+        .set(updated.clone())
+        .map_err(|error| error.to_string())?;
+    drop(manager);
+    state.emit_settings_changed(&updated)
 }
 
 #[tauri::command]
@@ -614,7 +801,13 @@ pub async fn prepare_model(state: State<'_, AppState>, model_id: String) -> Resu
             .clone();
         let was_downloaded = bridge::is_model_downloaded(version, directory.as_deref());
         let prepared = bridge::prepare_model(version, directory.as_deref());
-        if !was_downloaded {}
+        if !was_downloaded {
+            state.record_telemetry_usage(crate::telemetry::UsageCounters {
+                model_downloads_completed: u64::from(prepared),
+                model_downloads_failed: u64::from(!prepared),
+                ..crate::telemetry::UsageCounters::default()
+            });
+        }
         return Ok(prepared);
     }
 
@@ -792,6 +985,9 @@ pub async fn delete_all_recordings(state: State<'_, AppState>) -> Result<usize, 
     if active_recording.is_some() {
         return Err("stop the active recording before deleting history".to_string());
     }
+    if state.meeting_session.lock().await.is_some() {
+        return Err("stop meeting mode before deleting history".to_string());
+    }
 
     let mut history = state
         .history
@@ -826,7 +1022,7 @@ fn validate_remote_url(value: &str) -> Result<String, String> {
     }
     let url = tauri::Url::parse(trimmed).map_err(|_| "enter a valid URL".to_string())?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err("only HTTP and HTTPS URLs are supported".to_string());
+        return Err("only HTTP and HTTPS media URLs are supported".to_string());
     }
     Ok(url.to_string())
 }
@@ -874,6 +1070,9 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
     if state.session.lock().await.is_some() {
         return Err("stop dictation before importing a URL".to_string());
     }
+    if state.meeting_session.lock().await.is_some() {
+        return Err("stop meeting mode before importing a URL".to_string());
+    }
     if state.active_transcription.lock().await.is_some() {
         return Err("wait for the active transcription to finish".to_string());
     }
@@ -896,12 +1095,12 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
     let import_dir = recordings_dir.join(".imports").join(id.to_string());
     tokio::fs::create_dir_all(&import_dir)
         .await
-        .map_err(|error| format!("could not create import directory: {error}"))?;
+        .map_err(|error| format!("could not create media import directory: {error}"))?;
     let output_template = import_dir.join("source.%(ext)s");
     let temporary_output_path = import_dir.join("source.wav");
     let output_path = recordings_dir.join(format!("{id}.wav"));
 
-    if let Err(error) = state.emit_url_import_progress(0.05, "Checking URL") {
+    if let Err(error) = state.emit_url_import_progress(0.05, "Checking media URL") {
         let _ = tokio::fs::remove_dir_all(&import_dir).await;
         return Err(error);
     }
@@ -948,9 +1147,9 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
             .collect::<Vec<_>>()
             .join("\n");
         return Err(if details.is_empty() {
-            "the URL could not be downloaded".to_string()
+            "the media URL could not be downloaded".to_string()
         } else {
-            format!("the URL could not be downloaded: {details}")
+            format!("the media URL could not be downloaded: {details}")
         });
     }
     if !temporary_output_path.is_file() {
@@ -974,7 +1173,11 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
         start_time_ms: 0,
         duration_ms,
     };
-    let result = state.queue_managed_audio(recording, false).await;
+    if state.meeting_session.lock().await.is_some() {
+        let _ = tokio::fs::remove_file(&output_path).await;
+        return Err("meeting mode started before the download finished".to_string());
+    }
+    let result = state.queue_managed_audio(recording, false, false).await;
     if result.is_err() {
         if !recording_is_tracked(state.inner(), id) {
             let _ = tokio::fs::remove_file(output_path).await;
@@ -1017,11 +1220,14 @@ pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<Str
         .unwrap_or_default();
     if !IMPORTABLE_EXTENSIONS.contains(&extension.as_str()) {
         return Err(format!(
-            ".{extension} files are not supported; drop an audio or audio file instead"
+            ".{extension} files are not supported; drop an audio or media file instead"
         ));
     }
     if state.session.lock().await.is_some() {
         return Err("stop dictation before importing a file".to_string());
+    }
+    if state.meeting_session.lock().await.is_some() {
+        return Err("stop meeting mode before importing a file".to_string());
     }
 
     let id = Uuid::new_v4();
@@ -1051,6 +1257,10 @@ pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<Str
         start_time_ms: 0,
         duration_ms: Some(duration_ms),
     };
+    if state.meeting_session.lock().await.is_some() {
+        let _ = tokio::fs::remove_file(&output_path).await;
+        return Err("meeting mode started before the import finished".to_string());
+    }
     // Only one transcription runs at a time. Serialize dropped-file imports so
     // each file waits for the previous transcription to finish and is queued in
     // drop order instead of failing.
@@ -1063,7 +1273,7 @@ pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<Str
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    let result = state.queue_managed_audio(recording, false).await;
+    let result = state.queue_managed_audio(recording, false, false).await;
     if result.is_err() && !recording_is_tracked(state.inner(), id) {
         let _ = tokio::fs::remove_file(&output_path).await;
     }
@@ -1112,6 +1322,7 @@ pub fn get_shortcut_settings(state: State<AppState>) -> Result<ShortcutSettings,
         modifier_only_hotkey: cfg.modifier_only_hotkey.clone(),
         key_combination: Some(cfg.key_combination.clone()),
         hold_to_record: cfg.hold_to_record,
+        meeting_key_combination: cfg.meeting_key_combination.clone(),
     })
 }
 
@@ -1121,8 +1332,19 @@ pub fn set_shortcut_settings(
     settings: ShortcutSettings,
 ) -> Result<(), String> {
     let dictation_shortcut = settings.key_combination.as_deref().unwrap_or_default();
+    if !dictation_shortcut.is_empty()
+        && dictation_shortcut.eq_ignore_ascii_case(&settings.meeting_key_combination)
+    {
+        return Err("recording and meeting mode must use different shortcuts".to_string());
+    }
     if modifier_conflicts_with_combination(&settings.modifier_only_hotkey, dictation_shortcut) {
         return Err("the modifier-only shortcut conflicts with the recording shortcut".to_string());
+    }
+    if modifier_conflicts_with_combination(
+        &settings.modifier_only_hotkey,
+        &settings.meeting_key_combination,
+    ) {
+        return Err("the modifier-only shortcut conflicts with the meeting shortcut".to_string());
     }
     let mut manager = state
         .config
@@ -1134,6 +1356,7 @@ pub fn set_shortcut_settings(
         cfg.key_combination = combo;
     }
     cfg.hold_to_record = settings.hold_to_record;
+    cfg.meeting_key_combination = settings.meeting_key_combination;
     let config = cfg.clone();
     manager.save().map_err(|e| e.to_string())?;
     state.emit_settings_changed(&config)?;
@@ -1147,8 +1370,18 @@ pub async fn get_audio_devices(state: State<'_, AppState>) -> Result<Vec<AudioDe
 }
 
 #[tauri::command]
-pub fn get_audio_input_config() -> Result<AudioInputConfig, String> {
-    Ok(AudioInputConfig::default())
+pub fn get_audio_input_config(state: State<'_, AppState>) -> Result<AudioInputConfig, String> {
+    let selected_device = state
+        .config
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get()
+        .audio_input_device_id
+        .clone();
+    Ok(AudioInputConfig {
+        device_id: selected_device,
+        ..AudioInputConfig::default()
+    })
 }
 
 #[tauri::command]
@@ -1159,6 +1392,231 @@ pub async fn get_input_level(state: State<'_, AppState>) -> Result<f32, String> 
         .await
         .current_input_level()
         .clamp(0.0, 1.0))
+}
+
+/// Enables or disables the audio-only system-output meter used by reactive
+/// media equalizers. Starting ScreenCaptureKit may block while it resolves
+/// shareable content, so it runs off Tauri's IPC dispatch path.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn set_system_audio_meter_enabled(enabled: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || bridge::set_system_audio_meter_enabled(enabled))
+        .await
+        .map_err(|error| format!("system audio meter task failed: {error}"))?
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn set_system_audio_meter_enabled(_enabled: bool) -> Result<(), String> {
+    Err("system audio metering requires macOS".to_string())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn get_system_audio_level() -> f64 {
+    bridge::system_audio_level()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn get_system_audio_level() -> f64 {
+    0.0
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn get_system_audio_spectrum() -> Vec<f64> {
+    bridge::system_audio_spectrum()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn get_system_audio_spectrum() -> Vec<f64> {
+    vec![0.0; 11]
+}
+
+/// Glanceable media-panel state for the frontend wire contract.
+/// Optional fields are `null` when unknown or unsupported; `volume` is 0..1.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaState {
+    pub active: bool,
+    pub app_name: Option<String>,
+    pub bundle_id: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub artwork_data_url: Option<String>,
+    pub elapsed_seconds: Option<f64>,
+    pub duration_seconds: Option<f64>,
+    pub is_playing: Option<bool>,
+    pub volume: Option<f64>,
+    pub muted: Option<bool>,
+    pub volume_available: bool,
+    pub transport_available: bool,
+    pub previous_available: bool,
+    pub next_available: bool,
+}
+
+impl MediaState {
+    fn inactive() -> Self {
+        Self {
+            active: false,
+            app_name: None,
+            bundle_id: None,
+            title: None,
+            artist: None,
+            album: None,
+            artwork_data_url: None,
+            elapsed_seconds: None,
+            duration_seconds: None,
+            is_playing: None,
+            volume: None,
+            muted: None,
+            volume_available: false,
+            transport_available: false,
+            previous_available: false,
+            next_available: false,
+        }
+    }
+}
+
+/// System-session media state from the shared adapter-first metadata crate,
+/// plus the existing bridge's CoreAudio source and default-output controls.
+#[cfg(target_os = "macos")]
+fn collect_media_state() -> MediaState {
+    let now_playing =
+        ultra_media_remote::now_playing_fetch(Duration::from_millis(600)).filter(|item| {
+            item.title.is_some()
+                || item.artist.is_some()
+                || item.album.is_some()
+                || item.artwork_data_url.is_some()
+                || item.duration_seconds.is_some()
+                || item.is_playing.is_some()
+        });
+    let audio_source = bridge::active_audio_source()
+        .filter(|source| source.app_name.is_some() || source.bundle_id.is_some());
+    if now_playing.is_none() && audio_source.is_none() {
+        return MediaState::inactive();
+    }
+    // The shared crate discovers the canonical system session and reports
+    // secondary commands only when MediaRemote proves they are enabled.
+    let transport_capabilities = ultra_media_remote::transport_capabilities();
+    let app_name = now_playing
+        .as_ref()
+        .and_then(|item| item.app_name.clone())
+        .or_else(|| {
+            audio_source
+                .as_ref()
+                .and_then(|source| source.app_name.clone())
+        });
+    let bundle_id = now_playing
+        .as_ref()
+        .and_then(|item| item.bundle_id.clone())
+        .or_else(|| {
+            audio_source
+                .as_ref()
+                .and_then(|source| source.bundle_id.clone())
+        });
+    let volume_state = bridge::output_volume_state();
+    MediaState {
+        active: true,
+        app_name,
+        bundle_id,
+        title: now_playing.as_ref().and_then(|item| item.title.clone()),
+        artist: now_playing.as_ref().and_then(|item| item.artist.clone()),
+        album: now_playing.as_ref().and_then(|item| item.album.clone()),
+        artwork_data_url: now_playing
+            .as_ref()
+            .and_then(|item| item.artwork_data_url.clone()),
+        elapsed_seconds: now_playing.as_ref().and_then(|item| item.elapsed_seconds),
+        duration_seconds: now_playing.as_ref().and_then(|item| item.duration_seconds),
+        is_playing: audio_source
+            .is_some()
+            .then_some(true)
+            .or_else(|| now_playing.as_ref().and_then(|item| item.is_playing)),
+        volume: volume_state.volume,
+        muted: volume_state.muted,
+        volume_available: volume_state.volume.is_some(),
+        transport_available: transport_capabilities.play_pause,
+        previous_available: transport_capabilities.previous,
+        next_available: transport_capabilities.next,
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn get_media_state() -> MediaState {
+    tauri::async_runtime::spawn_blocking(collect_media_state)
+        .await
+        .unwrap_or_else(|_| MediaState::inactive())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn get_media_state() -> MediaState {
+    MediaState::inactive()
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_system_volume(volume: f64) -> Result<(), String> {
+    bridge::set_system_volume(volume)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn set_system_volume(_volume: f64) -> Result<(), String> {
+    Err("system volume requires macOS".to_string())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_system_muted(muted: bool) -> Result<(), String> {
+    bridge::set_system_muted(muted)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn set_system_muted(_muted: bool) -> Result<(), String> {
+    Err("system mute requires macOS".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn parse_media_transport_command(command: &str) -> Result<TransportCommand, String> {
+    match command {
+        "play_pause" => Ok(TransportCommand::PlayPause),
+        "previous" => Ok(TransportCommand::Previous),
+        "next" => Ok(TransportCommand::Next),
+        _ => Err(format!("unknown transport command: {command}")),
+    }
+}
+
+/// Sends `play_pause`, `previous`, or `next` to the canonical system
+/// now-playing session. The adapter/direct probes may block, so the command
+/// runs off Tauri's IPC dispatch path.
+#[cfg(target_os = "macos")]
+fn send_media_transport(command: String) -> Result<(), String> {
+    let command = parse_media_transport_command(&command)?;
+    if ultra_media_remote::transport_send(command) {
+        Ok(())
+    } else {
+        Err("system media session is unavailable".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn media_transport(command: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || send_media_transport(command))
+        .await
+        .map_err(|error| format!("media transport task failed: {error}"))?
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn media_transport(_command: String) -> Result<(), String> {
+    Err("media transport requires macOS".to_string())
 }
 
 #[tauri::command]
@@ -1198,63 +1656,224 @@ pub fn export_recording(
 #[cfg(test)]
 mod tests {
     use super::{
-        dictionary_apply, modifier_conflicts_with_combination, permission_settings_pane,
-        validate_remote_url, PermissionKind,
+        modifier_conflicts_with_combination, permission_settings_pane,
+        screen_recording_permission_error, validate_remote_url, MediaState, PermissionKind,
     };
+
     #[test]
     fn media_url_requires_http_or_https() {
         assert_eq!(
-            validate_remote_url("https://example.com/audio").unwrap(),
-            "https://example.com/audio"
+            validate_remote_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ").unwrap(),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         );
-        assert!(validate_remote_url("file:///tmp/a.wav").is_err());
+        assert!(validate_remote_url("file:///tmp/recording.wav").is_err());
         assert!(validate_remote_url("not a URL").is_err());
     }
+
     #[test]
     fn modifier_only_shortcuts_cannot_prefix_key_combinations() {
         assert!(modifier_conflicts_with_combination(
             "rightOption",
             "Option+M"
         ));
+        assert!(modifier_conflicts_with_combination(
+            "leftCommand",
+            "Command+Shift+M"
+        ));
         assert!(!modifier_conflicts_with_combination(
             "rightCommand",
             "Control+M"
         ));
-    }
-    #[test]
-    fn dictionary_ipc_applies_entries() {
-        let result = dictionary_apply(
-            "Retex\nUltraVox = Ultra Box".to_string(),
-            "retext, Ultra Box!".to_string(),
-        )
-        .unwrap();
-        assert_eq!(result.text, "Retex, UltraVox!");
-        assert_eq!(result.canonical_terms, vec!["Retex", "UltraVox"]);
+        assert!(!modifier_conflicts_with_combination("none", "Option+M"));
     }
 
     #[test]
-    fn permission_settings_open_accessibility_pane() {
+    fn screen_recording_errors_identify_ultravox_as_the_owner() {
         assert_eq!(
-            permission_settings_pane(&PermissionKind::Accessibility),
-            "Privacy_Accessibility"
+            screen_recording_permission_error(),
+            "Screen Recording access is disabled for UltraVox. Enable UltraVox in System Settings > Privacy & Security > Screen Recording, then choose Recheck permissions."
         );
     }
+
+    #[test]
+    fn screen_recording_settings_open_the_macos_capture_privacy_pane() {
+        assert_eq!(
+            permission_settings_pane(&PermissionKind::ScreenRecording),
+            "Privacy_ScreenCapture"
+        );
+    }
+    #[test]
+    fn media_state_serializes_new_metadata_in_camel_case() {
+        let mut state = MediaState::inactive();
+        state.active = true;
+        state.app_name = Some("Music".to_string());
+        state.bundle_id = Some("com.apple.Music".to_string());
+        state.album = Some("Album".to_string());
+        state.artwork_data_url = Some("data:image/jpeg;base64,QUJD".to_string());
+        state.elapsed_seconds = Some(4.5);
+        state.duration_seconds = Some(120.0);
+        state.previous_available = true;
+        state.next_available = false;
+        let value = serde_json::to_value(state).expect("media state should serialize");
+        assert_eq!(value["elapsedSeconds"], 4.5);
+        assert_eq!(value["durationSeconds"], 120.0);
+        assert_eq!(value["artworkDataUrl"], "data:image/jpeg;base64,QUJD");
+        assert_eq!(value["previousAvailable"], true);
+        assert_eq!(value["nextAvailable"], false);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn media_transport_strings_map_to_shared_commands() {
+        assert_eq!(
+            super::parse_media_transport_command("play_pause").unwrap(),
+            ultra_media_remote::TransportCommand::PlayPause
+        );
+        assert_eq!(
+            super::parse_media_transport_command("previous").unwrap(),
+            ultra_media_remote::TransportCommand::Previous
+        );
+        assert_eq!(
+            super::parse_media_transport_command("next").unwrap(),
+            ultra_media_remote::TransportCommand::Next
+        );
+        assert_eq!(
+            super::parse_media_transport_command("stop").unwrap_err(),
+            "unknown transport command: stop"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shared_media_crate_preserves_adapter_metadata_artwork_and_cache() {
+        let directory = tempfile::tempdir().expect("adapter fixture directory");
+        let framework = directory.path().join("MediaRemoteAdapter.framework");
+        std::fs::create_dir(&framework).expect("adapter fixture framework");
+        let script = directory.path().join("mediaremote-adapter.pl");
+        std::fs::write(
+            &script,
+            r#"print '{"processIdentifier":42,"bundleIdentifier":"com.google.Chrome.app.youtube","title":"Track","artist":"Artist","album":"Album","elapsedTimeNow":12.5,"duration":180,"playing":true,"artworkMimeType":"image/jpeg","artworkData":"YWJj"}';"#,
+        )
+        .expect("adapter fixture script");
+
+        let previous_directory = std::env::var_os("ULTRA_MEDIA_REMOTE_ADAPTER_DIR");
+        std::env::set_var("ULTRA_MEDIA_REMOTE_ADAPTER_DIR", directory.path());
+        let first = ultra_media_remote::now_playing_fetch(std::time::Duration::from_millis(50));
+        std::fs::write(&script, r#"print '{"title":"Changed"}';"#)
+            .expect("changed adapter fixture");
+        let cached = ultra_media_remote::now_playing_fetch(std::time::Duration::from_millis(50));
+        if let Some(previous_directory) = previous_directory {
+            std::env::set_var("ULTRA_MEDIA_REMOTE_ADAPTER_DIR", previous_directory);
+        } else {
+            std::env::remove_var("ULTRA_MEDIA_REMOTE_ADAPTER_DIR");
+        }
+
+        let first = first.expect("shared crate should parse the adapter fixture");
+        assert_eq!(first.pid, Some(42));
+        assert_eq!(
+            first.bundle_id.as_deref(),
+            Some("com.google.Chrome.app.youtube")
+        );
+        assert_eq!(first.title.as_deref(), Some("Track"));
+        assert_eq!(first.artist.as_deref(), Some("Artist"));
+        assert_eq!(first.album.as_deref(), Some("Album"));
+        assert_eq!(first.elapsed_seconds, Some(12.5));
+        assert_eq!(first.duration_seconds, Some(180.0));
+        assert_eq!(first.is_playing, Some(true));
+        assert_eq!(
+            first.artwork_data_url.as_deref(),
+            Some("data:image/jpeg;base64,YWJj")
+        );
+        assert_eq!(cached.as_ref(), Some(&first));
+    }
 }
+
+#[cfg(target_os = "macos")]
+fn theme_mode(theme: &str) -> tauri::Theme {
+    match theme {
+        "frutiger-aero" | "nord-frost" | "winamp-mmd3" | "winamp-hifi" | "crystal" => {
+            tauri::Theme::Light
+        }
+        _ => tauri::Theme::Dark,
+    }
+}
+
+/// Re-applies the native window material for the given UI theme.
 #[tauri::command]
 pub fn set_theme_material(app: tauri::AppHandle, theme: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let mode = match theme.as_str() {
-            "nord-frost" | "winamp-hifi" => tauri::Theme::Light,
-            _ => tauri::Theme::Dark,
-        };
-        if let Some(window) = app.get_webview_window("main") {
-            window
-                .set_theme(Some(mode))
-                .map_err(|error| error.to_string())?;
-        }
+        // NSVisualEffectView must be touched on the main thread; Tauri commands
+        // run on a worker, so hop over and surface failures to the caller.
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.clone()
+            .run_on_main_thread(move || {
+                use tauri::Manager;
+                let result = match app.get_webview_window("main") {
+                    Some(window) => window
+                        .set_theme(Some(theme_mode(&theme)))
+                        .map_err(|error| error.to_string())
+                        .and_then(|_| {
+                            apply_theme_material(&window, &theme).map_err(|error| error.to_string())
+                        }),
+                    None => Err("main window not found".to_string()),
+                };
+                let _ = tx.send(result);
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv().map_err(|e| e.to_string())??;
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (app, theme);
     Ok(())
+}
+
+/// Only themes intentionally designed around translucent native glass receive
+/// an NSVisualEffectView. Opaque/CSS-driven themes must clear vibrancy: placing
+/// a native material over WKWebView can cover the entire client area on macOS.
+#[cfg(target_os = "macos")]
+fn theme_material(theme: &str) -> Option<window_vibrancy::NSVisualEffectMaterial> {
+    use window_vibrancy::NSVisualEffectMaterial;
+    match theme {
+        "frutiger-aero" | "nord-frost" | "crystal" => {
+            Some(NSVisualEffectMaterial::UnderWindowBackground)
+        }
+        "frutiger-dark" => Some(NSVisualEffectMaterial::FullScreenUI),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+static THEME_MATERIAL_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+pub fn apply_theme_material(
+    window: &tauri::WebviewWindow,
+    theme: &str,
+) -> Result<(), window_vibrancy::Error> {
+    use std::sync::atomic::Ordering;
+
+    let was_active = THEME_MATERIAL_ACTIVE.load(Ordering::Acquire);
+    match theme_material(theme) {
+        Some(material) => {
+            if was_active {
+                window_vibrancy::clear_vibrancy(window)?;
+                THEME_MATERIAL_ACTIVE.store(false, Ordering::Release);
+            }
+            window_vibrancy::apply_vibrancy(
+                window,
+                material,
+                Some(window_vibrancy::NSVisualEffectState::Active),
+                Some(16.0),
+            )?;
+            THEME_MATERIAL_ACTIVE.store(true, Ordering::Release);
+            Ok(())
+        }
+        None if was_active => {
+            window_vibrancy::clear_vibrancy(window)?;
+            THEME_MATERIAL_ACTIVE.store(false, Ordering::Release);
+            Ok(())
+        }
+        None => Ok(()),
+    }
 }

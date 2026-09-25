@@ -93,6 +93,55 @@ pub struct AudioDeviceInfo {
     pub is_default: bool,
 }
 
+/// A stub audio backend that records no real audio but satisfies the trait.
+#[derive(Debug, Default)]
+pub struct StubAudioBackend {
+    recording: Option<AudioRecording>,
+}
+
+#[async_trait]
+impl AudioBackend for StubAudioBackend {
+    async fn list_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioError> {
+        Ok(vec![AudioDeviceInfo {
+            id: "default".to_string(),
+            name: "System Default".to_string(),
+            is_default: true,
+        }])
+    }
+
+    async fn start_recording(
+        &mut self,
+        _config: AudioInputConfig,
+        output_path: PathBuf,
+    ) -> Result<AudioRecording, AudioError> {
+        if self.recording.is_some() {
+            return Err(AudioError::AlreadyRecording);
+        }
+        let recording = AudioRecording {
+            id: "stub-recording".to_string(),
+            output_path,
+            start_time_ms: 0,
+            duration_ms: None,
+        };
+        self.recording = Some(recording.clone());
+        Ok(recording)
+    }
+
+    async fn stop_recording(&mut self) -> Result<AudioRecording, AudioError> {
+        match self.recording.take() {
+            Some(mut rec) => {
+                rec.duration_ms = Some(0);
+                Ok(rec)
+            }
+            None => Err(AudioError::NotRecording),
+        }
+    }
+
+    fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+}
+
 /// Convert our sample-format enum to a cpal sample format.
 fn cpal_sample_format(format: SampleFormat) -> cpal::SampleFormat {
     match format {
@@ -834,4 +883,178 @@ pub fn decode_media_file_to_wav(
         let _ = std::fs::remove_file(dest);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stub_backend_recording_lifecycle() {
+        let mut backend = StubAudioBackend::default();
+        assert!(!backend.is_recording());
+        let devices = backend.list_devices().await.unwrap();
+        assert_eq!(devices.len(), 1);
+        let rec = backend
+            .start_recording(AudioInputConfig::default(), PathBuf::from("/tmp/test.wav"))
+            .await
+            .unwrap();
+        assert!(backend.is_recording());
+        assert_eq!(rec.output_path, PathBuf::from("/tmp/test.wav"));
+        let finished = backend.stop_recording().await.unwrap();
+        assert!(!backend.is_recording());
+        assert!(finished.duration_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn double_start_rejected() {
+        let mut backend = StubAudioBackend::default();
+        backend
+            .start_recording(AudioInputConfig::default(), PathBuf::from("/tmp/test.wav"))
+            .await
+            .unwrap();
+        let result = backend
+            .start_recording(AudioInputConfig::default(), PathBuf::from("/tmp/test2.wav"))
+            .await;
+        assert!(matches!(result, Err(AudioError::AlreadyRecording)));
+    }
+
+    #[test]
+    fn recording_id_extracts_output_path_uuid() {
+        let uuid = Uuid::new_v4();
+        let path = PathBuf::from(format!("/tmp/recordings/{}.wav", uuid));
+        assert_eq!(recording_id_from_output_path(&path), uuid.to_string());
+    }
+
+    #[test]
+    fn audio_level_normalization() {
+        // Silence and signals below the noise gate report 0.
+        assert_eq!(compute_audio_level(&[], 1), 0.0);
+        assert_eq!(compute_audio_level(&[0.0, 0.0, 0.0, 0.0], 1), 0.0);
+        assert_eq!(compute_audio_level(&[1e-4; 1000], 1), 0.0);
+
+        // Full-scale mono input reaches the top of the normalized range.
+        assert!((compute_audio_level(&[1.0; 1000], 1) - 1.0).abs() < f32::EPSILON);
+
+        // Half-scale input gets a compressed but visible level.
+        let half = compute_audio_level(&[0.5; 1000], 1);
+        assert!(half > 0.4 && half < 1.0);
+
+        // Typical speech around -30 dB sits near the middle of the meter.
+        let speech = compute_audio_level(&[0.03; 1000], 1);
+        assert!(speech > 0.45 && speech < 0.6);
+
+        // Opposite-phase stereo channels cancel to 0; in-phase double.
+        let stereo_in_phase = compute_audio_level(&[1.0, 1.0].repeat(500), 2);
+        assert!((stereo_in_phase - 1.0).abs() < 0.01);
+        let stereo_out_of_phase = compute_audio_level(&[1.0, -1.0].repeat(500), 2);
+        assert_eq!(stereo_out_of_phase, 0.0);
+    }
+
+    #[test]
+    fn silent_capture_is_not_reported_as_permission_denied() {
+        assert!(matches!(
+            validate_captured_audio(&[0.0, 0.0, 0.0]),
+            Err(AudioError::SilentInput)
+        ));
+        assert!(validate_captured_audio(&[0.0, 0.01, 0.0]).is_ok());
+    }
+
+    #[test]
+    fn streaming_resampler_matches_batch_output_across_chunk_boundaries() {
+        let stereo: Vec<f32> = (0..9_600)
+            .flat_map(|index| {
+                let value = ((index as f32) * 0.013).sin();
+                [value, value * 0.5]
+            })
+            .collect();
+        let mono = mix_to_mono(&stereo, 2);
+        let expected = resample_linear(&mono, 48_000, 16_000);
+        let mut actual = Vec::new();
+        let mut streaming = StreamingResampler::new(48_000, 16_000).unwrap();
+        for chunk in stereo.chunks(960) {
+            streaming
+                .push_interleaved(chunk, 2, |sample| {
+                    actual.push(sample);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        streaming
+            .finish(|sample| {
+                actual.push(sample);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn streaming_resampler_keeps_a_constant_size_buffer() {
+        let mut streaming = StreamingResampler::new(48_000, 16_000).unwrap();
+        let mut max_buffered = 0;
+        let ten_seconds_of_stereo = vec![0.25f32; 48_000 * 2 * 10];
+        for chunk in ten_seconds_of_stereo.chunks(960) {
+            streaming.push_interleaved(chunk, 2, |_| Ok(())).unwrap();
+            max_buffered = max_buffered.max(streaming.buffered_frames());
+        }
+        streaming.finish(|_| Ok(())).unwrap();
+
+        assert!(
+            max_buffered <= 4,
+            "streaming buffer retained {max_buffered} source frames"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires a live audio input with microphone permission; run with --ignored.
+    async fn cpal_backend_records_nonzero_samples_from_default_input() {
+        let mut backend = CpalAudioBackend::new();
+        let devices = backend.list_devices().await.unwrap();
+        let default = devices
+            .iter()
+            .find(|d| d.is_default)
+            .or_else(|| devices.first())
+            .cloned()
+            .expect("no audio input device available");
+
+        let temp_dir = std::env::temp_dir().join("ultravox-cpal-nonzero-test");
+        std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let output_path = temp_dir.join(format!("{}.wav", Uuid::new_v4()));
+
+        let mut config = AudioInputConfig::default();
+        config.device_id = Some(default.id);
+
+        let _ = backend
+            .start_recording(config, output_path.clone())
+            .await
+            .expect("failed to start recording");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let recording = backend
+            .stop_recording()
+            .await
+            .expect("failed to stop recording");
+
+        let reader = hound::WavReader::open(&recording.output_path)
+            .expect("recorded file is not a valid WAV");
+        let samples: Vec<f32> = reader
+            .into_samples::<f32>()
+            .map(|s| s.expect("invalid sample"))
+            .collect();
+        assert!(!samples.is_empty(), "recorded WAV contains no samples");
+        let max_abs = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(
+            max_abs > 1e-4,
+            "recorded WAV is silent; max absolute sample was {max_abs}"
+        );
+        assert!(
+            recording.duration_ms.unwrap_or(0) >= 1000,
+            "recorded duration too short: {:?}",
+            recording.duration_ms
+        );
+    }
 }

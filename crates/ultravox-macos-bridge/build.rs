@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Builds the native Swift package `UltraVoxMacOSBridge` and tells Cargo where to
-/// find the resulting static library. The Swift component is skipped on
-/// non-macOS hosts.
+/// find the resulting static library. On non-macOS hosts this is a no-op so that
+/// `cargo check` can still validate the Rust code.
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "macos" {
-        println!("cargo:warning=ultravox-macos-bridge Swift support is available on macOS only");
+        println!("cargo:warning=ultravox-macos-bridge only builds its Swift component on macOS");
         return;
     }
 

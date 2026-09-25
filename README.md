@@ -1,142 +1,191 @@
-# UltraVox Light
+# UltraVox
 
-Private, on-device transcription for macOS, Windows, and Linux. UltraVox Light is MIT-licensed open-source software: recordings, transcripts, and downloaded models stay on your device.
+**Private, on-device transcription for macOS, Windows, and Linux. One product: a free, open-source core and an optional UltraVox Pro license that unlocks Pro features in the official build and funds development.**
 
 <p align="center">
-  <a href="https://github.com/michael-berardi/ultravox-light/releases/latest"><strong>Download UltraVox Light</strong></a>
+  <a href="https://github.com/michael-berardi/ultravox/releases/latest"><strong>Download UltraVox</strong></a>
   ·
   <a href="#privacy"><strong>Privacy</strong></a>
   ·
-  <a href="#build-from-source"><strong>Build from source</strong></a>
+  <a href="#contributing"><strong>Contributing</strong></a>
 </p>
 
 <p align="center">
-  <img src="docs/image.png" alt="UltraVox Light ready to record" width="360" />
+  <img src="docs/image.png" alt="UltraVox ready to record" width="360" />
+  <img src="docs/media-console.png" alt="UltraVox instrument-console theme with now-playing controls" width="360" />
 </p>
 
-## Features
+## Why UltraVox
 
-- On-device microphone transcription with English and multilingual models.
-- Global recording shortcuts on macOS, plus in-app recording on every supported platform.
-- Transcription from supported URLs and local audio files.
-- A manual, local custom dictionary for preferred terms and spoken aliases, with a bundled [dictionary-review skill](#custom-dictionary) any AI agent can run locally.
-- Local history with search, copy, export, retry, and deletion controls.
-- Five free themes: Midnight, Silver Rack, Nord Frost, Vapor, and Obsidian Rite.
-- Public release updates verified with published SHA-256 checksums and platform identity checks.
+UltraVox turns speech and media into text without sending recordings to a transcription service. Download a model once, then transcribe microphone recordings, meetings, and system-audio-only lectures locally.
 
-## Supported platforms
+- **On-device transcription** with English and multilingual models.
+- **Global recording shortcuts**, including press-to-toggle and hold-to-record modes.
+- **Media import** for supported URLs and local audio files.
+- **Local history** with search, copy, export, retry, and deletion controls.
+- **Custom dictionary** aliases and conservative custom-term correction in every build, with a bundled [dictionary-review skill](docs/dictionary.md) any AI agent can run locally.
+- **UltraTerm voice handoff** works in every build: when UltraTerm is the frontmost app, the recording shortcut hands push-to-talk voice input to UltraTerm's own voice flow instead of the native mini-recorder.
+- **Pro features** add permissioned, read-only Retex vocabulary scanning, Meeting mode, system-audio-only Lecture mode, macOS Voice Studio for on-device voice cloning and speech generation, macOS now-playing controls, real output-spectrum visuals, and the signature themes.
 
-- macOS 14 or newer on Apple silicon.
-- Windows 10 or 11 on x86_64.
-- x86_64 Linux distributions compatible with the Ubuntu 22.04 WebKitGTK/GLIBC baseline.
+## The core is free; Pro is optional
+
+The UltraVox core is complete, free, and MIT-licensed: transcription, dictation, history, the manual custom dictionary, themes' free set, UltraTerm voice handoff, and the update checker. You never pay for the core.
+
+An optional **UltraVox Pro license** unlocks the Pro features in the official build. Buying one supports signing, notarization, cross-platform packaging, maintenance, and continued improvements; it is not required to use UltraVox.
+
+| | Core (free, open source) | Pro license (optional) |
+|---|---|---|
+| License | MIT source | Unlocks Pro features in the official build |
+| Platforms | macOS arm64, Windows x86_64, Linux x86_64 | Same |
+| Transcription | Microphone, local files, and supported URLs | Same |
+| Manual custom dictionary | Included; terms and aliases stay on device | Same |
+| Retex vocabulary | Not unlocked; Retex is never invoked | macOS: explicitly selected vaults only; read-only local scan |
+| Themes | Midnight, Olive, Nord Frost, Vapor, and the other free themes | The complete theme collection |
+| Meeting mode | Not unlocked | System audio and microphone capture |
+| Lecture mode | Not unlocked | System audio only; microphone excluded |
+| Media panel | Not unlocked | macOS now-playing metadata, transport, volume, and live spectrum |
+| Voice Studio | Not unlocked | macOS: on-device voice cloning and speech generation |
+| Updates | Public release assets and checksums | Same, plus the authenticated Implose release channel |
+
+Pro licenses are bought and activated in **Settings → Pro**, which also offers a 14-day trial on the current device. A Pro entitlement is a server-signed, device-bound token; it unlocks Pro features in the official build only.
+
+## Voice Studio
+
+Voice Studio on macOS, part of Pro, is powered by FluidAudio PocketTTS. Create a local voice from dictation recordings or an imported WAV (up to ten seconds of reference audio), then generate 24 kHz mono speech from text using a cloned or built-in voice. Models download on first use; cloning and synthesis run on-device. Clone only voices you have permission to use. See the [Voice Studio guide](docs/voice-studio.md) for language packs, CLI commands, storage, and limitations.
+
+## Media players and themes
+
+The media controller follows the active macOS media session used by Control Center. On macOS 15.4 and later, the bundled BSD-licensed system adapter reads the session's title, artist, album, timing, and artwork; the legacy dynamic MediaRemote path remains a fallback. Transport never depends on a browser-specific bridge. If a provider withholds metadata, UltraVox still identifies the active audio app and exposes only honest system-session state.
+
+Every theme uses the same accessible controls but presents them differently:
+
+- **Midnight, Olive, Nord Frost:** restrained, compact utility treatments.
+- **Frutiger Aero and Frutiger Dark:** bright sky glass or OLED aurora materials.
+- **Solar Dusk and Vapor:** warm analog-meter or neon-grid treatments.
+- **Phosphor Classic:** graphite chassis, phosphor display, and segmented meters.
+- **Instrument Console:** silver-and-navy instrumentation with mirrored meter banks.
+- **Graphite Stack:** stacked dark modules and tactile rectangular controls.
+- **Silver Rack:** brushed faceplate, black glass, status lamps, and a rotary dial.
+- **OEL Drive:** blue OEL display, cool backlit keys, reactive meters, and a chrome multi-control dial.
+
+Media equalizers use actual system output across eleven frequency bands. Each theme maps those live bands to its own visual treatment. Recording meters use only active microphone input. Reactive visuals are off by default; disabling **Settings → Appearance → Reactive meters** removes the spectrum and every audio-driven scene.
+
+## Requirements
+
+- **macOS:** 14+ on Apple Silicon; macOS 15+ for Meeting mode, Lecture mode, and system-audio capture
+- **Linux:** x86_64 with WebKitGTK, compatible with the Ubuntu 22.04 baseline
+- **Windows:** Windows 10 or 11 on x86_64, using the NSIS installer
+- Microphone permission for speech recording
+- Accessibility permission when inserting transcripts into another app or using a modifier-only global shortcut
+- Screen Recording permission for Meeting mode, Lecture mode, and the optional system-output spectrum meter
+- Optional on macOS for Pro Retex vocabulary: an installed `retex` command and one or more vault directories explicitly selected in **Settings → Dictionary**
 
 ## Install
 
-Download the artifact for your system from the [latest UltraVox Light release](https://github.com/michael-berardi/ultravox-light/releases/latest), then verify it with the adjacent SHA-256 file.
+Download the official build for your platform from the [latest GitHub release](https://github.com/michael-berardi/ultravox/releases/latest) and verify it against the adjacent SHA-256 manifest.
 
-| System | Release artifact |
+| System | Release asset |
 | --- | --- |
-| macOS | `UltraVox-Light-macos-arm64.zip` |
-| Windows | `UltraVox-Light-windows-x86_64-setup.exe` |
-| Linux | `UltraVox-Light-linux-x86_64.AppImage` |
+| macOS | `UltraVox-macos-arm64.zip` or `UltraVox-macos-arm64.pkg` |
+| Windows | `UltraVox-windows-x86_64-setup.exe` |
+| Linux | `UltraVox-linux-x86_64.AppImage` |
 
-Light and Pro deliberately share the same signed application identity, canonical install path, settings directory, and OS permission grants. Installing Pro over Light upgrades the edition without asking you to grant microphone, accessibility, or screen-capture access again.
+macOS packages are Developer ID signed, notarized by Apple, and staple-verified. The app installs to `/Applications/UltraVox.app`. Building from source gives you the same core without the Pro module; see [Build from source](#build-from-source). Both use the same signed application identity, canonical install path, settings directory, and OS permission grants, so upgrading never creates a second permission set.
+
+`.deb` and `.rpm` packages, when provided, update through the system package manager.
 
 ## Quick start
 
-1. Launch UltraVox Light.
-2. Choose an English or multilingual model and download it once.
+1. Launch UltraVox and grant only the permissions needed for your workflow.
+2. Choose an English or multilingual model and let it download.
 3. Set a global shortcut in **Settings → Shortcut**.
 4. Press the shortcut, speak, then press it again to transcribe.
-5. Use **Transcribe URL** for a supported HTTP(S) URL, or drop a local audio file onto the window.
-
-## Custom dictionary
-
-Open **Settings → Dictionary** to add preferred spellings. Use one entry per line:
-
-```text
-Retex = retext
-UltraVox = Ultra Box
-```
-
-A line may contain only the canonical term, or `Canonical term = alias one, alias two`. Blank lines and lines beginning with `#` or `//` are ignored. Alias matching is case-insensitive, and conservative typo matching is limited to distinctive custom terms. Corrections happen locally before a transcript is saved, copied, or pasted. On Windows and Linux, canonical terms are also appended to the existing Whisper initial prompt.
-
-The dictionary accepts up to 128 KiB and 512 canonical entries. Canonical and alias fields are limited to 128 bytes, with at most 16 aliases total for each canonical term.
-
-This feature is manual in UltraVox Light. It does not scan Retex, contacts, files, or other apps for vocabulary.
-
-### Review the dictionary with your AI agent
-
-UltraVox bundles a dictionary-review skill for AI agents at `skills/dictionary-review/SKILL.md`, also installed inside the app under `Resources/skills/dictionary-review/SKILL.md`. Open **Settings → Dictionary → Agent dictionary review** to reveal the file or copy its contents, then add it to your agent yourself — UltraVox never modifies your agent. The skill audits local transcripts read-only, proposes only verified corrections, and verifies each one before finishing; everything stays on your device.
+5. With an active UltraVox Pro license, use **Meeting mode** for system audio plus microphone, or **Lecture mode** for system audio only.
 
 ## Privacy
 
-Transcription runs locally. Audio and transcripts are not sent to a transcription service. URL transcription downloads audio through the local `yt-dlp` executable and then processes it with the selected on-device model. History and model caches use the app's local data directory.
+Transcription and dictionary post-processing run on your device. After a selected model is downloaded, microphone recordings can be transcribed offline. Meeting capture is a Pro feature on macOS. Media URL import still requires network access to retrieve the source.
 
-UltraVox Light uses no analytics or hosted service credentials. Public updates use immutable release assets and adjacent SHA-256 checksum files.
+Manual dictionary text stays in local UltraVox settings. On macOS with Pro unlocked, UltraVox does not inspect an Obsidian vault directly: it invokes Retex 1.2.0 or newer read-only as `retex vocabulary --vault <selected> --limit 10000 --raw-json`, locally ranks those bounded candidates, retains at most 256 terms, and only does so after the user completes the **Settings → Dictionary** permission wizard. Retex deterministically scans local records and returns only bounded canonical terms and aggregate counts; UltraVox never receives raw note bodies, excerpts, or paths. UltraVox ranks returned terms against recent on-device transcript text so likely mishearings are retained, but transcript text is never passed to Retex or uploaded. Removing a selected vault revokes permission and clears generated vocabulary; manual entries remain.
 
 ## Updates
 
-UltraVox Light checks the public GitHub release metadata at launch and at most once per day. You may install a candidate manually or enable automatic installation in **Settings → Privacy**. Before installation, the app verifies the version and checksum; macOS also requires the canonical bundle identity, Developer ID signature, designated requirement, and stapled notarization ticket. Failed verification leaves the installed version untouched.
+UltraVox checks for stable updates at launch and at most once per day, against the public release assets of the canonical repository. Every candidate must pass its immutable SHA-256 manifest; macOS additionally requires the canonical Developer ID, sealed code, designated requirement, and notarization ticket. Licensed installs may also use the authenticated Implose channel. Failed verification leaves the installed version untouched.
+
+## Licensing
+
+UltraVox source is available under the [MIT License](LICENSE). The Pro module linked into official builds is proprietary: it is not part of this repository and is licensed separately by Implose Cybernetics. Pro services, private release infrastructure, and commercial entitlements are provided separately as well.
+
+The MIT license does not grant rights to the UltraVox or Implose Cybernetics names, logos, or other brand assets. Third-party rights remain with their respective owners. See [LEGAL_NOTICES.md](LEGAL_NOTICES.md) and [`apps/desktop/LEGAL_NOTICES.md`](apps/desktop/LEGAL_NOTICES.md) for bundled notices.
+
+No secrets, signing identities, or service credentials belong in the public repository.
 
 ## Build from source
 
+Prerequisites: Node.js 22, pnpm 10, Rust, CMake, libomp, and Xcode Command Line Tools.
+
 ```bash
-git clone --recurse-submodules https://github.com/michael-berardi/ultravox-light.git
-cd ultravox-light
-# Install the current platform's Tauri prerequisites first:
-# https://v2.tauri.app/start/prerequisites/
+git clone --recurse-submodules https://github.com/michael-berardi/ultravox.git
+cd ultravox
+brew install cmake libomp rust node@22
+export PATH="$(brew --prefix node@22)/bin:$PATH"
 npm install --global pnpm@10.27.0
 pnpm install --frozen-lockfile
 
-# Build UltraVox Light
-pnpm desktop:build
+# Checks and tests
+pnpm desktop:check
+cargo test --workspace
+pnpm test:all           # cargo tests + desktop tests + release contract
+
+# Build the open-source app (Pro module not included)
+pnpm --filter ultravox-desktop tauri build --no-default-features --features custom-protocol
+
+# Export a clean public source tree (drops Pro sources and private tooling)
+pnpm export:oss ./ultravox-open-source
 ```
 
+The official builds are produced by the signed Implose release workflow, which additionally links the closed Pro module. A plain local Tauri macOS bundle is ad-hoc signed. Do not install it over the canonical app when testing permission continuity: macOS ties Accessibility, Microphone, and Screen Recording grants to the designated signing requirement. Installed QA candidates must use the stable Developer ID app-only packaging workflow; published builds additionally require notarization.
 
-For development and type checks:
+### Headless visual QA
+
+The development build includes a deterministic browser-renderable theme harness. It never ships in production builds.
 
 ```bash
-pnpm desktop:dev
-pnpm desktop:check
+pnpm desktop:qa:headless
+# Example:
+# http://127.0.0.1:1420/?qa-theme=midnight&qa-state=playing&qa-source=music
 ```
 
+Supported fixture sources include `music`, `youtube-music`, and `youtube`; playback states include `playing`, `paused`, `unknown`, and `volume-unavailable`. The YouTube Music fixture includes deterministic inline artwork. Use `qa-spectrum=low|mid|high` for fixed band shapes that prove each atmosphere responds without random or time-based motion. Add `qa-reactive=0` to remove all reactive DOM, `qa-recording-level=0.75` for active microphone levels, `qa-drop=1` for drag/drop, or `qa-transcription-ms=1600` for delayed status timing.
 
 ## Architecture
 
 - **Tauri + React** provide the desktop shell and accessible interface.
-- **Rust** handles recording, audio decoding, history, model downloads, updates, and CLI tooling.
-- **Swift/FluidAudio** provide native macOS transcription, permissions, and insertion.
+- **Rust** handles application state, audio, history, in-memory dictionary processing, permissioned Retex command invocation, downloads, and CLI tooling.
+- **Swift/FluidAudio bridges** provide native macOS transcription, permissions, accessibility, meetings, and system audio.
 - **Whisper.cpp** provides local transcription on Windows and Linux.
+- **The Pro module** (`apps/desktop/src-tauri/src/pro/`, `apps/desktop/src/pro/`) is compiled only into official builds and stays locked without a valid entitlement; the open-source build links stubs in its place.
 
-## CLI
-
-The optional `ultravox-control` binary provides health, status, model-catalog, audio-device, and dictionary diagnostics. Run it with `--help` to print the exact command usage. Dictionary commands read the installed app's real `settings.toml` by default:
-
-```bash
-cargo run -p ultravox --features cli --bin ultravox-control -- dictionary-smoke
-cargo run -p ultravox --features cli --bin ultravox-control -- dictionary-apply 'retext, Ultra Box!'
-```
-
-Use `ULTRAVOX_DATA_DIR` to point automated tests at an isolated settings directory. Inline entries remain available for a deterministic one-off check:
-
-```bash
-ULTRAVOX_DATA_DIR=/tmp/ultravox-test \
-  cargo run -p ultravox --features cli --bin ultravox-control -- \
-  dictionary-apply --dictionary $'Retex\nUltraVox = Ultra Box' 'retext, Ultra Box!'
-# Retex, UltraVox!
-```
+Optional platform integrations degrade safely when metadata or permissions are unavailable. Transcription history and audio stay on the device.
 
 ## Contributing
 
-Please do not include recordings, transcripts, credentials, private URLs, or generated build output in issues or pull requests. See `apps/desktop/LEGAL_NOTICES.md` for third-party attribution.
+Issues and focused pull requests are welcome.
 
-## Support and security
+1. Search existing issues before opening a duplicate.
+2. Describe the user-visible behavior, operating system version, and reproduction steps.
+3. Keep changes scoped and include tests for new observable behavior.
+4. Run the checks in [Build from source](#build-from-source) before submitting.
 
-Use [GitHub Issues](https://github.com/michael-berardi/ultravox-light/issues) for reproducible bugs and feature requests. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/michael-berardi/ultravox-light/security/advisories/new); do not include credentials, private recordings, or transcripts in a public issue.
+Please do not include recordings, transcripts, credentials, private URLs, or personal system details in issues.
 
-On macOS, a plain local Tauri bundle is ad-hoc signed and must not be installed over the canonical app when testing permission continuity. Accessibility, Microphone, and Screen Recording grants persist only across builds carrying the same stable Developer ID designated requirement; published builds additionally require notarization.
+## License and acknowledgements
 
-## License
+UltraVox source is available under the [MIT License](LICENSE); the Pro module in official builds is proprietary and licensed separately. It builds on open-source work including:
 
-UltraVox Light source and documentation are available under the [MIT License](LICENSE). Third-party rights remain with their respective owners.
+- [OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper)
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+- [FluidAudio](https://github.com/FluidInference/FluidAudio)
+- [autocorrect](https://github.com/huacnlee/autocorrect)
+
+Third-party licenses and notices remain with their respective projects. See [`apps/desktop/LEGAL_NOTICES.md`](apps/desktop/LEGAL_NOTICES.md) for bundled notices.

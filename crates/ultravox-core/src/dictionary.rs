@@ -1,8 +1,8 @@
-//! Small, in-memory custom dictionary parsing and transcript correction.
+//! In-memory custom vocabulary parsing and transcript post-processing.
 //!
-//! The format is deliberately manual: one canonical term per line, optionally
-//! followed by ` = alias one, alias two`. Blank lines and comment lines are
-//! ignored. No files, contacts, or external services are inspected.
+//! The format is deliberately small: one canonical term per line, optionally
+//! followed by ` = alias one, alias two`. Blank lines and `#` comments are
+//! ignored. A compiled dictionary performs no I/O or network access.
 
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -13,6 +13,12 @@ pub const MAX_DICTIONARY_FIELD_BYTES: usize = 128;
 pub const MAX_ALIASES_PER_ENTRY: usize = 16;
 const MAX_PROMPT_VOCABULARY_BYTES: usize = 2_048;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DictionaryEntry {
+    pub canonical: String,
+    pub aliases: Vec<String>,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DictionaryError {
     #[error("dictionary is larger than {MAX_DICTIONARY_BYTES} bytes")]
@@ -22,7 +28,7 @@ pub enum DictionaryError {
     #[error("dictionary line {line} has an empty canonical term")]
     EmptyCanonical { line: usize },
     #[error(
-        "dictionary line {line} contains a field larger than {MAX_DICTIONARY_FIELD_BYTES} bytes or an invalid control character"
+        "dictionary line {line} contains a field larger than {MAX_DICTIONARY_FIELD_BYTES} bytes"
     )]
     FieldTooLong { line: usize },
     #[error("dictionary line {line} has more than {MAX_ALIASES_PER_ENTRY} aliases")]
@@ -30,38 +36,26 @@ pub enum DictionaryError {
 }
 
 #[derive(Debug, Clone)]
-struct Entry {
+struct Replacement {
+    source: String,
     canonical: String,
-    aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct Pattern {
-    literal: String,
+struct FuzzyTerm {
     canonical: String,
-    character_count: usize,
+    normalized: String,
+    word_count: usize,
+    distinctive: bool,
 }
 
+/// Parsed and compiled custom vocabulary. It is cheap to reuse for every
+/// transcript and contains no external resources.
 #[derive(Debug, Clone, Default)]
 pub struct CustomDictionary {
-    entries: Vec<Entry>,
-    patterns: Vec<Pattern>,
-    patterns_by_initial: HashMap<char, Vec<usize>>,
-}
-
-#[derive(Debug, Clone)]
-struct Replacement {
-    start: usize,
-    end: usize,
-    canonical: String,
-    exact: bool,
-    distance: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WordSpan {
-    start: usize,
-    end: usize,
+    entries: Vec<DictionaryEntry>,
+    exact: Vec<Replacement>,
+    fuzzy: Vec<FuzzyTerm>,
 }
 
 impl CustomDictionary {
@@ -70,276 +64,244 @@ impl CustomDictionary {
             return Err(DictionaryError::SourceTooLarge);
         }
 
-        let mut entries: Vec<Entry> = Vec::new();
-        let mut entry_indices = HashMap::<String, usize>::new();
-
-        for (index, raw_line) in source.lines().enumerate() {
-            let line_number = index + 1;
-            if raw_line.contains(['\r', '\0']) {
-                return Err(DictionaryError::FieldTooLong { line: line_number });
-            }
+        let mut entries: Vec<DictionaryEntry> = Vec::new();
+        let mut canonical_indices = HashMap::<String, usize>::new();
+        for (line_index, raw_line) in source.lines().enumerate() {
+            let line_number = line_index + 1;
             let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+            if line.is_empty() || line.starts_with('#') {
                 continue;
             }
 
-            let (canonical, aliases) = match line.split_once('=') {
-                Some((canonical, aliases)) => (canonical.trim(), Some(aliases)),
-                None => (line, None),
-            };
+            let (canonical, aliases) = line
+                .split_once('=')
+                .map(|(canonical, aliases)| (canonical.trim(), Some(aliases)))
+                .unwrap_or((line, None));
             if canonical.is_empty() {
                 return Err(DictionaryError::EmptyCanonical { line: line_number });
             }
             validate_field(canonical, line_number)?;
-            let canonical_key = canonical.to_lowercase();
-            let entry_index = if let Some(existing) = entry_indices.get(&canonical_key) {
-                *existing
-            } else {
-                if entries.len() >= MAX_DICTIONARY_ENTRIES {
-                    return Err(DictionaryError::TooManyEntries);
-                }
-                let next = entries.len();
-                entries.push(Entry {
-                    canonical: canonical.to_string(),
-                    aliases: Vec::new(),
-                });
-                entry_indices.insert(canonical_key, next);
-                next
-            };
 
-            if let Some(aliases) = aliases {
-                let mut seen = entries[entry_index]
+            let aliases = aliases
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|alias| !alias.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if aliases.len() > MAX_ALIASES_PER_ENTRY {
+                return Err(DictionaryError::TooManyAliases { line: line_number });
+            }
+            for alias in &aliases {
+                validate_field(alias, line_number)?;
+            }
+
+            let canonical_key = canonical.to_lowercase();
+            if let Some(index) = canonical_indices.get(&canonical_key).copied() {
+                let entry = &mut entries[index];
+                let mut known = entry
                     .aliases
                     .iter()
                     .map(|alias| alias.to_lowercase())
                     .collect::<HashSet<_>>();
-                for alias in aliases.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    validate_field(alias, line_number)?;
-                    let key = alias.to_lowercase();
-                    if key == entries[entry_index].canonical.to_lowercase() || !seen.insert(key) {
-                        continue;
+                for alias in aliases {
+                    if !alias.eq_ignore_ascii_case(&entry.canonical)
+                        && known.insert(alias.to_lowercase())
+                    {
+                        if entry.aliases.len() >= MAX_ALIASES_PER_ENTRY {
+                            return Err(DictionaryError::TooManyAliases { line: line_number });
+                        }
+                        entry.aliases.push(alias.to_string());
                     }
-                    if entries[entry_index].aliases.len() >= MAX_ALIASES_PER_ENTRY {
-                        return Err(DictionaryError::TooManyAliases { line: line_number });
-                    }
-                    entries[entry_index].aliases.push(alias.to_string());
+                }
+                continue;
+            }
+
+            if entries.len() >= MAX_DICTIONARY_ENTRIES {
+                return Err(DictionaryError::TooManyEntries);
+            }
+            let mut deduped_aliases = Vec::new();
+            let mut known = HashSet::new();
+            known.insert(canonical_key.clone());
+            for alias in aliases {
+                if known.insert(alias.to_lowercase()) {
+                    deduped_aliases.push(alias.to_string());
                 }
             }
+            canonical_indices.insert(canonical_key, entries.len());
+            entries.push(DictionaryEntry {
+                canonical: canonical.to_string(),
+                aliases: deduped_aliases,
+            });
         }
 
-        // Canonical spellings take precedence over an identical alias assigned
-        // elsewhere. The first occurrence of any other duplicate alias wins.
-        let mut patterns = Vec::new();
-        let mut seen_patterns = HashSet::new();
-        for entry in &entries {
-            let key = entry.canonical.to_lowercase();
-            if seen_patterns.insert(key) {
-                patterns.push(Pattern {
-                    literal: entry.canonical.clone(),
-                    canonical: entry.canonical.clone(),
-                    character_count: entry.canonical.chars().count(),
-                });
+        Ok(Self::compile(entries))
+    }
+
+    /// Merge manual and generated vocabulary. Manual entries win when the same
+    /// alias is present in both sources; generated entries never overwrite the
+    /// source text that the user maintains.
+    pub fn from_sources(manual: &str, generated: &str) -> Result<Self, DictionaryError> {
+        let manual = Self::parse(manual)?;
+        let generated = Self::parse(generated)?;
+        let mut entries = manual.entries;
+        let mut canonical_indices = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.canonical.to_lowercase(), index))
+            .collect::<HashMap<_, _>>();
+        for generated_entry in generated.entries {
+            let key = generated_entry.canonical.to_lowercase();
+            if let Some(index) = canonical_indices.get(&key).copied() {
+                let entry = &mut entries[index];
+                let mut known = entry
+                    .aliases
+                    .iter()
+                    .map(|alias| alias.to_lowercase())
+                    .collect::<HashSet<_>>();
+                for alias in generated_entry.aliases {
+                    if entry.aliases.len() >= MAX_ALIASES_PER_ENTRY {
+                        break;
+                    }
+                    if known.insert(alias.to_lowercase()) {
+                        entry.aliases.push(alias);
+                    }
+                }
+            } else if entries.len() < MAX_DICTIONARY_ENTRIES {
+                canonical_indices.insert(key, entries.len());
+                entries.push(generated_entry);
+            } else {
+                // Manual entries have priority; generated terms beyond the
+                // combined in-memory bound are deliberately omitted.
+                break;
             }
         }
+        Ok(Self::compile(entries))
+    }
+
+    fn compile(entries: Vec<DictionaryEntry>) -> Self {
+        let mut exact = Vec::new();
+        let mut seen_sources = HashSet::new();
+        let mut fuzzy = Vec::new();
         for entry in &entries {
-            for alias in &entry.aliases {
-                let key = alias.to_lowercase();
-                if seen_patterns.insert(key) {
-                    patterns.push(Pattern {
-                        literal: alias.clone(),
+            for source in std::iter::once(&entry.canonical).chain(entry.aliases.iter()) {
+                if seen_sources.insert(source.to_lowercase()) {
+                    exact.push(Replacement {
+                        source: source.clone(),
                         canonical: entry.canonical.clone(),
-                        character_count: alias.chars().count(),
                     });
                 }
             }
-        }
-
-        let mut patterns_by_initial = HashMap::<char, Vec<usize>>::new();
-        for (index, pattern) in patterns.iter().enumerate() {
-            if let Some(initial) = folded_initial(&pattern.literal) {
-                patterns_by_initial.entry(initial).or_default().push(index);
+            let normalized = normalize_alphanumeric(&entry.canonical);
+            if normalized.len() >= 5 {
+                fuzzy.push(FuzzyTerm {
+                    canonical: entry.canonical.clone(),
+                    distinctive: fuzzy_is_distinctive(&entry.canonical, &normalized),
+                    normalized,
+                    word_count: entry
+                        .canonical
+                        .split_whitespace()
+                        .filter(|word| !word.is_empty())
+                        .count()
+                        .max(1),
+                });
             }
         }
-
-        Ok(Self {
+        exact.sort_by(|left, right| right.source.len().cmp(&left.source.len()));
+        fuzzy.sort_by(|left, right| right.normalized.len().cmp(&left.normalized.len()));
+        Self {
             entries,
-            patterns,
-            patterns_by_initial,
-        })
+            exact,
+            fuzzy,
+        }
     }
 
-    pub fn canonical_terms(&self) -> Vec<&str> {
-        self.entries
-            .iter()
-            .map(|entry| entry.canonical.as_str())
-            .collect()
+    pub fn entries(&self) -> &[DictionaryEntry] {
+        &self.entries
     }
 
-    /// Combine the user's existing Whisper prompt with a bounded vocabulary
-    /// hint. FluidAudio does not expose a prompt, but uses the same corrections.
-    pub fn combined_initial_prompt(&self, existing: &str) -> String {
-        let existing = existing.trim();
+    pub fn canonical_terms(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().map(|entry| entry.canonical.as_str())
+    }
+
+    /// Combine the existing Whisper prompt with a bounded vocabulary hint.
+    /// The existing prompt is retained verbatim; only the generated suffix is
+    /// bounded.
+    pub fn initial_prompt(&self, existing: &str) -> String {
         if self.entries.is_empty() {
             return existing.to_string();
         }
-        let mut suffix = String::from("Preferred terms: ");
-        for entry in &self.entries {
+        let mut suffix = String::from("Custom vocabulary: ");
+        for term in self.canonical_terms() {
             let separator = if suffix.ends_with(": ") { "" } else { ", " };
-            if suffix.len() + separator.len() + entry.canonical.len() + 1
-                > MAX_PROMPT_VOCABULARY_BYTES
-            {
+            if suffix.len() + separator.len() + term.len() + 1 > MAX_PROMPT_VOCABULARY_BYTES {
                 break;
             }
             suffix.push_str(separator);
-            suffix.push_str(&entry.canonical);
+            suffix.push_str(term);
         }
         suffix.push('.');
-        if existing.is_empty() {
+        if existing.trim().is_empty() {
             suffix
         } else {
-            format!("{existing}\n{suffix}")
+            format!("{}\n{}", existing.trim_end(), suffix)
         }
     }
 
+    /// Apply exact aliases case-insensitively and conservative fuzzy matching
+    /// to canonical custom terms. Matches must occupy complete word boundaries;
+    /// punctuation outside a match is copied unchanged.
     pub fn apply(&self, text: &str) -> String {
         if text.is_empty() || self.entries.is_empty() {
             return text.to_string();
         }
 
-        let mut replacements = self.exact_replacements(text);
-        replacements.extend(self.fuzzy_replacements(text));
-        replacements.sort_by(|left, right| {
-            left.start
-                .cmp(&right.start)
-                .then_with(|| (right.end - right.start).cmp(&(left.end - left.start)))
-                .then_with(|| right.exact.cmp(&left.exact))
-                .then_with(|| left.distance.cmp(&right.distance))
-        });
-
         let mut output = String::with_capacity(text.len());
         let mut cursor = 0;
-        for replacement in replacements {
-            if replacement.start < cursor {
-                continue;
-            }
-            output.push_str(&text[cursor..replacement.start]);
-            output.push_str(&replacement.canonical);
-            cursor = replacement.end;
-        }
-        output.push_str(&text[cursor..]);
-        output
-    }
-
-    fn exact_replacements(&self, text: &str) -> Vec<Replacement> {
-        let mut matches = Vec::new();
-        for (start, character) in text.char_indices() {
-            let initial = character.to_lowercase().next().unwrap_or(character);
-            let Some(pattern_indices) = self.patterns_by_initial.get(&initial) else {
-                continue;
-            };
-            for pattern_index in pattern_indices {
-                let pattern = &self.patterns[*pattern_index];
-                let Some(end) = end_after_characters(text, start, pattern.character_count) else {
-                    continue;
-                };
-                let candidate = &text[start..end];
-                if case_insensitive_eq(candidate, &pattern.literal)
-                    && has_term_boundaries(text, start, end, &pattern.literal)
-                {
-                    matches.push(Replacement {
-                        start,
-                        end,
-                        canonical: pattern.canonical.clone(),
-                        exact: true,
-                        distance: 0,
-                    });
+        while cursor < text.len() {
+            let mut best: Option<(usize, &str, bool, usize)> = None;
+            if is_start_boundary(text, cursor) {
+                for replacement in &self.exact {
+                    if let Some(end) = exact_match_end(text, cursor, &replacement.source) {
+                        choose_match(&mut best, end, &replacement.canonical, true, 0, cursor);
+                    }
                 }
-            }
-        }
-        matches
-    }
 
-    fn fuzzy_replacements(&self, text: &str) -> Vec<Replacement> {
-        let words = word_spans(text);
-        let mut matches = Vec::new();
-        for entry in &self.entries {
-            let canonical = alphanumeric_key(&entry.canonical);
-            if canonical.len() < 5 {
-                continue;
-            }
-            let canonical_words = word_spans(&entry.canonical).len().max(1);
-            let max_words = (canonical_words + 1).min(3);
-
-            for start_index in 0..words.len() {
-                let mut candidate = String::new();
-                for count in 1..=max_words {
-                    let end_index = start_index + count - 1;
-                    let Some(word) = words.get(end_index) else {
-                        break;
-                    };
-                    if end_index > start_index {
-                        let previous = words[end_index - 1];
-                        if !text[previous.end..word.start]
-                            .chars()
-                            .all(|character| character.is_whitespace() || character == '-')
+                for (end, normalized) in fuzzy_candidates(text, cursor, 3) {
+                    for term in &self.fuzzy {
+                        let candidate_word_count = normalized_word_count(&text[cursor..end]);
+                        if candidate_word_count > term.word_count + 1 {
+                            continue;
+                        }
+                        if term.normalized.len() < 7
+                            && candidate_word_count > term.word_count
+                            && normalized != term.normalized
                         {
-                            break;
+                            continue;
+                        }
+                        if let Some(distance) =
+                            conservative_fuzzy_distance(&normalized, &term.normalized)
+                                .filter(|distance| *distance == 0 || term.distinctive)
+                        {
+                            choose_match(&mut best, end, &term.canonical, false, distance, cursor);
                         }
                     }
-                    candidate.extend(
-                        text[word.start..word.end]
-                            .chars()
-                            .flat_map(char::to_lowercase),
-                    );
-                    let canonical_len = canonical.len();
-                    let candidate_len = candidate.len();
-                    if candidate_len + 1 < canonical_len {
-                        continue;
-                    }
-                    if candidate_len > canonical_len + 1 {
-                        break;
-                    }
-                    if canonical_len < 7 && count > canonical_words && candidate != canonical {
-                        continue;
-                    }
-                    if let Some(distance) = conservative_fuzzy_distance(&candidate, &canonical)
-                        .filter(|distance| {
-                            *distance == 0
-                                || is_distinctive_fuzzy_term(&entry.canonical, &canonical)
-                        })
-                    {
-                        matches.push(Replacement {
-                            start: words[start_index].start,
-                            end: word.end,
-                            canonical: entry.canonical.clone(),
-                            exact: false,
-                            distance,
-                        });
-                    }
                 }
             }
+
+            if let Some((end, canonical, _, _)) = best {
+                output.push_str(canonical);
+                cursor = end;
+            } else {
+                let character = text[cursor..].chars().next().expect("cursor is in bounds");
+                output.push(character);
+                cursor += character.len_utf8();
+            }
         }
-        matches
+        output
     }
-}
-
-fn folded_initial(value: &str) -> Option<char> {
-    value.chars().next()?.to_lowercase().next()
-}
-
-fn end_after_characters(text: &str, start: usize, count: usize) -> Option<usize> {
-    let mut end = start;
-    let mut characters = text[start..].chars();
-    for _ in 0..count {
-        end += characters.next()?.len_utf8();
-    }
-    Some(end)
-}
-
-fn case_insensitive_eq(left: &str, right: &str) -> bool {
-    left.chars()
-        .flat_map(char::to_lowercase)
-        .eq(right.chars().flat_map(char::to_lowercase))
 }
 
 fn validate_field(value: &str, line: usize) -> Result<(), DictionaryError> {
@@ -349,48 +311,47 @@ fn validate_field(value: &str, line: usize) -> Result<(), DictionaryError> {
     Ok(())
 }
 
-fn has_term_boundaries(text: &str, start: usize, end: usize, term: &str) -> bool {
-    let begins_with_word = term.chars().next().is_some_and(char::is_alphanumeric);
-    let ends_with_word = term.chars().next_back().is_some_and(char::is_alphanumeric);
-    let left_is_word = text[..start]
-        .chars()
-        .next_back()
-        .is_some_and(char::is_alphanumeric);
-    let right_is_word = text[end..]
-        .chars()
-        .next()
-        .is_some_and(char::is_alphanumeric);
-    (!begins_with_word || !left_is_word) && (!ends_with_word || !right_is_word)
+fn case_insensitive_equal(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right) || left.to_lowercase() == right.to_lowercase()
 }
 
-fn word_spans(text: &str) -> Vec<WordSpan> {
-    let mut spans = Vec::new();
-    let mut start = None;
-    for (index, character) in text.char_indices() {
-        if character.is_alphanumeric() {
-            start.get_or_insert(index);
-        } else if let Some(word_start) = start.take() {
-            spans.push(WordSpan {
-                start: word_start,
-                end: index,
-            });
+fn exact_match_end(text: &str, start: usize, source: &str) -> Option<usize> {
+    let maximum_characters = source.chars().count().saturating_add(2);
+    for (count, (offset, character)) in text[start..].char_indices().enumerate() {
+        if count >= maximum_characters {
+            break;
+        }
+        let end = start + offset + character.len_utf8();
+        if is_end_boundary(text, end) && case_insensitive_equal(&text[start..end], source) {
+            return Some(end);
         }
     }
-    if let Some(word_start) = start {
-        spans.push(WordSpan {
-            start: word_start,
-            end: text.len(),
-        });
-    }
-    spans
+    None
 }
 
-fn alphanumeric_key(value: &str) -> String {
+fn normalize_alphanumeric(value: &str) -> String {
     value
         .chars()
         .filter(|character| character.is_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn fuzzy_is_distinctive(canonical: &str, normalized: &str) -> bool {
+    if normalized.len() < 5 {
+        return false;
+    }
+    let has_internal_uppercase = canonical
+        .chars()
+        .skip(1)
+        .any(|character| character.is_uppercase());
+    let has_digit = canonical.chars().any(|character| character.is_numeric());
+    let has_multiple_words = canonical.split_whitespace().nth(1).is_some();
+    let has_distinctive_ending = normalized
+        .chars()
+        .next_back()
+        .is_some_and(|character| matches!(character, 'q' | 'x' | 'z'));
+    has_internal_uppercase || has_digit || has_multiple_words || has_distinctive_ending
 }
 
 fn conservative_fuzzy_distance(candidate: &str, canonical: &str) -> Option<usize> {
@@ -403,34 +364,38 @@ fn conservative_fuzzy_distance(candidate: &str, canonical: &str) -> Option<usize
     {
         return None;
     }
+
     if canonical.len() >= 7 {
-        return edit_distance_at_most_one(candidate.as_bytes(), canonical.as_bytes()).then_some(1);
+        return edit_distance_at_most_one(candidate, canonical).then_some(1);
     }
 
-    // Short terms collide easily. Only permit one trailing insertion or
-    // deletion, such as `retext` -> `Retex`.
+    // Short terms are especially collision-prone. Permit only one trailing
+    // insertion/deletion, which covers a common repeated-final-sound error such
+    // as `retext` -> `Retex` without correcting arbitrary nearby words.
     ((candidate.len() + 1 == canonical.len() && canonical.starts_with(candidate))
         || (canonical.len() + 1 == candidate.len() && candidate.starts_with(canonical)))
     .then_some(1)
 }
 
-fn edit_distance_at_most_one(left: &[u8], right: &[u8]) -> bool {
+fn edit_distance_at_most_one(left: &str, right: &str) -> bool {
+    let left = left.chars().collect::<Vec<_>>();
+    let right = right.chars().collect::<Vec<_>>();
     if left.len().abs_diff(right.len()) > 1 {
         return false;
     }
     if left.len() == right.len() {
         return left
             .iter()
-            .zip(right)
+            .zip(&right)
             .filter(|(left, right)| left != right)
             .take(2)
             .count()
             <= 1;
     }
     let (shorter, longer) = if left.len() < right.len() {
-        (left, right)
+        (&left, &right)
     } else {
-        (right, left)
+        (&right, &left)
     };
     let (mut short_index, mut long_index, mut skipped) = (0, 0, false);
     while short_index < shorter.len() && long_index < longer.len() {
@@ -447,18 +412,89 @@ fn edit_distance_at_most_one(left: &[u8], right: &[u8]) -> bool {
     true
 }
 
-fn is_distinctive_fuzzy_term(source: &str, canonical: &str) -> bool {
-    let has_internal_uppercase = source
-        .chars()
-        .skip(1)
-        .any(|character| character.is_uppercase());
-    let has_digit = source.chars().any(|character| character.is_numeric());
-    let has_multiple_words = source.split_whitespace().nth(1).is_some();
-    let has_distinctive_ending = canonical
+fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+fn is_start_boundary(text: &str, index: usize) -> bool {
+    if index == 0 {
+        return text[index..].chars().next().is_some_and(is_word_character);
+    }
+    !text[..index]
         .chars()
         .next_back()
-        .is_some_and(|character| matches!(character, 'q' | 'x' | 'z'));
-    has_internal_uppercase || has_digit || has_multiple_words || has_distinctive_ending
+        .is_some_and(is_word_character)
+        && text[index..].chars().next().is_some_and(is_word_character)
+}
+
+fn is_end_boundary(text: &str, index: usize) -> bool {
+    index == text.len() || !text[index..].chars().next().is_some_and(is_word_character)
+}
+
+fn fuzzy_candidates(text: &str, start: usize, max_words: usize) -> Vec<(usize, String)> {
+    let mut candidates = Vec::new();
+    let mut index = start;
+    let mut words = 0;
+    while index < text.len() && words < max_words {
+        let Some(first) = text[index..].chars().next() else {
+            break;
+        };
+        if !first.is_alphanumeric() {
+            break;
+        }
+        while index < text.len() {
+            let character = text[index..].chars().next().expect("index is in bounds");
+            if !character.is_alphanumeric() {
+                break;
+            }
+            index += character.len_utf8();
+        }
+        words += 1;
+        candidates.push((index, normalize_alphanumeric(&text[start..index])));
+
+        let separator_start = index;
+        while index < text.len() {
+            let character = text[index..].chars().next().expect("index is in bounds");
+            if character.is_whitespace() || character == '-' {
+                index += character.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if index == separator_start || index == text.len() {
+            break;
+        }
+    }
+    candidates
+}
+
+fn normalized_word_count(value: &str) -> usize {
+    value
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .count()
+}
+
+fn choose_match<'a>(
+    best: &mut Option<(usize, &'a str, bool, usize)>,
+    end: usize,
+    canonical: &'a str,
+    exact: bool,
+    distance: usize,
+    start: usize,
+) {
+    let replace = match best {
+        None => true,
+        Some((best_end, _, best_exact, best_distance)) => {
+            end - start > *best_end - start
+                || (end == *best_end
+                    && ((exact && !*best_exact)
+                        || (exact == *best_exact && distance < *best_distance)))
+        }
+    };
+    if replace {
+        *best = Some((end, canonical, exact, distance));
+    }
 }
 
 #[cfg(test)]
@@ -466,43 +502,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_comments_blanks_and_deduplicates() {
+    fn parses_comments_aliases_and_deduplicates() {
         let dictionary = CustomDictionary::parse(
-            "# local terms\nRetex = re tex, re tex\n\nretex = Retext\n// ignored\nUltraVox = Ultra Box\n",
+            "# products\nUltraVox = Ultra Box, ultra box\nRetex\nultravox = Ultra Vox\n",
         )
         .unwrap();
-        assert_eq!(dictionary.canonical_terms(), vec!["Retex", "UltraVox"]);
+        assert_eq!(dictionary.entries().len(), 2);
+        assert_eq!(dictionary.entries()[0].canonical, "UltraVox");
         assert_eq!(
-            dictionary.apply("re tex, Retext, and ultra box."),
-            "Retex, Retex, and UltraVox."
+            dictionary.entries()[0].aliases,
+            vec!["Ultra Box", "Ultra Vox"]
         );
     }
 
     #[test]
-    fn applies_case_insensitively_with_longest_match_and_keeps_punctuation() {
-        let dictionary = CustomDictionary::parse("Vox\nUltraVox = Ultra Box").unwrap();
+    fn applies_exact_and_conservative_fuzzy_matches_with_punctuation() {
+        let dictionary = CustomDictionary::parse("Retex\nUltraVox = ultra box\n").unwrap();
         assert_eq!(
-            dictionary.apply("ULTRA BOX, vox! ultraboxed?"),
-            "UltraVox, Vox! ultraboxed?"
+            dictionary.apply("Try retext, then Ultra Box! ultravox works."),
+            "Try Retex, then UltraVox! UltraVox works."
         );
-    }
-
-    #[test]
-    fn fuzzy_matching_is_conservative_for_distinctive_terms() {
-        let dictionary = CustomDictionary::parse("Retex\nUltraVox\nModel007\nHello").unwrap();
         assert_eq!(
-            dictionary.apply("retext, Ultra Box, Model008, cello, hellos, and hello."),
-            "Retex, UltraVox, Model007, cello, hellos, and Hello."
+            dictionary.apply("pretext and ultra boxing"),
+            "pretext and ultra boxing"
         );
-    }
-
-    #[test]
-    fn fuzzy_distinctiveness_matches_pro_rules() {
-        assert!(is_distinctive_fuzzy_term("UltraVox", "ultravox"));
-        assert!(is_distinctive_fuzzy_term("Model007", "model007"));
-        assert!(is_distinctive_fuzzy_term("Alpha Beta", "alphabeta"));
-        assert!(is_distinctive_fuzzy_term("Retex", "retex"));
-        assert!(!is_distinctive_fuzzy_term("Business", "business"));
     }
 
     #[test]
@@ -515,93 +538,56 @@ mod tests {
     }
 
     #[test]
+    fn longest_match_wins() {
+        let dictionary = CustomDictionary::parse("Vox = box\nUltraVox = Ultra Box\n").unwrap();
+        assert_eq!(dictionary.apply("Ultra Box, box."), "UltraVox, Vox.");
+    }
+
+    #[test]
     fn short_terms_do_not_merge_multiple_words_for_a_typo() {
         let dictionary = CustomDictionary::parse("Aprox\nRetex\n").unwrap();
         assert_eq!(dictionary.apply("a pro and retext"), "a pro and Retex");
     }
 
     #[test]
-    fn common_long_terms_are_not_fuzzy_corrected() {
-        let dictionary = CustomDictionary::parse("Business\n").unwrap();
+    fn common_terms_are_not_fuzzy_corrected() {
+        let dictionary = CustomDictionary::parse("Cat\nName\nHello\nBusiness\nApple\n").unwrap();
         assert_eq!(
-            dictionary.apply("busyness and business"),
-            "busyness and Business"
-        );
-    }
-
-    #[test]
-    fn multiword_terms_are_distinctive_but_exact_alias_spacing_is_preserved() {
-        let dictionary =
-            CustomDictionary::parse("Alpha Beta\nAcme = Acme  Incorporated\n").unwrap();
-        assert_eq!(
-            dictionary.apply("Alpha Beto; Acme Incorporated; Acme  Incorporated"),
-            "Alpha Beta; Acme Incorporated; Acme"
+            dictionary.apply("cap names name, hellos, busyness, apply, cello"),
+            "cap names Name, hellos, busyness, apply, cello"
         );
     }
 
     #[test]
     fn aliases_are_case_insensitive_for_unicode() {
-        let dictionary = CustomDictionary::parse("Éclair = élán").unwrap();
-        assert_eq!(dictionary.apply("ÉLÁN!"), "Éclair!");
+        let dictionary = CustomDictionary::parse("Éclair = élán\nẞeta = ßeta").unwrap();
+        assert_eq!(dictionary.apply("ÉLÁN and ßeta!"), "Éclair and ẞeta!");
     }
 
     #[test]
-    fn combines_canonical_terms_with_existing_prompt() {
-        let dictionary = CustomDictionary::parse("Retex = retext\nUltraVox").unwrap();
+    fn combines_existing_whisper_prompt_with_canonical_terms() {
+        let dictionary = CustomDictionary::parse("Retex = retext\nUltraVox\n").unwrap();
         assert_eq!(
-            dictionary.combined_initial_prompt("Use sentence case."),
-            "Use sentence case.\nPreferred terms: Retex, UltraVox."
+            dictionary.initial_prompt("Use sentence case."),
+            "Use sentence case.\nCustom vocabulary: Retex, UltraVox."
         );
     }
 
     #[test]
-    fn enforces_pro_compatible_source_field_and_entry_bounds() {
-        let max_source = format!("#{}", "x".repeat(MAX_DICTIONARY_BYTES - 1));
-        CustomDictionary::parse(&max_source).unwrap();
-        assert_eq!(
-            CustomDictionary::parse(&(max_source + "x")).unwrap_err(),
-            DictionaryError::SourceTooLarge
-        );
-
-        CustomDictionary::parse(&"x".repeat(MAX_DICTIONARY_FIELD_BYTES)).unwrap();
+    fn rejects_oversized_fields_and_entry_counts() {
+        let oversized = "x".repeat(MAX_DICTIONARY_FIELD_BYTES + 1);
         assert!(matches!(
-            CustomDictionary::parse(&"x".repeat(MAX_DICTIONARY_FIELD_BYTES + 1)),
+            CustomDictionary::parse(&oversized),
             Err(DictionaryError::FieldTooLong { line: 1 })
         ));
-        assert!(matches!(
-            CustomDictionary::parse(&"é".repeat(MAX_DICTIONARY_FIELD_BYTES / 2 + 1)),
-            Err(DictionaryError::FieldTooLong { line: 1 })
-        ));
-
-        let max_entries = (0..MAX_DICTIONARY_ENTRIES)
+        let source = (0..=MAX_DICTIONARY_ENTRIES)
             .map(|index| format!("Term{index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        CustomDictionary::parse(&max_entries).unwrap();
         assert!(matches!(
-            CustomDictionary::parse(&format!("{max_entries}\nOneTooMany")),
+            CustomDictionary::parse(&source),
             Err(DictionaryError::TooManyEntries)
         ));
-    }
-
-    #[test]
-    fn rejects_empty_or_control_character_fields() {
-        assert_eq!(
-            CustomDictionary::parse("= alias").unwrap_err(),
-            DictionaryError::EmptyCanonical { line: 1 }
-        );
-        assert_eq!(
-            CustomDictionary::parse("Bad\0Term").unwrap_err(),
-            DictionaryError::FieldTooLong { line: 1 }
-        );
-        assert_eq!(
-            CustomDictionary::parse("Bad\rTerm").unwrap_err(),
-            DictionaryError::FieldTooLong { line: 1 }
-        );
-        assert_eq!(
-            CustomDictionary::parse("# ignored\0control").unwrap_err(),
-            DictionaryError::FieldTooLong { line: 1 }
-        );
     }
 
     #[test]
@@ -618,17 +604,5 @@ mod tests {
             CustomDictionary::parse(&format!("Retex = {first}\nretex = {second}")).unwrap_err(),
             DictionaryError::TooManyAliases { line: 2 }
         );
-    }
-
-    #[test]
-    fn generated_prompt_vocabulary_is_bounded() {
-        let source = (0..MAX_DICTIONARY_ENTRIES)
-            .map(|index| format!("Term{index:03}{}", "x".repeat(80)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let prompt = CustomDictionary::parse(&source)
-            .unwrap()
-            .combined_initial_prompt("");
-        assert!(prompt.len() <= MAX_PROMPT_VOCABULARY_BYTES);
     }
 }

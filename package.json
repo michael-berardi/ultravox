@@ -1,15 +1,22 @@
 {
-  "name": "ultravox-light",
+  "name": "ultravox",
   "private": true,
-  "version": "0.9.0",
-  "description": "Private, on-device transcription for UltraVox Light",
+  "version": "0.11.0",
+  "description": "Private, on-device transcription for macOS, Windows, and Linux with meeting capture, media import, live now-playing controls, and customizable themes",
   "scripts": {
     "desktop:dev": "pnpm --filter ultravox-desktop tauri:dev",
-    "desktop:build": "pnpm --filter ultravox-desktop tauri:build",
+    "desktop:qa:headless": "pnpm --filter ultravox-desktop qa:headless",
+    "desktop:build": "pnpm --filter ultravox-desktop tauri build",
     "desktop:check": "pnpm --filter ultravox-desktop check",
     "desktop:tauri:check": "pnpm --filter ultravox-desktop tauri check",
     "cargo:fmt": "cargo fmt --all",
-    "cargo:check": "cargo check --workspace"
+    "cargo:check": "cargo check --workspace",
+    "pkg:build": "./Scripts/build-pkg.sh",
+    "pkg:verify": "./Scripts/verify-pkg.sh",
+    "release:package": "./Scripts/package-release.sh",
+    "release:publish": "./Scripts/publish-release.sh",
+    "test:all": "cargo test --workspace && pnpm --filter ultravox-desktop run --if-present test && bash Scripts/tests/release-contract.sh",
+    "export:oss": "./Scripts/export-open-source.sh"
   },
   "devDependencies": {},
   "packageManager": "pnpm@10.27.0"

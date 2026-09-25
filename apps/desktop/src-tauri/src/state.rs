@@ -1,11 +1,12 @@
 use chrono::Utc;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::task::{AbortHandle, JoinError, JoinHandle};
+use tokio::task::{AbortHandle, JoinHandle};
 use uuid::Uuid;
 
 use ultravox_core::{
@@ -20,12 +21,13 @@ use ultravox_macos_bridge as bridge;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use crate::events::{
-    IndicatorHidePayload, IndicatorShowPayload, RecordingAddedPayload, RecordingDeletedPayload,
-    RecordingStartedPayload, RecordingStoppedPayload, SettingsChangedPayload,
-    TranscriptionCompletedPayload, TranscriptionProgressPayload, UrlImportProgressPayload,
-    INDICATOR_HIDE, INDICATOR_SHOW, RECORDING_ADDED, RECORDING_DELETED, RECORDING_STARTED,
-    RECORDING_STOPPED, SETTINGS_CHANGED, SHORTCUT_TRIGGERED, TRANSCRIPTION_COMPLETED,
-    TRANSCRIPTION_PROGRESS, URL_IMPORT_PROGRESS,
+    IndicatorHidePayload, IndicatorShowPayload, MeetingDetection, MeetingDetectionPendingPayload,
+    RecordingAddedPayload, RecordingDeletedPayload, RecordingStartedPayload,
+    RecordingStoppedPayload, SettingsChangedPayload, TranscriptionCompletedPayload,
+    TranscriptionProgressPayload, UrlImportProgressPayload, INDICATOR_HIDE, INDICATOR_SHOW,
+    MEETING_DETECTION_TTL_MS, MEETING_STATE_CHANGED, RECORDING_ADDED, RECORDING_DELETED,
+    RECORDING_STARTED, RECORDING_STOPPED, SETTINGS_CHANGED, SHORTCUT_TRIGGERED,
+    TRANSCRIPTION_COMPLETED, TRANSCRIPTION_PROGRESS, URL_IMPORT_PROGRESS,
 };
 
 /// A live recording session tracked by the desktop shell.
@@ -36,12 +38,84 @@ pub struct RecordingSession {
     pub started_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+pub struct MeetingSession {
+    pub id: Uuid,
+    pub output_path: PathBuf,
+    pub include_microphone: bool,
+    pub started_at: Instant,
+    pub stopping: bool,
+}
+
 /// Handle for an in-flight transcription task so cancellation can target a
 /// specific recording without disturbing other work.
 #[derive(Debug)]
 pub struct ActiveTranscription {
     pub recording_id: Uuid,
     pub abort_handle: AbortHandle,
+}
+
+pub(crate) const MEETING_DETECTION_TTL: Duration = Duration::from_millis(MEETING_DETECTION_TTL_MS);
+const MAX_MEETING_DETECTION_ENTRIES: usize = 256;
+
+#[derive(Debug, Clone)]
+struct PendingMeetingDetection {
+    detection: MeetingDetection,
+    expires_at: Instant,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+enum MeetingDecision {
+    InFlight,
+    Accepted(String),
+    Declined,
+}
+
+#[derive(Debug, Default)]
+struct MeetingDetectionState {
+    seen: HashMap<(crate::events::MeetingProvider, String), Instant>,
+    decisions: HashMap<String, (Instant, MeetingDecision)>,
+    pending: Option<PendingMeetingDetection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeetingDetectionRegistration {
+    Prompt,
+    Disabled,
+    Active,
+    Duplicate,
+    Pending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+pub(crate) enum MeetingDeclineResult {
+    Declined,
+    AlreadyDeclined,
+    AlreadyAccepted,
+    InFlight,
+    NotFound,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+pub(crate) enum MeetingAcceptClaim {
+    Claimed(MeetingDetection, Instant),
+    AlreadyAccepted(String),
+    AlreadyDeclined,
+    InFlight,
+    Failed(String),
+}
+
+#[cfg(target_os = "macos")]
+struct NativeIndicatorGuard;
+
+#[cfg(target_os = "macos")]
+impl Drop for NativeIndicatorGuard {
+    fn drop(&mut self) {
+        bridge::clear_insertion_target();
+        bridge::hide_indicator();
+    }
 }
 
 /// Shared application state managed by Tauri and accessible from commands.
@@ -63,7 +137,12 @@ pub struct AppState {
     /// Serializes dropped-file imports so each file waits for the previous
     /// transcription to start (and finish) in drop order.
     pub file_import: AsyncMutex<()>,
+    pub meeting_session: AsyncMutex<Option<MeetingSession>>,
+    meeting_detection: AsyncMutex<MeetingDetectionState>,
     pub audio: AsyncMutex<CpalAudioBackend>,
+    /// Cancellation handle for the currently running Retex refresh, if any.
+    pub retex_scan_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    pub telemetry: crate::telemetry::Telemetry,
 }
 
 fn recording_id_for(recording: &AudioRecording) -> Uuid {
@@ -77,37 +156,6 @@ fn recording_id_for(recording: &AudioRecording) -> Uuid {
                 .and_then(|s| Uuid::parse_str(s).ok())
         })
         .unwrap_or_else(Uuid::new_v4)
-}
-
-fn transcription_task_failure(result: Result<Result<String, String>, JoinError>) -> Option<String> {
-    match result {
-        Ok(Ok(_)) => None,
-        Ok(Err(reason)) => Some(reason),
-        Err(error) if error.is_cancelled() => None,
-        Err(error) => Some(format!("transcription task stopped unexpectedly: {error}")),
-    }
-}
-
-fn mark_incomplete_recording_failed(
-    history: &mut RecordingHistory,
-    id: Uuid,
-    reason: &str,
-) -> Result<Option<RecordingRow>, String> {
-    let Some(mut row) = history.get(id).map_err(|error| error.to_string())? else {
-        return Ok(None);
-    };
-    if !matches!(
-        row.status,
-        RecordingStatus::Pending | RecordingStatus::Converting | RecordingStatus::Transcribing
-    ) {
-        return Ok(None);
-    }
-    row.transcription = reason.to_string();
-    row.status = RecordingStatus::Failed;
-    row.progress = 1.0;
-    row.refresh_display();
-    history.insert(&row).map_err(|error| error.to_string())?;
-    Ok(Some(row))
 }
 
 fn fallback_row(
@@ -141,6 +189,7 @@ fn fallback_row(
     row.refresh_display();
     row
 }
+
 #[cfg(not(target_os = "macos"))]
 struct WhisperOptions {
     language: String,
@@ -275,21 +324,28 @@ mod whisper_integration_test {
     }
 }
 
-#[cfg(target_os = "macos")]
-struct NativeIndicatorGuard;
-
-#[cfg(target_os = "macos")]
-impl Drop for NativeIndicatorGuard {
-    fn drop(&mut self) {
-        bridge::clear_insertion_target();
-        bridge::hide_indicator();
+/// All desktop-owned stores share this root. Mirror builds require an explicit
+/// existing sandbox and reject production roots (including symlink aliases).
+pub(crate) fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let production = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let override_dir = std::env::var_os("ULTRAVOX_DATA_DIR").map(PathBuf::from);
+    if cfg!(feature = "mirror-debug") {
+        let path = override_dir
+            .ok_or("mirror-debug requires ULTRAVOX_DATA_DIR pointing to an existing sandbox")?;
+        let path = path.canonicalize().map_err(|e| e.to_string())?;
+        let production = production.canonicalize().map_err(|e| e.to_string())?;
+        if path.starts_with(&production) || production.starts_with(&path) {
+            return Err("mirror data directory overlaps production".into());
+        }
+        return Ok(path);
     }
+    Ok(override_dir.unwrap_or(production))
 }
 
 impl AppState {
     /// Initialize the state from the Tauri app handle.
     pub fn new(app: AppHandle) -> Result<Self, String> {
-        let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let app_dir = data_dir(&app)?;
         let config = ConfigManager::new(&app_dir).map_err(|e| e.to_string())?;
         let history = RecordingHistory::new(app_dir.clone()).map_err(|e| e.to_string())?;
         let models_dir = config
@@ -298,6 +354,7 @@ impl AppState {
             .clone()
             .unwrap_or_else(|| app_dir.join("models"));
         let _ = std::fs::remove_dir_all(app_dir.join("recordings").join(".imports"));
+        let telemetry = crate::telemetry::Telemetry::new(app.clone())?;
         Ok(Self {
             app: app.clone(),
             config: Mutex::new(config),
@@ -308,9 +365,21 @@ impl AppState {
             session: AsyncMutex::new(None),
             active_transcription: AsyncMutex::new(None),
             file_import: AsyncMutex::new(()),
+            meeting_session: AsyncMutex::new(None),
+            meeting_detection: AsyncMutex::new(MeetingDetectionState::default()),
             audio: AsyncMutex::new(CpalAudioBackend::new()),
+            retex_scan_cancel: Mutex::new(None),
+            telemetry,
         })
     }
+    pub fn record_telemetry_usage(&self, counters: crate::telemetry::UsageCounters) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _ = state.telemetry.usage(counters).await;
+        });
+    }
+
     /// Path to the configured directory for cached model files.
     pub fn models_dir(&self) -> Result<PathBuf, String> {
         if let Some(path) = self
@@ -323,13 +392,13 @@ impl AppState {
         {
             return Ok(path);
         }
-        let app_dir = self.app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let app_dir = data_dir(&self.app)?;
         Ok(app_dir.join("models"))
     }
 
     /// Path to the default directory for recorded audio files.
     pub fn recordings_dir(&self) -> Result<PathBuf, String> {
-        let app_dir = self.app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let app_dir = data_dir(&self.app)?;
         Ok(app_dir.join("recordings"))
     }
 
@@ -408,44 +477,6 @@ impl AppState {
             .map_err(|e| e.to_string())
     }
 
-    fn handle_transcription_task_result(
-        &self,
-        id: Uuid,
-        result: Result<Result<String, String>, JoinError>,
-        context: &str,
-    ) {
-        let Some(reason) = transcription_task_failure(result) else {
-            return;
-        };
-
-        let update = self
-            .history
-            .lock()
-            .map_err(|error| error.to_string())
-            .and_then(|mut history| mark_incomplete_recording_failed(&mut history, id, &reason));
-        match update {
-            Ok(Some(row)) => {
-                if let Err(error) = self
-                    .emit_recording_added(&row)
-                    .and_then(|_| self.emit_transcription_progress(&id.to_string(), 1.0, "failed"))
-                    .and_then(|_| {
-                        self.emit_transcription_completed(
-                            &id.to_string(),
-                            reason.clone(),
-                            Some(row.language.clone()),
-                        )
-                    })
-                {
-                    eprintln!("{context}: {reason}; failed to emit failure state: {error}");
-                } else {
-                    eprintln!("{context}: {reason}");
-                }
-            }
-            Ok(None) => eprintln!("{context}: {reason}"),
-            Err(error) => eprintln!("{context}: {reason}; failed to persist failure: {error}"),
-        }
-    }
-
     /// Emit `recording-added`.
     pub fn emit_recording_added(&self, row: &ultravox_core::RecordingRow) -> Result<(), String> {
         self.app
@@ -458,6 +489,280 @@ impl AppState {
         self.app
             .emit(RECORDING_DELETED, RecordingDeletedPayload::from(id))
             .map_err(|e| e.to_string())
+    }
+
+    pub fn emit_meeting_state_changed(&self, active: bool) -> Result<(), String> {
+        self.app
+            .emit(MEETING_STATE_CHANGED, active)
+            .map_err(|e| e.to_string())
+    }
+
+    fn prune_meeting_detection_state(state: &mut MeetingDetectionState, now: Instant) -> bool {
+        state
+            .seen
+            .retain(|_, seen_at| now.duration_since(*seen_at) <= MEETING_DETECTION_TTL);
+        state
+            .decisions
+            .retain(|_, (decided_at, _)| now.duration_since(*decided_at) <= MEETING_DETECTION_TTL);
+        while state.decisions.len() > MAX_MEETING_DETECTION_ENTRIES {
+            let Some((oldest_id, _)) = state
+                .decisions
+                .iter()
+                .min_by_key(|(_, (decided_at, _))| *decided_at)
+            else {
+                break;
+            };
+            let oldest_id = oldest_id.clone();
+            state.decisions.remove(&oldest_id);
+        }
+        let expired = state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.expires_at <= now);
+        if expired {
+            if let Some(pending) = state.pending.take() {
+                state.decisions.insert(
+                    pending.detection.detection_id,
+                    (now, MeetingDecision::Declined),
+                );
+            }
+        }
+        expired
+    }
+
+    #[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+    fn release_meeting_accept_state(
+        state: &mut MeetingDetectionState,
+        detection: MeetingDetection,
+        expires_at: Instant,
+        restore_allowed: bool,
+        now: Instant,
+    ) -> bool {
+        let detection_id = detection.detection_id.clone();
+        let restored = restore_allowed && expires_at > now && state.pending.is_none();
+        if restored {
+            state.pending = Some(PendingMeetingDetection {
+                detection,
+                expires_at,
+            });
+            state.decisions.remove(&detection_id);
+        } else {
+            state
+                .decisions
+                .insert(detection_id, (now, MeetingDecision::Declined));
+        }
+        restored
+    }
+    pub(crate) async fn register_meeting_detection(
+        &self,
+        detection: MeetingDetection,
+    ) -> Result<
+        (
+            MeetingDetectionRegistration,
+            Option<MeetingDetectionPendingPayload>,
+        ),
+        String,
+    > {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis() as u64;
+        detection.validate(now_ms)?;
+
+        let enabled = self
+            .config
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get()
+            .meeting_detection_enabled;
+        if !enabled {
+            return Ok((MeetingDetectionRegistration::Disabled, None));
+        }
+        if self.meeting_session.lock().await.is_some() || self.session.lock().await.is_some() {
+            return Ok((MeetingDetectionRegistration::Active, None));
+        }
+
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.detection.detection_id == detection.detection_id)
+            || state.decisions.contains_key(&detection.detection_id)
+        {
+            return Ok((MeetingDetectionRegistration::Duplicate, None));
+        }
+        let key = (detection.provider, detection.meeting_key.clone());
+        if state.seen.contains_key(&key) {
+            return Ok((MeetingDetectionRegistration::Duplicate, None));
+        }
+        if state.seen.len() >= MAX_MEETING_DETECTION_ENTRIES {
+            if let Some((oldest_key, _)) = state.seen.iter().min_by_key(|(_, seen_at)| *seen_at) {
+                let oldest_key = oldest_key.clone();
+                state.seen.remove(&oldest_key);
+            }
+        }
+        state.seen.insert(key, now);
+        if state.pending.is_some() {
+            return Ok((MeetingDetectionRegistration::Pending, None));
+        }
+
+        let expires_at = now
+            .checked_add(MEETING_DETECTION_TTL)
+            .ok_or_else(|| "meeting detection expiry overflow".to_string())?;
+        let expires_at_ms = detection
+            .detected_at_ms
+            .checked_add(MEETING_DETECTION_TTL_MS)
+            .ok_or_else(|| "meeting detection expiry overflow".to_string())?;
+        let payload = MeetingDetectionPendingPayload::from_detection(&detection, expires_at_ms);
+        state.pending = Some(PendingMeetingDetection {
+            detection,
+            expires_at,
+        });
+        Ok((MeetingDetectionRegistration::Prompt, Some(payload)))
+    }
+
+    #[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+    pub(crate) async fn claim_meeting_accept(&self, detection_id: &str) -> MeetingAcceptClaim {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        if let Some(pending) = state.pending.take() {
+            if pending.detection.detection_id == detection_id {
+                state
+                    .decisions
+                    .insert(detection_id.to_string(), (now, MeetingDecision::InFlight));
+                return MeetingAcceptClaim::Claimed(pending.detection, pending.expires_at);
+            }
+            state.pending = Some(pending);
+            return MeetingAcceptClaim::Failed("meeting detection is not pending".to_string());
+        }
+        match state
+            .decisions
+            .get(detection_id)
+            .map(|(_, decision)| decision)
+        {
+            Some(MeetingDecision::Accepted(recording_id)) => {
+                MeetingAcceptClaim::AlreadyAccepted(recording_id.clone())
+            }
+            Some(MeetingDecision::Declined) => MeetingAcceptClaim::AlreadyDeclined,
+            Some(MeetingDecision::InFlight) => MeetingAcceptClaim::InFlight,
+            None => MeetingAcceptClaim::Failed("meeting detection is not pending".to_string()),
+        }
+    }
+
+    #[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+    pub(crate) async fn complete_meeting_accept(&self, detection_id: &str, recording_id: String) {
+        self.meeting_detection.lock().await.decisions.insert(
+            detection_id.to_string(),
+            (Instant::now(), MeetingDecision::Accepted(recording_id)),
+        );
+    }
+
+    #[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+    pub(crate) async fn release_meeting_accept(
+        &self,
+        detection: MeetingDetection,
+        expires_at: Instant,
+        restore_allowed: bool,
+        _error: String,
+    ) -> bool {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        Self::release_meeting_accept_state(&mut state, detection, expires_at, restore_allowed, now)
+    }
+
+    pub(crate) async fn rollback_meeting_detection(&self, detection: &MeetingDetection) {
+        let mut state = self.meeting_detection.lock().await;
+        state.pending = state
+            .pending
+            .take()
+            .filter(|pending| pending.detection.detection_id != detection.detection_id);
+        state.decisions.remove(&detection.detection_id);
+        state
+            .seen
+            .remove(&(detection.provider, detection.meeting_key.clone()));
+    }
+
+    #[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+    pub(crate) async fn pending_meeting_detection(&self) -> Option<MeetingDetectionPendingPayload> {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        state.pending.as_ref().map(|pending| {
+            MeetingDetectionPendingPayload::from_detection(
+                &pending.detection,
+                pending
+                    .detection
+                    .detected_at_ms
+                    .saturating_add(MEETING_DETECTION_TTL_MS),
+            )
+        })
+    }
+
+    #[cfg_attr(not(feature = "ultravox-pro"), allow(dead_code))]
+    pub(crate) async fn decline_meeting_detection(
+        &self,
+        detection_id: &str,
+    ) -> MeetingDeclineResult {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if Self::prune_meeting_detection_state(&mut state, now) {
+            crate::close_meeting_reminder(&self.app);
+        }
+        if let Some(pending) = state.pending.as_ref() {
+            if pending.detection.detection_id == detection_id {
+                state.pending = None;
+                state
+                    .decisions
+                    .insert(detection_id.to_string(), (now, MeetingDecision::Declined));
+                return MeetingDeclineResult::Declined;
+            }
+            return MeetingDeclineResult::NotFound;
+        }
+        match state
+            .decisions
+            .get(detection_id)
+            .map(|(_, decision)| decision)
+        {
+            Some(MeetingDecision::Declined) => MeetingDeclineResult::AlreadyDeclined,
+            Some(MeetingDecision::Accepted(_)) => MeetingDeclineResult::AlreadyAccepted,
+            Some(MeetingDecision::InFlight) => MeetingDeclineResult::InFlight,
+            None => MeetingDeclineResult::NotFound,
+        }
+    }
+
+    pub(crate) async fn expire_meeting_detection(&self, detection_id: &str) -> bool {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        let expired = state.pending.as_ref().is_some_and(|pending| {
+            pending.detection.detection_id == detection_id && pending.expires_at <= now
+        });
+        if expired {
+            state.pending = None;
+            state
+                .decisions
+                .insert(detection_id.to_string(), (now, MeetingDecision::Declined));
+        }
+        expired
+    }
+
+    pub(crate) async fn clear_pending_meeting_detection(&self) {
+        let now = Instant::now();
+        let mut state = self.meeting_detection.lock().await;
+        if let Some(pending) = state.pending.take() {
+            state.decisions.insert(
+                pending.detection.detection_id,
+                (now, MeetingDecision::Declined),
+            );
+        }
     }
 
     pub fn emit_url_import_progress(
@@ -506,6 +811,9 @@ impl AppState {
     /// lifecycle.
     pub async fn begin_with_id(&self, id: Uuid) -> Result<String, String> {
         let _transition = self.activity_transition.lock().await;
+        if self.meeting_session.lock().await.is_some() {
+            return Err("stop meeting mode before starting dictation".to_string());
+        }
         // Active recording session takes precedence.
         {
             let session = self.session.lock().await;
@@ -562,10 +870,19 @@ impl AppState {
         let recordings_dir = self.recordings_dir()?;
         std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
         let output_path = recordings_dir.join(format!("{id}.wav"));
+        let selected_device = self
+            .config
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get()
+            .audio_input_device_id
+            .clone();
+        let mut input_config = AudioInputConfig::default();
+        input_config.device_id = selected_device;
 
         let mut audio = self.audio.lock().await;
         let recording = audio
-            .start_recording(AudioInputConfig::default(), output_path)
+            .start_recording(input_config, output_path)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -576,7 +893,13 @@ impl AppState {
             started_at: Instant::now(),
         });
         drop(session);
+        self.clear_pending_meeting_detection().await;
+        crate::close_meeting_reminder(&self.app);
         self.emit_recording_started(&recording)?;
+        self.record_telemetry_usage(crate::telemetry::UsageCounters {
+            recordings_started: 1,
+            ..crate::telemetry::UsageCounters::default()
+        });
         Ok(id.to_string())
     }
 
@@ -610,6 +933,10 @@ impl AppState {
                     .map_err(|emit_error| {
                         format!("{error}; failed to notify recording stop: {emit_error}")
                     })?;
+                self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    recordings_failed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
                 return Err(error.to_string());
             }
         };
@@ -646,6 +973,11 @@ impl AppState {
             self.emit_recording_added(&row)?;
             self.emit_recording_stopped(&recording)?;
         }
+        self.record_telemetry_usage(crate::telemetry::UsageCounters {
+            recordings_completed: 1,
+            ..crate::telemetry::UsageCounters::default()
+        });
+
         let app = self.app.clone();
         let recording_for_task = recording.clone();
         let transcription_task: JoinHandle<Result<String, String>> = tokio::spawn(async move {
@@ -674,12 +1006,13 @@ impl AppState {
             {
                 active.take();
             }
-            drop(active);
-            state.handle_transcription_task_result(
-                recording_id,
-                result,
-                "transcription task failed",
-            );
+            if let Err(error) = result {
+                // Aborted tasks are expected on cancellation; avoid logging them
+                // as unexpected failures.
+                if !error.is_cancelled() {
+                    eprintln!("transcription task failed: {error}");
+                }
+            }
         });
 
         Ok(recording)
@@ -689,6 +1022,7 @@ impl AppState {
         &self,
         recording: AudioRecording,
         allow_auto_paste: bool,
+        allow_active_meeting: bool,
     ) -> Result<String, String> {
         let _transition = self.activity_transition.lock().await;
         let id = recording_id_for(&recording);
@@ -705,6 +1039,9 @@ impl AppState {
         }
         if self.session.lock().await.is_some() {
             return Err("stop dictation before importing audio".to_string());
+        }
+        if !allow_active_meeting && self.meeting_session.lock().await.is_some() {
+            return Err("stop meeting mode before importing audio".to_string());
         }
 
         let language = {
@@ -762,12 +1099,11 @@ impl AppState {
             if active.as_ref().is_some_and(|task| task.recording_id == id) {
                 active.take();
             }
-            drop(active);
-            state.handle_transcription_task_result(
-                id,
-                result,
-                "managed audio transcription task failed",
-            );
+            if let Err(error) = result {
+                if !error.is_cancelled() {
+                    eprintln!("managed audio transcription task failed: {error}");
+                }
+            }
         });
 
         Ok(id.to_string())
@@ -891,6 +1227,9 @@ impl AppState {
 
     pub async fn retry_transcription(&self, id: Uuid) -> Result<String, String> {
         let _transition = self.activity_transition.lock().await;
+        if self.meeting_session.lock().await.is_some() {
+            return Err("stop meeting mode before retrying a transcription".to_string());
+        }
         let mut active = self.active_transcription.lock().await;
         if active.is_some() {
             return Err("wait for the active transcription to finish before retrying".to_string());
@@ -954,8 +1293,11 @@ impl AppState {
             if active.as_ref().is_some_and(|task| task.recording_id == id) {
                 active.take();
             }
-            drop(active);
-            state.handle_transcription_task_result(id, result, "retry transcription task failed");
+            if let Err(error) = result {
+                if !error.is_cancelled() {
+                    eprintln!("retry transcription task failed: {error}");
+                }
+            }
         });
 
         Ok(id.to_string())
@@ -1017,8 +1359,9 @@ impl AppState {
         let visible_id = id.to_string();
         let audio_path = recording.output_path.clone();
 
-        // Parse the bounded manual dictionary before starting work, then keep
-        // the compiled matcher in memory for this transcription.
+        // Compile the manual and permissioned Retex vocabulary once per job.
+        // Settings writes validate both sources, so a hand-edited invalid file
+        // degrades to no dictionary rather than blocking transcription.
         let (language, auto_copy, auto_paste, add_space, dictionary) = {
             let cfg = self.config.lock().map_err(|e| e.to_string())?;
             let cfg = cfg.get();
@@ -1027,8 +1370,8 @@ impl AppState {
                 cfg.auto_copy_to_clipboard,
                 cfg.auto_paste_transcription,
                 cfg.add_space_after_sentence,
-                CustomDictionary::parse(&cfg.custom_dictionary)
-                    .map_err(|error| error.to_string())?,
+                CustomDictionary::from_sources(&cfg.custom_dictionary, &cfg.retex_dictionary)
+                    .unwrap_or_default(),
             )
         };
 
@@ -1104,7 +1447,7 @@ impl AppState {
                     show_timestamps: config.show_timestamps,
                     temperature: config.temperature as f32,
                     no_speech_threshold: config.no_speech_threshold as f32,
-                    initial_prompt: dictionary.combined_initial_prompt(&config.initial_prompt),
+                    initial_prompt: dictionary.initial_prompt(&config.initial_prompt),
                     use_beam_search: config.use_beam_search,
                     beam_size: config.beam_size as i32,
                 },
@@ -1131,16 +1474,16 @@ impl AppState {
 
         match text {
             Ok(text) => {
-                // Apply local vocabulary corrections before the transcript is
-                // written to history, copied, emitted, or pasted.
-                let text = dictionary.apply(&text);
+                // Dictionary post-processing happens before history, events,
+                // clipboard, and paste for every transcription backend.
+                let processed_text = dictionary.apply(&text);
                 let final_text = if add_space
-                    && !text.is_empty()
-                    && text.ends_with(|c: char| c.is_ascii_punctuation())
+                    && !processed_text.is_empty()
+                    && processed_text.ends_with(|c: char| c.is_ascii_punctuation())
                 {
-                    format!("{text} ")
+                    format!("{processed_text} ")
                 } else {
-                    text
+                    processed_text
                 };
 
                 // Update history with the completed transcription. Do not
@@ -1180,6 +1523,10 @@ impl AppState {
                             row.transcription.clone(),
                             Some(language.clone()),
                         )?;
+                        self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                            transcriptions_failed: 1,
+                            ..crate::telemetry::UsageCounters::default()
+                        });
                         return Err(row.transcription);
                     }
                 }
@@ -1189,6 +1536,11 @@ impl AppState {
                     final_text.clone(),
                     Some(language.clone()),
                 )?;
+                self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    transcriptions_completed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
+
                 // Auto-copy to the system clipboard if enabled.
                 if auto_copy {
                     if let Err(e) = self.app.clipboard().write_text(final_text.clone()) {
@@ -1201,14 +1553,26 @@ impl AppState {
                 // successful end-to-end transcription.
                 #[cfg(target_os = "macos")]
                 if auto_paste && allow_auto_paste && bridge::paste_text(&final_text) <= 0 {
+                    // Keep the transcript recoverable: the indicator tells the
+                    // user to paste it manually, so it must be on the clipboard.
+                    if !auto_copy {
+                        if let Err(e) = self.app.clipboard().write_text(final_text.clone()) {
+                            eprintln!("failed to copy transcript after paste failure: {e}");
+                        }
+                    }
                     let message = if bridge::is_accessibility_trusted(false) {
                         "transcription completed, but UltraVox could not insert it into the original text field; select the field and try again"
                     } else {
                         "transcription completed, but UltraVox could not insert it; enable UltraVox in System Settings > Privacy & Security > Accessibility"
                     };
+                    eprintln!("paste in place failed for recording {id}; transcript left on the clipboard");
                     bridge::set_indicator_state("paste-failed");
                     tokio::time::sleep(Duration::from_millis(1_600)).await;
                     return Err(message.to_string());
+                }
+                #[cfg(target_os = "macos")]
+                if auto_paste && allow_auto_paste {
+                    bridge::set_indicator_state("inserted");
                 }
 
                 Ok(final_text)
@@ -1251,6 +1615,10 @@ impl AppState {
                     failure_text.clone(),
                     Some(language.clone()),
                 )?;
+                self.record_telemetry_usage(crate::telemetry::UsageCounters {
+                    transcriptions_failed: 1,
+                    ..crate::telemetry::UsageCounters::default()
+                });
                 #[cfg(target_os = "macos")]
                 {
                     bridge::set_indicator_state("failed");
@@ -1265,72 +1633,149 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::{sleep, Duration};
+    use uuid::Uuid;
 
-    fn row(id: Uuid, status: RecordingStatus) -> RecordingRow {
-        let mut row = RecordingRow {
-            id,
-            timestamp: Utc::now(),
-            file_name: "recording.wav".to_string(),
-            title: String::new(),
-            preview: String::new(),
-            transcription: String::new(),
-            language: "en".to_string(),
-            duration_seconds: 1.0,
-            status,
-            progress: 0.0,
-            source_file_url: None,
-        };
-        row.refresh_display();
-        row
-    }
-
-    #[test]
-    fn watcher_surfaces_inner_task_errors() {
-        assert_eq!(
-            transcription_task_failure(Ok(Err("invalid dictionary".to_string()))),
-            Some("invalid dictionary".to_string())
-        );
-        assert_eq!(transcription_task_failure(Ok(Ok("done".to_string()))), None);
-    }
-
-    #[test]
-    fn inner_task_errors_fail_pending_and_transcribing_rows() {
-        let mut history = RecordingHistory::new_in_memory().unwrap();
-        for status in [RecordingStatus::Pending, RecordingStatus::Transcribing] {
-            let id = Uuid::new_v4();
-            history.insert(&row(id, status)).unwrap();
-            let changed = mark_incomplete_recording_failed(
-                &mut history,
-                id,
-                "dictionary line 1 contains an invalid field",
-            )
-            .unwrap();
-            assert!(changed.is_some());
-            let persisted = history.get(id).unwrap().unwrap();
-            assert_eq!(persisted.status, RecordingStatus::Failed);
-            assert_eq!(persisted.progress, 1.0);
-            assert_eq!(
-                persisted.transcription,
-                "dictionary line 1 contains an invalid field"
-            );
+    fn meeting_detection(id: &str, key: char) -> MeetingDetection {
+        MeetingDetection {
+            version: 1,
+            detection_id: id.to_string(),
+            provider: crate::events::MeetingProvider::GoogleMeet,
+            meeting_key: key.to_string().repeat(64),
+            detected_at_ms: 0,
         }
     }
 
     #[test]
-    fn task_error_handler_does_not_overwrite_terminal_rows() {
-        let mut history = RecordingHistory::new_in_memory().unwrap();
-        let id = Uuid::new_v4();
-        let mut completed = row(id, RecordingStatus::Completed);
-        completed.transcription = "finished".to_string();
-        history.insert(&completed).unwrap();
+    fn pruning_an_expired_prompt_records_a_terminal_decision() {
+        let now = Instant::now();
+        let detection = meeting_detection("expired", 'a');
+        let mut state = MeetingDetectionState {
+            pending: Some(PendingMeetingDetection {
+                detection,
+                expires_at: now.checked_sub(Duration::from_millis(1)).unwrap(),
+            }),
+            ..MeetingDetectionState::default()
+        };
 
-        assert!(
-            mark_incomplete_recording_failed(&mut history, id, "late error")
-                .unwrap()
-                .is_none()
+        assert!(AppState::prune_meeting_detection_state(&mut state, now));
+        assert!(state.pending.is_none());
+        assert!(matches!(
+            state.decisions.get("expired"),
+            Some((_, MeetingDecision::Declined))
+        ));
+    }
+
+    #[test]
+    fn failed_accept_never_overwrites_a_newer_or_expired_prompt() {
+        let now = Instant::now();
+        let newer = meeting_detection("newer", 'b');
+        let mut superseded = MeetingDetectionState {
+            pending: Some(PendingMeetingDetection {
+                detection: newer,
+                expires_at: now + Duration::from_secs(30),
+            }),
+            ..MeetingDetectionState::default()
+        };
+
+        assert!(!AppState::release_meeting_accept_state(
+            &mut superseded,
+            meeting_detection("old", 'a'),
+            now + Duration::from_secs(30),
+            true,
+            now,
+        ));
+        assert_eq!(
+            superseded
+                .pending
+                .as_ref()
+                .map(|pending| pending.detection.detection_id.as_str()),
+            Some("newer")
         );
-        let persisted = history.get(id).unwrap().unwrap();
-        assert_eq!(persisted.status, RecordingStatus::Completed);
-        assert_eq!(persisted.transcription, "finished");
+        assert!(matches!(
+            superseded.decisions.get("old"),
+            Some((_, MeetingDecision::Declined))
+        ));
+
+        let mut expired = MeetingDetectionState::default();
+        assert!(!AppState::release_meeting_accept_state(
+            &mut expired,
+            meeting_detection("expired", 'c'),
+            now.checked_sub(Duration::from_millis(1)).unwrap(),
+            true,
+            now,
+        ));
+        assert!(expired.pending.is_none());
+    }
+
+    #[test]
+    fn failed_accept_restores_the_current_unexpired_prompt() {
+        let now = Instant::now();
+        let mut state = MeetingDetectionState::default();
+        state
+            .decisions
+            .insert("current".to_string(), (now, MeetingDecision::InFlight));
+
+        assert!(AppState::release_meeting_accept_state(
+            &mut state,
+            meeting_detection("current", 'd'),
+            now + Duration::from_secs(30),
+            true,
+            now,
+        ));
+        assert_eq!(
+            state
+                .pending
+                .as_ref()
+                .map(|pending| pending.detection.detection_id.as_str()),
+            Some("current")
+        );
+        assert!(!state.decisions.contains_key("current"));
+    }
+
+    #[test]
+    fn failed_accept_is_terminal_while_other_activity_blocks_meeting_mode() {
+        let now = Instant::now();
+        let mut state = MeetingDetectionState::default();
+        state
+            .decisions
+            .insert("blocked".to_string(), (now, MeetingDecision::InFlight));
+
+        assert!(!AppState::release_meeting_accept_state(
+            &mut state,
+            meeting_detection("blocked", 'e'),
+            now + Duration::from_secs(30),
+            false,
+            now,
+        ));
+        assert!(state.pending.is_none());
+        assert!(matches!(
+            state.decisions.get("blocked"),
+            Some((_, MeetingDecision::Declined))
+        ));
+    }
+
+    #[tokio::test]
+    async fn active_transcription_abort_handle_cancels_underlying_task() {
+        // A transcription task stores an abort handle so that cancellation can
+        // stop the Rust task even if the native engine has not yet claimed the
+        // work. This test would not compile on the old ActiveTranscription
+        // struct and would fail if the abort did not actually cancel the task.
+        let task = tokio::spawn(async {
+            sleep(Duration::from_secs(3600)).await;
+            "finished"
+        });
+        let handle = task.abort_handle();
+        let active = ActiveTranscription {
+            recording_id: Uuid::new_v4(),
+            abort_handle: handle,
+        };
+        active.abort_handle.abort();
+        let result = task.await;
+        assert!(result.is_err(), "expected the task to be aborted");
+        assert!(
+            result.unwrap_err().is_cancelled(),
+            "expected the task to be cancelled, not panic"
+        );
     }
 }

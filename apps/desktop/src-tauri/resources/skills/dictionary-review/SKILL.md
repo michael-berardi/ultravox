@@ -1,7 +1,7 @@
 ---
 name: ultravox-dictionary-review
 description: >
-  Audit local UltraVox / UltraVox Light transcripts and safely update the
+  Audit local UltraVox transcripts and safely update the
   app's custom dictionary (spoken aliases corrected to canonical terms).
   Strictly local: reads recordings only from a scratch copy, proposes
   conservative verified corrections, edits exactly one settings field, and
@@ -135,7 +135,7 @@ Canonical-only term
 - Structural: parse `settings.toml` with a TOML parser; confirm the entry,
   alias, and byte limits hold.
 - Behavioral (preferred): locate `ultravox-control` (PATH, an
-  `UltraVox-Pro-macos-*.zip` payload's `bin/` directory, or a repository
+  `UltraVox-macos-*.zip` payload's `bin/` directory, or a repository
   `target/release/` build), then for each new alias run:
 
   ```bash

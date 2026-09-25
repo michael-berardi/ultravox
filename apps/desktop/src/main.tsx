@@ -1,19 +1,31 @@
-import React, { useEffect, type ReactNode } from "react";
+import { installNativeMirror } from "./lib/nativeMirror";
+import React, { useEffect } from "react";
+import type { ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import type { AppConfig } from "./ipc";
 import { SettingsPage } from "./pages/SettingsPage";
-import { initTheme } from "./themes";
+import type { AppConfig } from "./ipc";
+import {
+  ThemeHarness,
+  parseHarnessPro,
+  parseHarnessSource,
+  parseHarnessSpectrum,
+  parseHarnessState,
+  qaProStatus,
+} from "./qa/ThemeHarness";
+import { initTheme, THEMES } from "./themes";
 import "./index.css";
 
+installNativeMirror();
+
 const params = new URLSearchParams(window.location.search);
+const requestedTheme = import.meta.env.DEV ? params.get("qa-theme") : null;
+const harnessTheme = THEMES.some((theme) => theme.id === requestedTheme)
+  ? requestedTheme
+  : null;
+const harnessPro = parseHarnessPro(params.get("qa-pro"));
 const requestedSettings = import.meta.env.DEV ? params.get("qa-settings") : null;
-
-if (/Macintosh|MacIntel/.test(navigator.platform || navigator.userAgent)) {
-  document.documentElement.dataset.chrome = "traffic-lights";
-}
-void initTheme();
-
+const qaDictionaryReady = params.get("qa-dictionary-state") === "ready";
 const qaConfig: AppConfig = {
   config_version: 4,
   selected_engine: "fluidaudio",
@@ -28,12 +40,12 @@ const qaConfig: AppConfig = {
   temperature: 0,
   no_speech_threshold: 0.6,
   initial_prompt: "",
-  custom_dictionary: "Retex = retext\nUltraVox = Ultra Box\nKatherina Lucero",
-  retex_dictionary: "",
-  retex_vault_paths: [],
-  retex_vault_identities: [],
-  retex_auto_refresh: false,
-  retex_last_refresh_at: null,
+  custom_dictionary: "Retex = retext\nUltraVox = Ultra Box\nMarisol Vega",
+  retex_dictionary: qaDictionaryReady ? "Cloudflare\nOpenAI\nRetex\nUltraVox" : "",
+  retex_vault_paths: qaDictionaryReady ? ["/Users/example/Retex Vault"] : [],
+  retex_vault_identities: qaDictionaryReady ? ["qa:example"] : [],
+  retex_auto_refresh: qaDictionaryReady,
+  retex_last_refresh_at: qaDictionaryReady ? "2026-09-03T20:00:00Z" : null,
   use_beam_search: false,
   beam_size: 5,
   debug_mode: false,
@@ -52,10 +64,31 @@ const qaConfig: AppConfig = {
   theme: "midnight",
   media_panel_enabled: false,
   reactive_visuals_enabled: false,
-  show_meeting_mode: false,
-  show_lecture_mode: false,
-  show_transcribe_url: true,
+  show_meeting_mode: true,
+  show_lecture_mode: true,
+  show_transcribe_url: false,
 };
+const harnessReactive = params.get("qa-reactive") !== "0";
+const requestedRecordingLevel = Number(params.get("qa-recording-level") ?? 0);
+const harnessRecordingLevel = Number.isFinite(requestedRecordingLevel)
+  ? Math.min(1, Math.max(0, requestedRecordingLevel))
+  : 0;
+const requestedTranscriptionDuration = Number(params.get("qa-transcription-ms") ?? 0);
+const harnessTranscriptionDuration = Number.isFinite(requestedTranscriptionDuration)
+  ? Math.max(0, requestedTranscriptionDuration)
+  : 0;
+
+// macOS draws the traffic lights inside the themed surface once the window
+// uses the overlay title bar; reserve the inset via CSS chrome hooks.
+if (/Macintosh|MacIntel/.test(navigator.platform || navigator.userAgent)) {
+  document.documentElement.dataset.chrome = "traffic-lights";
+}
+
+if (harnessTheme) {
+  document.documentElement.dataset.theme = harnessTheme;
+} else {
+  void initTheme();
+}
 
 function BootReady({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -71,8 +104,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <SettingsPage
           initialConfig={qaConfig}
           initialTab="dictionary"
+          pro={harnessPro ?? qaProStatus("unlocked")}
+          build={harnessPro?.available === false ? "open-source" : "official"}
           qaMode
           onClose={() => undefined}
+        />
+      ) : harnessTheme ? (
+        <ThemeHarness
+          drop={params.get("qa-drop") === "1"}
+          pro={harnessPro}
+          reactive={harnessReactive}
+          recordingLevel={harnessRecordingLevel}
+          transcriptionDurationMs={harnessTranscriptionDuration}
+          state={parseHarnessState(params.get("qa-state"))}
+          source={parseHarnessSource(params.get("qa-source"))}
+          spectrum={parseHarnessSpectrum(params.get("qa-spectrum"))}
         />
       ) : (
         <App />
