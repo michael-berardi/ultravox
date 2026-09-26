@@ -1,6 +1,14 @@
 # UltraVox
 
-**Private, on-device transcription for macOS, Windows, and Linux. One product: a free, open-source core and an optional UltraVox Pro license that unlocks Pro features in the official build and funds development.**
+**Private, on-device transcription for macOS, Windows, and Linux.**
+Dictate into any app, transcribe meetings, lectures and media, and keep every recording on your machine. The core is free and open source; an optional Pro license unlocks extra features and funds development.
+
+<p align="center">
+  <a href="https://github.com/michael-berardi/ultravox/releases/latest"><img src="https://img.shields.io/github/v/release/michael-berardi/ultravox?label=release" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/michael-berardi/ultravox" alt="MIT License" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" alt="macOS, Windows and Linux" />
+  <img src="https://img.shields.io/badge/transcription-on--device-2ea44f" alt="On-device transcription" />
+</p>
 
 <p align="center">
   <a href="https://github.com/michael-berardi/ultravox/releases/latest"><strong>Download UltraVox</strong></a>
@@ -11,8 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/image.png" alt="UltraVox ready to record" width="360" />
-  <img src="docs/media-console.png" alt="UltraVox instrument-console theme with now-playing controls" width="360" />
+  <img src="docs/media-console.png" alt="UltraVox ready to record in the Instrument Console theme, with now-playing controls and a live spectrum" width="400" />
 </p>
 
 ## Why UltraVox
