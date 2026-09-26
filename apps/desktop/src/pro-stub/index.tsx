@@ -36,7 +36,7 @@ export function ProDownloadCard({ copy }: { copy: string }) {
 
 export function ProLicensePanel(_props: ProLicensePanelProps) {
   return (
-    <ProDownloadCard copy="UltraVox is free and open source. Pro is an optional license that unlocks Meeting mode, Lecture mode, Voice Studio, custom dictionaries, the media console and signature themes in the official UltraVox build." />
+    <ProDownloadCard copy="UltraVox is free and open source. Pro is an optional license that unlocks Meeting mode, Lecture mode, Voice Studio, Retex vocabulary, the media console and signature themes in the official UltraVox build." />
   );
 }
 

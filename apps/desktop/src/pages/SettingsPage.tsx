@@ -1162,7 +1162,7 @@ function AppearanceSettings({ config, pro, onChange, onOpenPro }: SettingsSectio
                       <span className="theme-lock" role="presentation">
                         <span className="theme-lock-title">{theme.name} is a Pro theme</span>
                         <span className="theme-lock-copy">
-                          Pro unlocks Meeting mode, Lecture mode, Voice Studio, custom dictionaries, the media console and all {THEMES.length - THEMES.filter((t) => isFreeTheme(t.id)).length} signature themes.
+                          Pro unlocks Meeting mode, Lecture mode, Voice Studio, Retex vocabulary, the media console and all {THEMES.length - THEMES.filter((t) => isFreeTheme(t.id)).length} signature themes.
                         </span>
                         <span className="theme-lock-actions">
                           <button

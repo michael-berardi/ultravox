@@ -90,9 +90,9 @@ Download the official build for your platform from the [latest GitHub release](h
 | Windows | `UltraVox-windows-x86_64-setup.exe` |
 | Linux | `UltraVox-linux-x86_64.AppImage` |
 
-macOS packages are Developer ID signed, notarized by Apple, and staple-verified. The app installs to `/Applications/UltraVox.app`. Building from source gives you the same core without the Pro module; see [Build from source](#build-from-source). Both use the same signed application identity, canonical install path, settings directory, and OS permission grants, so upgrading never creates a second permission set.
+Files named `UltraVox-Light-*` and `UltraVox-Pro-*` are the same build under older names, kept so existing installs can update.
 
-`.deb` and `.rpm` packages, when provided, update through the system package manager.
+macOS packages are Developer ID signed, notarized by Apple, and staple-verified. The app installs to `/Applications/UltraVox.app`. Building from source gives you the same core without the Pro module; see [Build from source](#build-from-source). Both use the same signed application identity, canonical install path, settings directory, and OS permission grants, so upgrading never creates a second permission set.
 
 ## Quick start
 
@@ -139,9 +139,6 @@ pnpm test:all           # cargo tests + desktop tests + release contract
 
 # Build the open-source app (Pro module not included)
 pnpm --filter ultravox-desktop tauri build --no-default-features --features custom-protocol
-
-# Export a clean public source tree (drops Pro sources and private tooling)
-pnpm export:oss ./ultravox-open-source
 ```
 
 The official builds are produced by the signed Implose release workflow, which additionally links the closed Pro module. A plain local Tauri macOS bundle is ad-hoc signed. Do not install it over the canonical app when testing permission continuity: macOS ties Accessibility, Microphone, and Screen Recording grants to the designated signing requirement. Installed QA candidates must use the stable Developer ID app-only packaging workflow; published builds additionally require notarization.
@@ -170,7 +167,7 @@ Optional platform integrations degrade safely when metadata or permissions are u
 
 ## Contributing
 
-Issues and focused pull requests are welcome.
+Issues and focused pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 1. Search existing issues before opening a duplicate.
 2. Describe the user-visible behavior, operating system version, and reproduction steps.
