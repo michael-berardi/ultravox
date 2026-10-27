@@ -1,7 +1,11 @@
 #[cfg(feature = "mirror-debug")]
 mod hot_assets;
+#[cfg(feature = "local-qa")]
+mod local_renderer_qa;
 #[cfg(feature = "mirror-debug")]
 mod mirror;
+#[cfg(feature = "local-qa")]
+mod native_qa_visibility;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -9,8 +13,12 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, Wry};
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod bridge_guard;
 mod commands;
 mod events;
+#[cfg_attr(feature = "mirror-debug", allow(dead_code))]
+mod legacy_migration;
 mod state;
 mod telemetry;
 mod update;
@@ -45,19 +53,17 @@ pub use commands::{
     bridge_version, check_for_update, copy_to_clipboard, delete_recording, dictionary_skill_info,
     export_recording, forward_voice_trigger, frontmost_app, get_app_info, get_app_status,
     get_app_telemetry_status, get_audio_devices, get_audio_input_config, get_caret_position,
-    get_download_progress, get_downloads, get_input_level, get_media_state, get_model_catalog,
+    get_download_progress, get_downloads, get_input_level, get_model_catalog,
     get_permission_status, get_recording, get_settings, get_shortcut_settings,
-    get_system_audio_level, get_system_audio_spectrum, get_update_preferences, hide_indicator,
-    import_file, import_url, install_update, is_model_downloaded, list_recordings, media_transport,
-    open_permission_settings, paste_text, prepare_model, record_app_telemetry_usage,
-    report_frontend_error, request_permission, retry_transcription, reveal_dictionary_skill,
-    revoke_retex_vault, search_recordings, set_app_telemetry_enabled, set_retex_auto_refresh,
-    set_settings, set_shortcut_settings, set_system_audio_meter_enabled, set_system_muted,
-    set_system_volume, set_update_preferences, show_indicator, start_download,
-    start_key_combination_hotkey, start_modifier_hotkey, start_recording,
-    stop_key_combination_hotkey, stop_modifier_hotkey, stop_recording, transcribe_file,
-    update_recording, AppInfo, AppStatus, BridgeVersion, CaretPosition, ForwardVoiceTriggerStatus,
-    FrontmostAppBundleIdentifier, TranscriptionResult,
+    get_update_preferences, hide_indicator, import_file, import_url, install_update,
+    is_model_downloaded, list_recordings, open_permission_settings, paste_text, prepare_model,
+    record_app_telemetry_usage, report_frontend_error, request_permission, retry_transcription,
+    reveal_dictionary_skill, revoke_retex_vault, search_recordings, set_app_telemetry_enabled,
+    set_retex_auto_refresh, set_settings, set_shortcut_settings, set_update_preferences,
+    show_indicator, start_download, start_key_combination_hotkey, start_modifier_hotkey,
+    start_recording, stop_key_combination_hotkey, stop_modifier_hotkey, stop_recording,
+    transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion, CaretPosition,
+    ForwardVoiceTriggerStatus, FrontmostAppBundleIdentifier, TranscriptionResult,
 };
 
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<Wry>, Box<dyn std::error::Error>> {
@@ -417,6 +423,10 @@ fn setup_hotkey(app: &AppHandle) {
 pub fn run() {
     #[allow(unused_mut)]
     let mut context = tauri::generate_context!();
+    #[cfg(all(target_os = "macos", not(feature = "mirror-debug")))]
+    if bridge_guard::intercept(&context.config().identifier) {
+        return;
+    }
     #[cfg(feature = "mirror-debug")]
     hot_assets::install_assets(&mut context);
     let builder = tauri::Builder::default();
@@ -429,6 +439,12 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(|invoke| {
+            #[cfg(feature = "local-qa")]
+            if invoke.message.command() == "local_renderer_qa_result" {
+                let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool =
+                    tauri::generate_handler![local_renderer_qa::local_renderer_qa_result];
+                return handler(invoke);
+            }
             #[cfg(feature = "mirror-debug")]
             {
                 if !mirror::invoke_allowed(mirror::LABEL, invoke.message.command()) {
@@ -458,6 +474,7 @@ pub fn run() {
                 get_app_status,
                 bridge_version,
                 get_permission_status,
+                get_legacy_migration_notice,
                 request_permission,
                 open_permission_settings,
                 get_update_preferences,
@@ -520,20 +537,18 @@ pub fn run() {
                 get_audio_devices,
                 get_audio_input_config,
                 get_input_level,
-                get_system_audio_level,
-                get_system_audio_spectrum,
-                set_system_audio_meter_enabled,
                 export_recording,
-                get_media_state,
-                set_system_volume,
-                set_system_muted,
-                media_transport,
             ];
             handler(invoke)
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]
             let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+            // Carry an installed user's data over from the pre-rebrand bundle
+            // identifier before any store opens.
+            #[cfg(not(feature = "mirror-debug"))]
+            legacy_migration::run(app.handle());
 
             let state = AppState::new(app.handle().clone()).map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("failed to initialize app state: {e}"))
@@ -577,6 +592,21 @@ pub fn run() {
         .expect("error while building UltraVox application");
 
     app.run(|app, event| match event {
+        // Closing the main window hides it: UltraVox keeps running for
+        // dictation, and a destroyed window could never be shown again from
+        // the menu, the Dock or UltraTerm's settings request.
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" && !SHUTTING_DOWN.load(Ordering::SeqCst) => {
+            api.prevent_close();
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => show_main_window(app),
         tauri::RunEvent::ExitRequested { api, .. } if !SHUTTING_DOWN.load(Ordering::SeqCst) => {
             api.prevent_exit();
             request_shutdown(app);

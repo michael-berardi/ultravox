@@ -8,10 +8,6 @@ import {
   isModelDownloaded,
   getModelProgress,
   setShortcutSettings,
-  checkForUpdate,
-  getUpdatePreferences,
-  installUpdate,
-  setUpdatePreferences,
   getAppTelemetryStatus,
   setAppTelemetryEnabled,
   getAudioDevices,
@@ -23,7 +19,6 @@ import {
   type ModifierKey,
   type ProStatus,
   type ShortcutSettings as ShortcutSettingsPayload,
-  type UpdateInfo,
   dictionarySkillInfo,
   revealDictionarySkill,
   copyToClipboard,
@@ -34,9 +29,11 @@ import { THEMES, isFreeTheme } from "../themes";
 import { BrandMark, startHeaderDrag } from "../components/BrandMark";
 import { LockIcon, ProLockPrompt } from "../components/ProLock";
 import { ToggleRow } from "../components/ToggleRow";
+import { UpdateButton } from "../components/UpdateButton";
+import { updater, useUpdater } from "../lib/useUpdater";
 import { openStorefront } from "../lib/storefront";
 import { ProLicensePanel, RetexDictionarySettings } from "@pro";
-export type SettingsTab = "shortcut" | "model" | "transcription" | "dictionary" | "privacy" | "appearance" | "pro";
+export type SettingsTab = "shortcut" | "model" | "transcription" | "dictionary" | "privacy" | "appearance" | "updates" | "pro";
 
 interface SettingsPageProps {
   initialConfig: AppConfig;
@@ -186,6 +183,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", pro, buil
       <header className="header" onMouseDown={startHeaderDrag}>
         <BrandMark suffix="Settings" />
         <div className="header-actions">
+          <UpdateButton />
           <button
             className="icon-button"
             title="Close settings"
@@ -204,6 +202,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", pro, buil
         <TabButton id="dictionary" label="Dictionary" active={activeTab} onClick={setActiveTab} />
         <TabButton id="privacy" label="Privacy" active={activeTab} onClick={setActiveTab} />
         <TabButton id="appearance" label="Appearance" active={activeTab} onClick={setActiveTab} />
+        <TabButton id="updates" label="Updates" active={activeTab} onClick={setActiveTab} />
         <TabButton id="pro" label="Pro" active={activeTab} onClick={setActiveTab} />
       </div>
       {error && <div className="settings-error" role="alert">{error}</div>}
@@ -215,6 +214,7 @@ export function SettingsPage({ initialConfig, initialTab = "shortcut", pro, buil
         {activeTab === "dictionary" && <DictionarySettings config={cfg} pro={pro} onChange={updateConfig} onOpenPro={() => setActiveTab("pro")} />}
         {activeTab === "privacy" && <PrivacySettings config={cfg} onChange={updateConfig} />}
         {activeTab === "appearance" && <AppearanceSettings config={cfg} pro={pro} onChange={updateConfig} onOpenPro={() => setActiveTab("pro")} />}
+        {activeTab === "updates" && <UpdateSettings />}
         {activeTab === "pro" && <ProSettings pro={pro} build={build} onProRefresh={onProRefresh} />}
       </div>
 
@@ -964,11 +964,35 @@ function DictionarySettings({
   );
 }
 
+function UpdateSettings() {
+  const { automatic, phase, info, checkError, preferenceError } = useUpdater();
+  return (
+    <div className="settings-group" role="tabpanel" id="panel-updates" aria-labelledby="tab-updates">
+      <div className="settings-card">
+        <h3>Updates</h3>
+        <ToggleRow
+          label="Automatically update"
+          description="Never during a recording."
+          checked={automatic}
+          onChange={(checked) => void updater.setAutomatic(checked)}
+        />
+        <div className="settings-row">
+          <div className="settings-row-label">
+            <label>Version {__APP_VERSION__}</label>
+            <p className="description">
+              {phase === "hidden" || !info ? "Up to date" : `UltraVox ${info.latest_version} is available`}
+            </p>
+          </div>
+        </div>
+        {preferenceError && <p className="settings-error" role="alert">{preferenceError}</p>}
+        {checkError && <p className="settings-error" role="alert">Update check failed: {checkError}</p>}
+      </div>
+    </div>
+  );
+}
+
 function PrivacySettings({ config, onChange }: SettingsSectionProps) {
-  const [automatic, setAutomatic] = useState(false);
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
-  const [updateBusy, setUpdateBusy] = useState(false);
+  const [privacyMessage, setPrivacyMessage] = useState<string | null>(null);
   const [telemetryEnabled, setTelemetryEnabled] = useState(false);
 
   useEffect(() => {
@@ -978,17 +1002,7 @@ function PrivacySettings({ config, onChange }: SettingsSectionProps) {
         if (!cancelled) setTelemetryEnabled(telemetry.enabled);
       })
       .catch((error) => {
-        if (!cancelled) setUpdateMessage(`Telemetry status unavailable: ${String(error)}`);
-      });
-    void Promise.all([getUpdatePreferences(), checkForUpdate()])
-      .then(([preferences, candidate]) => {
-        if (!cancelled) {
-          setAutomatic(preferences.automatic);
-          setUpdate(candidate);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) setUpdateMessage(`Update check unavailable: ${String(error)}`);
+        if (!cancelled) setPrivacyMessage(`Telemetry status unavailable: ${String(error)}`);
       });
     return () => { cancelled = true; };
   }, []);
@@ -1003,46 +1017,10 @@ function PrivacySettings({ config, onChange }: SettingsSectionProps) {
       const prefix = enabled
         ? 'Could not enable telemetry'
         : 'Telemetry is disabled for this run, but the preference could not be saved';
-      setUpdateMessage(`${prefix}: ${String(error)}`);
+      setPrivacyMessage(`${prefix}: ${String(error)}`);
     }
   };
 
-
-  const updateAutomatic = async (enabled: boolean) => {
-    const previous = automatic;
-    setAutomatic(enabled);
-    try {
-      await setUpdatePreferences({ automatic: enabled });
-    } catch (error) {
-      setAutomatic(previous);
-      setUpdateMessage(`Could not update automatic updates: ${String(error)}`);
-      return;
-    }
-    if (enabled && update) {
-      setUpdateBusy(true);
-      try {
-        await installUpdate(update);
-        setUpdateMessage("Update installed. UltraVox is relaunching.");
-      } catch (error) {
-        setUpdateMessage(`Update was not installed: ${String(error)}`);
-      } finally {
-        setUpdateBusy(false);
-      }
-    }
-  };
-
-  const installCandidate = async () => {
-    if (!update) return;
-    setUpdateBusy(true);
-    try {
-      await installUpdate(update);
-      setUpdateMessage("Update installed. UltraVox is relaunching.");
-    } catch (error) {
-      setUpdateMessage(`Update was not installed: ${String(error)}`);
-    } finally {
-      setUpdateBusy(false);
-    }
-  };
 
   return (
     <div className="settings-group" role="tabpanel" id="panel-privacy" aria-labelledby="tab-privacy">
@@ -1060,28 +1038,7 @@ function PrivacySettings({ config, onChange }: SettingsSectionProps) {
           checked={telemetryEnabled}
           onChange={(checked) => void updateTelemetry(checked)}
         />
-      </div>
-      <div className="settings-card">
-        <h3>Updates</h3>
-        <p className="description">Stable releases are checked at launch and daily. Updates are staged and verified before /Applications/UltraVox.app is touched.</p>
-        <ToggleRow
-          label="Install updates automatically"
-          description="Opt in to automatic installation after checksum, identity, sealed-code, and notarization checks."
-          checked={automatic}
-          onChange={(checked) => void updateAutomatic(checked)}
-        />
-        {update && (
-          <div className="settings-row">
-            <div className="settings-row-label">
-              <label>UltraVox {update.latest_version} is available</label>
-              <p className="description">Choose Update now or Later. A failed check leaves the current app untouched.</p>
-            </div>
-            <button className="btn btn-primary" type="button" disabled={updateBusy} onClick={() => void installCandidate()}>
-              {updateBusy ? "Verifying…" : "Update now"}
-            </button>
-          </div>
-        )}
-        {updateMessage && <p className="description" role="status">{updateMessage}</p>}
+        {privacyMessage && <p className="settings-error" role="alert">{privacyMessage}</p>}
       </div>
       <div className="settings-card">
         <h3>Meeting detection</h3>
@@ -1162,7 +1119,7 @@ function AppearanceSettings({ config, pro, onChange, onOpenPro }: SettingsSectio
                       <span className="theme-lock" role="presentation">
                         <span className="theme-lock-title">{theme.name} is a Pro theme</span>
                         <span className="theme-lock-copy">
-                          Pro unlocks Meeting mode, Lecture mode, Voice Studio, Retex vocabulary, the media console and all {THEMES.length - THEMES.filter((t) => isFreeTheme(t.id)).length} signature themes.
+                          Pro unlocks Meeting mode, Lecture mode, Voice Studio, custom dictionaries and all {THEMES.length - THEMES.filter((t) => isFreeTheme(t.id)).length} signature themes.
                         </span>
                         <span className="theme-lock-actions">
                           <button
@@ -1194,25 +1151,6 @@ function AppearanceSettings({ config, pro, onChange, onOpenPro }: SettingsSectio
             );
           })}
         </ul>
-      </div>
-      <div className="settings-card">
-        <div className="settings-card-heading">
-          <div>
-            <h3>Media panel</h3>
-          </div>
-        </div>
-        <ToggleRow
-          label="Show media panel"
-          description="Show now-playing source, transport, and system volume below your latest message while another app plays audio."
-          checked={config.media_panel_enabled}
-          onChange={(checked) => onChange({ media_panel_enabled: checked })}
-        />
-        <ToggleRow
-          label="Reactive meters"
-          description="Visualize your live microphone level while recording and the real 11-band system-audio frequency spectrum during media playback, with theme-specific effects. Off by default; disabling removes the meters and every audio-driven effect."
-          checked={config.reactive_visuals_enabled}
-          onChange={(checked) => onChange({ reactive_visuals_enabled: checked })}
-        />
       </div>
     </div>
   );

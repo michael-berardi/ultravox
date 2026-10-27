@@ -32,6 +32,10 @@ int32_t ultravox_macos_bridge_microphone_authorization_status(void);
 int32_t ultravox_macos_bridge_screen_recording_authorization_status(void);
 int32_t ultravox_macos_bridge_request_screen_recording_access(void);
 int32_t ultravox_macos_bridge_request_microphone_access(void);
+/* Explicit UI request: 0 pending, 1 authorized, 2 denied, 3 restricted, 4 timeout. */
+int32_t ultravox_macos_bridge_request_microphone_access_outcome(void);
+/* Read-only Bundle.main bundleId/bundlePath/executablePath JSON; free with free_string. */
+char *ultravox_macos_bridge_main_bundle_identity(void);
 
 /* Captures system audio and optionally microphone audio through ScreenCaptureKit. */
 int32_t ultravox_macos_bridge_start_meeting_capture(
@@ -79,86 +83,10 @@ void ultravox_macos_bridge_set_meeting_hotkey_callback(
 int32_t ultravox_macos_bridge_show_indicator(double x, double y);
 int32_t ultravox_macos_bridge_set_indicator_state(const char *state);
 int32_t ultravox_macos_bridge_hide_indicator(void);
-/* Media panel support. Source activity detection uses only public CoreAudio
- * process state, excludes this process, and never captures audio. The optional
- * reactive meter uses a separate audio-only ScreenCaptureKit stream while
- * visible; it excludes this process and never captures the microphone.
- */
-
-/* Returns 1 when another process is running output audio and fills its PID,
- * app_name / bundle_id (either string may remain NULL when unknown); the
- * MediaRemote client PID is preferred, then a conservative browser
- * helper/main bundle-family match, then the first active process. Returns 0
- * when no other process is active. Caller frees strings with
- * ultravox_macos_bridge_free_string.
- */
-int32_t ultravox_macos_bridge_active_audio_process(
-    int32_t *process_id,
-    char **app_name,
-    char **bundle_id
-);
-
-/* Starts/stops the audio-only system-output meter. Returns 1 on success or 0
- * with an allocated error string. Caller frees the error string with
- * ultravox_macos_bridge_free_string. Level/spectrum values are always [0, 1].
- */
-int32_t ultravox_macos_bridge_set_system_audio_meter_enabled(
-    int32_t enabled,
-    char **error
-);
-double ultravox_macos_bridge_get_system_audio_level(void);
-int32_t ultravox_macos_bridge_get_system_audio_spectrum(
-    double *bands,
-    int32_t capacity
-);
-
-/* Default-output volume in [0, 1]. Getters/setters return 1 on success and 0
- * when no default output device exists or it lacks a volume/mute control
- * (unsupported state). Callers must surface unsupported as "not available",
- * never as a fabricated value.
- */
-int32_t ultravox_macos_bridge_get_output_volume(double *volume);
-int32_t ultravox_macos_bridge_set_output_volume(double volume);
-int32_t ultravox_macos_bridge_get_output_muted(int32_t *muted);
-int32_t ultravox_macos_bridge_set_output_muted(int32_t muted);
-
-/* Optional transport/metadata through MediaRemote, resolved at runtime via
- * dlopen/dlsym only; nothing is statically linked. Transport availability
- * depends only on the send symbol; metadata absence never blocks controls.
- */
-/* Writes 1 for play/pause when the send API resolves. Previous/next require
- * supported-command and command-info APIs to report enabled. Missing
- * discovery symbols leave previous/next at 0.
- */
-int32_t ultravox_macos_bridge_media_transport_capabilities(
-    int32_t *play_pause,
-    int32_t *previous,
-    int32_t *next
-);
-
-/* Returns 1 and fills the owning PID, app name / bundle ID, title / artist /
- * album (NULL when absent), elapsed/duration seconds (-1 when unknown), plus
- * *is_playing (1 playing, 0 not playing, -1 unknown); 0 when MediaRemote is
- * unavailable or the reply did not arrive in time. Caller frees strings.
- */
-int32_t ultravox_macos_bridge_now_playing(
-    int32_t *process_id,
-    char **app_name,
-    char **bundle_id,
-    char **title,
-    char **artist,
-    char **album,
-    double *elapsed_seconds,
-    double *duration_seconds,
-    int32_t *is_playing
-);
-
-/* command is "play_pause", "previous", or "next". Returns 1 when sent,
- * 0 when unavailable or delivery failed, -1 for an unknown command.
- */
-int32_t ultravox_macos_bridge_media_transport(const char *command);
-
-
+/* Keeps macOS from App Napping UltraVox while dictation records or
+ * transcribes. begin returns a token; end returns 1 if it was held. */
+int64_t ultravox_macos_bridge_begin_latency_activity(const char *reason);
+int32_t ultravox_macos_bridge_end_latency_activity(int64_t token);
 /* Transcribes the audio file at path using FluidAudio / CoreML.
  * Defaults to the English v2 model. On success, writes a malloc-allocated
  * string into *text and returns 1. Caller must free *text with

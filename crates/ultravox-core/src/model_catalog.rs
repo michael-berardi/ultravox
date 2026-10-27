@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-/// FluidAudio / ASR model family.
+/// ASR model family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelFamily {
     Whisper,
     FluidAudio,
+    /// Phonon-2 (English), run by the in-process native CPU engine.
+    Phonon,
 }
 
 /// Logical model version identifier.
@@ -51,22 +53,28 @@ pub struct ModelCatalog {
     pub models: Vec<ModelEntry>,
 }
 
+/// The English model on every platform: Phonon-2 (164 MB, CC-BY-4.0).
+fn phonon_entry() -> ModelEntry {
+    ModelEntry {
+        id: "phonon-2-en".to_string(),
+        family: ModelFamily::Phonon,
+        version: ModelVersion::V2,
+        name: "English (Phonon-2)".to_string(),
+        description: "Fast, accurate English transcription in a 164 MB download (default)."
+            .to_string(),
+        url: "https://huggingface.co/FermionResearch/Phonon-2/resolve/main/phonon-2.bps.tar.zst"
+            .to_string(),
+        filename: crate::phonon::MODEL_DIR_NAME.to_string(),
+        size_bytes: Some(163_515_201),
+        is_default: true,
+    }
+}
+
 impl Default for ModelCatalog {
     fn default() -> Self {
         #[cfg(target_os = "macos")]
         let models = vec![
-            ModelEntry {
-                id: "fluidaudio-en-v2".to_string(),
-                family: ModelFamily::FluidAudio,
-                version: ModelVersion::V2,
-                name: "English (Parakeet v2)".to_string(),
-                description: "Optimized English transcription model (default).".to_string(),
-                url: "https://huggingface.co/fluidaudio/asr-en-v2/resolve/main/model.bin"
-                    .to_string(),
-                filename: "fluidaudio-en-v2.bin".to_string(),
-                size_bytes: Some(464_470_016),
-                is_default: true,
-            },
+            phonon_entry(),
             ModelEntry {
                 id: "fluidaudio-multilingual-v3".to_string(),
                 family: ModelFamily::FluidAudio,
@@ -83,18 +91,7 @@ impl Default for ModelCatalog {
         ];
         #[cfg(not(target_os = "macos"))]
         let models = vec![
-            ModelEntry {
-                id: "whisper-base-en".to_string(),
-                family: ModelFamily::Whisper,
-                version: ModelVersion::V2,
-                name: "English (Whisper base.en)".to_string(),
-                description: "Fast English transcription for Windows and Linux.".to_string(),
-                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
-                    .to_string(),
-                filename: "ggml-base.en.bin".to_string(),
-                size_bytes: Some(147_964_211),
-                is_default: true,
-            },
+            phonon_entry(),
             ModelEntry {
                 id: "whisper-base-multilingual".to_string(),
                 family: ModelFamily::Whisper,
@@ -134,11 +131,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_catalog_has_english_v2_default() {
+    fn default_catalog_has_phonon_english_default() {
         let catalog = ModelCatalog::default();
         let default = catalog.default_model().expect("default model should exist");
-        assert_eq!(default.id, "fluidaudio-en-v2");
-        assert!(matches!(default.version, ModelVersion::V2));
+        assert_eq!(default.id, "phonon-2-en");
+        assert_eq!(default.family, ModelFamily::Phonon);
+        assert!(catalog.get("fluidaudio-en-v2").is_none());
+        assert!(catalog.get("whisper-base-en").is_none());
     }
 
     #[test]

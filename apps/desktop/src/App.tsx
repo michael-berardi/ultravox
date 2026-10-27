@@ -4,25 +4,34 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MainWindow } from "./pages/MainWindow";
 import { VoiceStudioPage } from "@pro";
 import { SettingsPage, type SettingsTab } from "./pages/SettingsPage";
+import { useUpdaterLifecycle } from "./lib/useUpdater";
 import { useProStatus } from "./lib/useProStatus";
 import {
+  canRequestPermission,
+  createPermissionReadinessController,
+  dictationAccess,
+  microphonePromptNote,
+  nextMicrophonePromptState,
+  permissionActionFailure,
+  permissionStateLabel,
+  type MicrophonePromptState,
+  type PermissionReadinessController,
+} from "./lib/permissionReadiness";
+import {
   bootstrapDistributionAccess,
-  checkForUpdate,
   getAppInfo,
   getAppStatus,
   getAppTelemetryStatus,
+  getLegacyMigrationNotice,
   getPendingMeetingDetection,
   getPermissionStatus,
   getSettings,
-  getUpdatePreferences,
-  installUpdate,
   onMeetingDetectionPending,
   openPermissionSettings,
   registerDeviceLicense,
   requestPermission,
   respondMeetingDetection,
   setAppTelemetryEnabled,
-  setUpdatePreferences,
   type AppConfig,
   type AppStatusResponse,
   type BuildFlavor,
@@ -30,14 +39,13 @@ import {
   type PermissionKind,
   type PermissionStatus,
   type TelemetryStatus,
-  type UpdateInfo,
 
 } from "./ipc";
 const PERMISSIONS: Array<{ kind: PermissionKind; label: string; copy: string }> = [
 
   { kind: "microphone", label: "Microphone", copy: "Record speech for local transcription." },
-  { kind: "accessibility", label: "Accessibility", copy: "Place the transcription in the focused text field." },
-  { kind: "screen_recording", label: "Screen Recording", copy: "Capture meeting system audio with ScreenCaptureKit." },
+  { kind: "accessibility", label: "Accessibility (optional)", copy: "Place the transcription in the focused text field." },
+  { kind: "screen_recording", label: "Screen Recording (optional)", copy: "Capture meeting system audio with ScreenCaptureKit." },
 ];
 function TelemetryConsent({
   onDecision,
@@ -79,106 +87,66 @@ function TelemetryConsent({
     </div>
   );
 }
-function UpdatePrompt({
-  info,
-  automatic,
-  busy,
-  error,
-  onAutomaticChange,
-  onInstall,
-  onLater,
-}: {
-  info: UpdateInfo;
-  automatic: boolean;
-  busy: boolean;
-  error: string | null;
-  onAutomaticChange: (enabled: boolean) => Promise<void>;
-  onInstall: () => Promise<void>;
-  onLater: () => void;
-}) {
-  return (
-    <div className="compact-modal-backdrop" role="presentation">
-      <section className="compact-modal permission-panel" role="dialog" aria-modal="true" aria-labelledby="update-title">
-        <span className="eyebrow">Update available</span>
-        <h2 id="update-title">UltraVox {info.latest_version}</h2>
-        <p className="compact-modal-copy">
-          The update is downloaded from the stable GitHub release, then its checksum,
-          Developer ID, bundle identity, sealed code, and notarization are verified
-          before the current app is replaced.
-        </p>
-        <label className="settings-row update-automatic-choice">
-          <input
-            type="checkbox"
-            checked={automatic}
-            disabled={busy}
-            onChange={(event) => void onAutomaticChange(event.target.checked)}
-          />
-          <span>
-            <strong>Install updates automatically</strong>
-            <small>Opt in to verified stable updates on future launch and daily checks.</small>
-          </span>
-        </label>
-        {error && <p className="settings-error" role="alert">{error}</p>}
-        <div className="compact-modal-actions">
-          <button className="btn" type="button" disabled={busy} onClick={onLater}>Later</button>
-          <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void onInstall()}>
-            {busy ? "Verifying…" : "Update now"}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-
 function PermissionPanel({
   status,
-  onStatus,
+  busy,
+  error,
+  requesting,
+  microphonePrompt,
+  onAction,
+  onRecheck,
+  onOpenSettings,
+  migrationNotice,
 }: {
-  status: PermissionStatus;
-  onStatus: (status: PermissionStatus) => void;
+  status: PermissionStatus | null;
+  busy: boolean;
+  error: string | null;
+  requesting: PermissionKind | null;
+  microphonePrompt: MicrophonePromptState;
+  onAction: (kind: PermissionKind, action: "request" | "settings") => Promise<void>;
+  onRecheck: () => Promise<void>;
+  onOpenSettings: () => void;
+  migrationNotice: string | null;
 }) {
-  const [busy, setBusy] = useState<PermissionKind | null>(null);
-  const run = async (kind: PermissionKind, action: "request" | "settings") => {
-    setBusy(kind);
-    try {
-      const next = action === "request"
-        ? await requestPermission(kind)
-        : (await openPermissionSettings(kind), await getPermissionStatus());
-      onStatus(next);
-    } finally {
-      setBusy(null);
-    }
-  };
   return (
     <div className="compact-modal-backdrop" role="presentation">
       <section className="compact-modal permission-panel" role="dialog" aria-modal="true" aria-labelledby="permission-title">
-        <span className="eyebrow">First-run setup</span>
-        <h2 id="permission-title">Allow UltraVox to work</h2>
-        <p className="compact-modal-copy">
-          UltraVox checks each permission at runtime. Old rows in macOS settings are only diagnostics and are never treated as granted.
-        </p>
+        <h2 id="permission-title">Microphone access for dictation</h2>
+        {migrationNotice && <p className="compact-modal-copy" role="status">{migrationNotice}</p>}
         <div className="permission-list">
           {PERMISSIONS.map(({ kind, label, copy }) => {
-            const state = status[kind];
+            const state = status?.[kind];
+            const prompt = kind === "microphone" ? microphonePrompt : null;
+            const note = microphonePromptNote(prompt);
+            const stateLabel = requesting === kind
+              ? "Waiting for your answer"
+              : prompt === "timed_out"
+                ? "Timed out"
+                : prompt === "pending"
+                  ? "Waiting for macOS"
+                  : permissionStateLabel(state, !status && !!error);
+            const canRequest = canRequestPermission(kind, state, prompt);
             return (
               <div className="permission-row" key={kind}>
-                <div><strong>{label}</strong><span>{copy}</span></div>
-                <span className={`permission-state permission-${state}`}>{state === "granted" ? "Granted" : state === "not_determined" ? "Needs access" : state}</span>
-                {state !== "granted" && state !== "unavailable" && (
+                <div><strong>{label}</strong><span>{copy}</span>{note && <span>{note}</span>}</div>
+                <span className={`permission-state permission-${state ?? "unknown"}`}>{stateLabel}</span>
+                {(state === "denied" || state === "not_determined") && (
                   <div className="permission-actions">
-                    <button className="btn btn-primary" type="button" disabled={busy !== null} onClick={() => void run(kind, "request")}>
-                      {busy === kind ? "Checking…" : "Allow"}
-                    </button>
-                    <button className="btn" type="button" disabled={busy !== null} onClick={() => void run(kind, "settings")}>Open Settings</button>
+                    {canRequest && (
+                      <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void onAction(kind, "request")}>Allow</button>
+                    )}
+                    <button className={canRequest ? "btn" : "btn btn-primary"} type="button" disabled={busy} onClick={() => void onAction(kind, "settings")}>Open macOS Settings</button>
                   </div>
                 )}
               </div>
             );
           })}
         </div>
-        <p className="permission-footnote">After changing a permission, restart UltraVox if macOS asks, then choose Recheck. You do not need to delete the permission row.</p>
-        <button className="btn" type="button" onClick={() => void getPermissionStatus().then(onStatus)}>Recheck permissions</button>
+        {error && <p className="settings-error" role="alert">{error}</p>}
+        <div className="compact-modal-actions">
+          <button className="btn" type="button" disabled={busy} onClick={() => void onRecheck()}>{busy && !requesting ? "Checking…" : "Recheck permissions"}</button>
+          <button className="btn" type="button" onClick={onOpenSettings}>App Settings</button>
+        </div>
       </section>
     </div>
   );
@@ -206,11 +174,13 @@ export default function App() {
   const [status, setStatus] = useState<AppStatus>("loading");
   const [initialRecording, setInitialRecording] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<PermissionStatus | null>(null);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const [requestingPermission, setRequestingPermission] = useState<PermissionKind | null>(null);
+  const [microphonePrompt, setMicrophonePrompt] = useState<MicrophonePromptState>(null);
+  const permissionController = useRef<PermissionReadinessController | null>(null);
   const [telemetryStatus, setTelemetryStatus] = useState<TelemetryStatus | null>(null);
-  const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
-  const [automaticUpdates, setAutomaticUpdates] = useState(false);
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
   const [initialMeeting, setInitialMeeting] = useState(false);
   const [detection, setDetection] = useState<MeetingDetectionPendingPayload | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -221,7 +191,55 @@ export default function App() {
   const [pro, refreshPro] = useProStatus();
   const [build, setBuild] = useState<BuildFlavor | null>(null);
 
-  // Register this install's revocable Implose license grant (idempotent) and
+  useEffect(() => {
+    if (isReminderWindow) return;
+    const controller = createPermissionReadinessController({
+      readStatus: getPermissionStatus,
+      onStatus: (next) => {
+        setPermissionStatus(next);
+        setMicrophonePrompt((previous) => nextMicrophonePromptState(previous, next));
+      },
+      onError: setPermissionError,
+      onBusy: setPermissionBusy,
+    });
+    permissionController.current = controller;
+    void controller.refresh();
+    const onFocus = () => {
+      if (document.visibilityState === "visible") controller.scheduleRefresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") controller.scheduleRefresh();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+      controller.dispose();
+      if (permissionController.current === controller) permissionController.current = null;
+    };
+  }, [isReminderWindow]);
+
+  const recheckPermissions = useCallback(() => {
+    return permissionController.current?.refresh() ?? Promise.resolve();
+  }, []);
+  const permissionAction = useCallback(async (kind: PermissionKind, action: "request" | "settings") => {
+    const controller = permissionController.current;
+    if (!controller) return;
+    if (action === "request") setRequestingPermission(kind);
+    try {
+      await controller.runAction(
+        permissionActionFailure(kind, action),
+        async () => action === "request"
+          ? await requestPermission(kind)
+          : (await openPermissionSettings(kind), await getPermissionStatus()),
+      );
+    } finally {
+      if (action === "request") setRequestingPermission(null);
+    }
+  }, []);
+
+  // Register this install's revocable Pareto license grant (idempotent) and
   // learn which flavor of UltraVox this binary is. Both fail open.
   useEffect(() => {
     if (isReminderWindow) return;
@@ -253,11 +271,11 @@ export default function App() {
     let cancelled = false;
 
     async function load() {
-      const [appStatusResult, settingsResult, permissionResult, telemetryResult] = await Promise.allSettled([
+      const [appStatusResult, settingsResult, telemetryResult, migrationResult] = await Promise.allSettled([
         getAppStatus(),
         getSettings(),
-        getPermissionStatus(),
         getAppTelemetryStatus(),
+        getLegacyMigrationNotice(),
       ]);
       if (cancelled) return;
 
@@ -276,15 +294,15 @@ export default function App() {
       } else {
         console.error("Failed to preload settings:", settingsResult.reason);
       }
-      if (permissionResult.status === "fulfilled") {
-        setPermissionStatus(permissionResult.value);
-      } else {
-        console.error("Failed to load permission status:", permissionResult.reason);
-      }
       if (telemetryResult.status === "fulfilled") {
         setTelemetryStatus(telemetryResult.value);
       } else {
         console.error("Failed to load telemetry status:", telemetryResult.reason);
+      }
+      if (migrationResult.status === "fulfilled") {
+        setMigrationNotice(migrationResult.value);
+      } else {
+        console.error("Failed to load migration notice:", migrationResult.reason);
       }
     }
     void load();
@@ -292,47 +310,7 @@ export default function App() {
       cancelled = true;
     };
   }, []);
-  useEffect(() => {
-    if (isReminderWindow) return;
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const [preferences, candidate] = await Promise.all([
-          getUpdatePreferences(),
-          checkForUpdate(),
-        ]);
-        if (cancelled) return;
-        setAutomaticUpdates(preferences.automatic);
-        if (!candidate) {
-          setAvailableUpdate(null);
-          return;
-        }
-        if (!preferences.automatic) {
-          setAvailableUpdate(candidate);
-          return;
-        }
-        setUpdateBusy(true);
-        try {
-          await installUpdate(candidate);
-        } catch (error) {
-          if (!cancelled) {
-            setAvailableUpdate(candidate);
-            setUpdateError(`Automatic update was not installed: ${String(error)}`);
-          }
-        } finally {
-          if (!cancelled) setUpdateBusy(false);
-        }
-      } catch (error) {
-        if (!cancelled) console.error("Update check unavailable:", error);
-      }
-    };
-    void check();
-    const interval = window.setInterval(() => void check(), 24 * 60 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [isReminderWindow]);
+  useUpdaterLifecycle(!isReminderWindow);
 
   useEffect(() => {
     if (!isReminderWindow) return;
@@ -423,40 +401,20 @@ export default function App() {
     };
   }, [isReminderWindow, openSettings]);
 
-  const needsPermission = permissionStatus
-    ? Object.values(permissionStatus).some((value) => value !== "granted" && value !== "unavailable")
-    : false;
+  // "loading" (no status or error yet) must not show the panel.
+  const needsPermission = dictationAccess(permissionStatus, permissionError) === "blocked";
+  const permissionPanelVisible = needsPermission && !showSettings;
   const needsConsent = telemetryStatus?.consent === "undecided";
   const decideTelemetry = useCallback(async (enabled: boolean) => {
     setTelemetryStatus(await setAppTelemetryEnabled(enabled));
   }, []);
-  const changeAutomaticUpdates = useCallback(async (enabled: boolean) => {
-    setAutomaticUpdates(enabled);
-    try {
-      await setUpdatePreferences({ automatic: enabled });
-    } catch (error) {
-      setAutomaticUpdates(!enabled);
-      setUpdateError(`Could not save the update preference: ${String(error)}`);
-    }
-  }, []);
-  const installAvailableUpdate = useCallback(async () => {
-    if (!availableUpdate) return;
-    setUpdateBusy(true);
-    setUpdateError(null);
-    try {
-      await installUpdate(availableUpdate);
-    } catch (error) {
-      setUpdateError(`Update was not installed: ${String(error)}`);
-      setUpdateBusy(false);
-    }
-  }, [availableUpdate]);
 
-  const studioActive = mode === "studio" && !showSettings && !needsConsent && !needsPermission && !availableUpdate;
+  const studioActive = mode === "studio" && !showSettings && !needsConsent && !needsPermission;
   useEffect(() => {
     if (isReminderWindow) return;
     const keydown = (event: KeyboardEvent) => {
       // Do not intercept shortcut capture in Settings or any open modal.
-      if (!pro.available || showSettings || needsConsent || needsPermission || availableUpdate || studioBlocked || document.querySelector('[role="dialog"]') || event.repeat || event.isComposing) return;
+      if (!pro.available || showSettings || needsConsent || needsPermission || studioBlocked || document.querySelector('[role="dialog"]') || event.repeat || event.isComposing) return;
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.code === "KeyV") {
         event.preventDefault(); event.stopImmediatePropagation();
         if (!pro.unlocked) { void openSettings("pro"); return; }
@@ -465,13 +423,19 @@ export default function App() {
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
-  }, [isReminderWindow, pro, openSettings, showSettings, needsConsent, needsPermission, availableUpdate, studioBlocked, mode, closeStudio, openStudio]);
+  }, [isReminderWindow, pro, openSettings, showSettings, needsConsent, needsPermission, studioBlocked, mode, closeStudio, openStudio]);
 
   return (
     <div className="app-shell">
       {!isReminderWindow && (
         <>
-          <div className="view-layer" ref={(node) => node?.toggleAttribute("inert", mode === "studio" || showSettings || needsConsent || needsPermission || !!availableUpdate)} hidden={mode === "studio" || showSettings || needsConsent || needsPermission} aria-hidden={mode === "studio" || showSettings || needsConsent || needsPermission}>
+          {permissionError && !needsConsent && !permissionPanelVisible && (
+            <div className="settings-error" role="alert">
+              {permissionError}{" "}
+              <button className="btn" type="button" disabled={permissionBusy} onClick={() => void recheckPermissions()}>Recheck permissions</button>
+            </div>
+          )}
+          <div className="view-layer" ref={(node) => node?.toggleAttribute("inert", mode === "studio" || showSettings || needsConsent || needsPermission)} hidden={mode === "studio" || showSettings || needsConsent || needsPermission} aria-hidden={mode === "studio" || showSettings || needsConsent || needsPermission}>
             <MainWindow
               status={status}
               initialRecording={initialRecording}
@@ -488,7 +452,7 @@ export default function App() {
             </div>
           )}
           {settingsConfig && (
-            <div className="view-layer" hidden={!showSettings || needsConsent || needsPermission} aria-hidden={!showSettings || needsConsent || needsPermission}>
+            <div className="view-layer" hidden={!showSettings || needsConsent} aria-hidden={!showSettings || needsConsent}>
               <SettingsPage
                 initialConfig={settingsConfig}
                 initialTab={settingsTab}
@@ -504,18 +468,17 @@ export default function App() {
       {!isReminderWindow && needsConsent && (
         <TelemetryConsent onDecision={decideTelemetry} />
       )}
-      {!isReminderWindow && !needsConsent && needsPermission && permissionStatus && (
-        <PermissionPanel status={permissionStatus} onStatus={setPermissionStatus} />
-      )}
-      {!isReminderWindow && !needsConsent && !needsPermission && availableUpdate && (
-        <UpdatePrompt
-          info={availableUpdate}
-          automatic={automaticUpdates}
-          busy={updateBusy}
-          error={updateError}
-          onAutomaticChange={changeAutomaticUpdates}
-          onInstall={installAvailableUpdate}
-          onLater={() => setAvailableUpdate(null)}
+      {!isReminderWindow && !needsConsent && permissionPanelVisible && (
+        <PermissionPanel
+          status={permissionStatus}
+          busy={permissionBusy}
+          error={permissionError}
+          requesting={requestingPermission}
+          microphonePrompt={microphonePrompt}
+          onAction={permissionAction}
+          onRecheck={recheckPermissions}
+          onOpenSettings={() => void openSettings()}
+          migrationNotice={migrationNotice}
         />
       )}
       {detection && (

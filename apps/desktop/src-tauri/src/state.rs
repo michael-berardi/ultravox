@@ -36,6 +36,7 @@ pub struct RecordingSession {
     pub id: Uuid,
     pub recording: AudioRecording,
     pub started_at: Instant,
+    pub keep_awake: KeepAwake,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,31 @@ pub struct MeetingSession {
     pub include_microphone: bool,
     pub started_at: Instant,
     pub stopping: bool,
+    pub keep_awake: KeepAwake,
+}
+
+/// Keeps macOS from App Napping UltraVox while dictation records, a meeting
+/// captures, or a transcription runs. With every window hidden, App Nap starved
+/// the audio writer until the capture buffer overflowed and the recording was
+/// rejected. A no-op on other platforms.
+#[derive(Debug, Clone)]
+pub struct KeepAwake(
+    // Held only for its Drop, which ends the activity.
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    std::sync::Arc<bridge::LatencyActivity>,
+);
+
+impl KeepAwake {
+    pub fn begin(reason: &str) -> Self {
+        #[cfg(target_os = "macos")]
+        return Self(std::sync::Arc::new(bridge::LatencyActivity::begin(reason)));
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = reason;
+            Self()
+        }
+    }
 }
 
 /// Handle for an in-flight transcription task so cancellation can target a
@@ -158,6 +184,25 @@ fn recording_id_for(recording: &AudioRecording) -> Uuid {
         .unwrap_or_else(Uuid::new_v4)
 }
 
+fn cancellation_may_discard_audio(error: &ultravox_core::audio::AudioError) -> bool {
+    // Explicit cancellation does not require a valid recording or transcript.
+    // CPAL has already dropped the stream before reporting missing samples.
+    matches!(error, ultravox_core::audio::AudioError::SilentInput)
+}
+
+fn require_transcription_text(
+    text: String,
+    audio_path: &std::path::Path,
+) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err(format!(
+            "transcription returned empty text: {}",
+            ultravox_core::phonon::explain_empty(audio_path)
+        ));
+    }
+    Ok(text)
+}
+
 fn fallback_row(
     recording: &AudioRecording,
     id: Uuid,
@@ -190,6 +235,16 @@ fn fallback_row(
     row
 }
 
+/// FluidAudio's cache folders for the English Parakeet v2 model that Phonon-2 replaces.
+pub(crate) fn superseded_fluid_audio_dirs() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return vec![PathBuf::from(home)
+            .join("Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v2")];
+    }
+    Vec::new()
+}
+
 #[cfg(not(target_os = "macos"))]
 struct WhisperOptions {
     language: String,
@@ -209,6 +264,9 @@ fn transcribe_with_whisper(
     model_path: &std::path::Path,
     options: WhisperOptions,
 ) -> Result<String, String> {
+    let input =
+        ultravox_core::prepare_transcription_audio(audio_path).map_err(|e| e.to_string())?;
+    let audio_path = input.path();
     if !model_path.is_file() {
         return Err(format!(
             "Whisper model is not downloaded: {}",
@@ -288,6 +346,12 @@ fn transcribe_with_whisper(
                 .map_err(|error| format!("failed to read Whisper output: {error}"))?,
         );
     }
+    if text.trim().is_empty() {
+        return Err(format!(
+            "transcription returned empty text: {}",
+            ultravox_core::phonon::explain_empty(audio_path)
+        ));
+    }
     Ok(text.trim().to_string())
 }
 
@@ -343,6 +407,24 @@ pub(crate) fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 impl AppState {
+    /// Why replacing the app right now would lose the user's work, if it would.
+    /// Updates wait for `None`: a relaunch mid-recording drops the audio.
+    pub async fn busy_reason(&self) -> Option<&'static str> {
+        if self.session.lock().await.is_some() {
+            return Some("UltraVox is recording");
+        }
+        if self.meeting_session.lock().await.is_some() {
+            return Some("a meeting or lecture is being recorded");
+        }
+        if self.active_transcription.lock().await.is_some() {
+            return Some("a recording is being transcribed");
+        }
+        if self.file_import.try_lock().is_err() {
+            return Some("a file is being imported");
+        }
+        None
+    }
+
     /// Initialize the state from the Tauri app handle.
     pub fn new(app: AppHandle) -> Result<Self, String> {
         let app_dir = data_dir(&app)?;
@@ -845,27 +927,7 @@ impl AppState {
         }
 
         #[cfg(target_os = "macos")]
-        match bridge::microphone_authorization_status() {
-            bridge::MicrophoneAuthorizationStatus::Authorized => {}
-            bridge::MicrophoneAuthorizationStatus::NotDetermined => {
-                let granted = tokio::task::spawn_blocking(bridge::request_microphone_access)
-                    .await
-                    .map_err(|error| format!("could not request microphone access: {error}"))?;
-                if !granted {
-                    return Err(
-                        "Microphone access was not granted. Enable UltraVox in System Settings > Privacy & Security > Microphone."
-                            .to_string(),
-                    );
-                }
-            }
-            bridge::MicrophoneAuthorizationStatus::Denied
-            | bridge::MicrophoneAuthorizationStatus::Restricted => {
-                return Err(
-                    "Microphone access is disabled for UltraVox. Enable it in System Settings > Privacy & Security > Microphone."
-                        .to_string(),
-                );
-            }
-        }
+        bridge::microphone_recording_readiness().map_err(str::to_string)?;
 
         let recordings_dir = self.recordings_dir()?;
         std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
@@ -880,17 +942,28 @@ impl AppState {
         let mut input_config = AudioInputConfig::default();
         input_config.device_id = selected_device;
 
+        let keep_awake = KeepAwake::begin("UltraVox dictation");
         let mut audio = self.audio.lock().await;
-        let recording = audio
-            .start_recording(input_config, output_path)
-            .await
-            .map_err(|e| e.to_string())?;
+        // The audio lock may have waited; only a fresh native Authorized permits capture.
+        #[cfg(target_os = "macos")]
+        bridge::microphone_recording_readiness().map_err(str::to_string)?;
+        let recording = match audio.start_recording(input_config, output_path.clone()).await {
+            Ok(recording) => recording,
+            Err(error) => {
+                // A failed or timed-out start must not leave a stray WAV behind.
+                if !matches!(error, ultravox_core::audio::AudioError::AlreadyRecording) {
+                    let _ = std::fs::remove_file(&output_path);
+                }
+                return Err(error.to_string());
+            }
+        };
 
         let mut session = self.session.lock().await;
         *session = Some(RecordingSession {
             id,
             recording: recording.clone(),
             started_at: Instant::now(),
+            keep_awake,
         });
         drop(session);
         self.clear_pending_meeting_detection().await;
@@ -1167,6 +1240,9 @@ impl AppState {
                                 self.emit_recording_stopped(&fallback).map_err(|emit_error| {
                                 format!("{error}; failed to notify recording stop: {emit_error}")
                             })?;
+                                if cancellation_may_discard_audio(&error) {
+                                    return Ok(true);
+                                }
                                 return Err(error.to_string());
                             }
                         };
@@ -1190,6 +1266,7 @@ impl AppState {
             if let Some(task) = active.as_ref() {
                 if task.recording_id == id {
                     task.abort_handle.abort();
+                    ultravox_core::phonon::cancel(&id.to_string());
                     #[cfg(target_os = "macos")]
                     {
                         let _ = bridge::cancel_transcription(&id.to_string());
@@ -1303,41 +1380,101 @@ impl AppState {
         Ok(id.to_string())
     }
 
+    /// Startup work for the speech models: finish the upgrade to Phonon-2 (download it for
+    /// English users, remove the English models it replaces) and load the selected model.
     pub fn warm_transcription_model(&self) {
-        #[cfg(target_os = "macos")]
-        {
-            let (version, directory) = match self.config.lock() {
-                Ok(config) => (
-                    config.get().fluid_audio_model_version.clone(),
-                    config.get().models_directory.clone(),
-                ),
-                Err(error) => {
-                    eprintln!("Parakeet warmup skipped: config lock poisoned: {error}");
-                    return;
+        // `models_dir()` takes the config lock itself, so resolve it before holding the lock here.
+        let models_dir = match self.models_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                eprintln!("model warmup skipped: {error}");
+                return;
+            }
+        };
+        let (english, version, directory) = match self.config.lock() {
+            Ok(config) => {
+                let config = config.get();
+                (
+                    config.model_language != "multilingual"
+                        && config.fluid_audio_model_version != "v3",
+                    config.fluid_audio_model_version.clone(),
+                    config.models_directory.clone(),
+                )
+            }
+            Err(error) => {
+                eprintln!("model warmup skipped: config lock poisoned: {error}");
+                return;
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = (&version, &directory);
+        tauri::async_runtime::spawn(async move {
+            let started = Instant::now();
+            if english && !ultravox_core::phonon::is_installed(&models_dir) {
+                // Existing installs keep working on their old English model until this finishes.
+                if let Err(error) = ultravox_core::phonon::install(models_dir.clone()).await {
+                    eprintln!("Phonon-2 download failed: {error}");
                 }
-            };
-            tauri::async_runtime::spawn(async move {
+            }
+            // Load Phonon-2 first: the old English models are only removed once it has proven
+            // it runs on this machine. Multilingual users never read them, so theirs go now.
+            let mut phonon_ready = false;
+            if english && ultravox_core::phonon::is_installed(&models_dir) {
+                let loaded = tokio::task::spawn_blocking({
+                    let models_dir = models_dir.clone();
+                    move || ultravox_core::phonon::prepare(&models_dir)
+                })
+                .await;
+                match loaded {
+                    Ok(Ok(())) => {
+                        phonon_ready = true;
+                        eprintln!("Phonon-2 ready in {:.2}s", started.elapsed().as_secs_f64());
+                    }
+                    Ok(Err(error)) => eprintln!(
+                        "Phonon-2 failed to load, keeping the previous English model: {error}"
+                    ),
+                    Err(error) => eprintln!("Phonon-2 warmup task failed: {error}"),
+                }
+            }
+            if phonon_ready || !english {
+                let removed = tokio::task::spawn_blocking({
+                    let models_dir = models_dir.clone();
+                    move || {
+                        ultravox_core::phonon::cleanup_superseded(
+                            &models_dir,
+                            &superseded_fluid_audio_dirs(),
+                        )
+                    }
+                })
+                .await
+                .unwrap_or_default();
+                for path in removed {
+                    eprintln!("removed superseded model {}", path.display());
+                }
+            }
+            if english {
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            {
                 if !bridge::is_model_downloaded(&version, directory.as_deref()) {
                     eprintln!("Parakeet warmup skipped: selected model is not downloaded");
                     return;
                 }
-                let started = Instant::now();
                 let warmup = tokio::task::spawn_blocking(move || {
                     bridge::prepare_model(&version, directory.as_deref())
                 })
                 .await;
                 match warmup {
-                    Ok(true) => {
-                        eprintln!(
-                            "Parakeet model ready in {:.2}s",
-                            started.elapsed().as_secs_f64()
-                        );
-                    }
+                    Ok(true) => eprintln!(
+                        "Parakeet model ready in {:.2}s",
+                        started.elapsed().as_secs_f64()
+                    ),
                     Ok(false) => eprintln!("Parakeet model warmup failed"),
                     Err(error) => eprintln!("Parakeet model warmup task failed: {error}"),
                 }
-            });
-        }
+            }
+        });
     }
 
     /// Runs the full transcription flow for a completed recording: update
@@ -1350,6 +1487,7 @@ impl AppState {
         recording: &AudioRecording,
         allow_auto_paste: bool,
     ) -> Result<String, String> {
+        let _keep_awake = KeepAwake::begin("UltraVox transcription");
         #[cfg(target_os = "macos")]
         let _indicator_guard = NativeIndicatorGuard;
         #[cfg(target_os = "macos")]
@@ -1415,21 +1553,25 @@ impl AppState {
         self.emit_transcription_progress(&visible_id, 0.1, "transcribing")?;
 
         // Native engines are CPU-bound, so keep them off the async runtime.
+        let models_dir_for_phonon = self.models_dir()?;
         #[cfg(target_os = "macos")]
-        let (path, fluid_version, models_directory, recording_id_for_task) = {
+        let (fluid_version, models_directory, recording_id_for_task) = {
             let cfg = self.config.lock().map_err(|e| e.to_string())?;
             (
-                audio_path.to_string_lossy().to_string(),
                 cfg.get().fluid_audio_model_version.clone(),
                 cfg.get().models_directory.clone(),
                 id.to_string(),
             )
         };
         #[cfg(not(target_os = "macos"))]
-        let (model_path, whisper_options) = {
+        let recording_id_for_task = id.to_string();
+        #[cfg(not(target_os = "macos"))]
+        let (model_path, whisper_options, english_selected) = {
             let models_dir = self.models_dir()?;
             let cfg = self.config.lock().map_err(|e| e.to_string())?;
             let config = cfg.get();
+            // English is Phonon-2; the Whisper base.en file is only a fallback while an
+            // upgraded install has not downloaded Phonon-2 yet.
             let filename = if config.model_language == "multilingual" {
                 "ggml-base.bin"
             } else {
@@ -1451,9 +1593,51 @@ impl AppState {
                     use_beam_search: config.use_beam_search,
                     beam_size: config.beam_size as i32,
                 },
+                config.model_language != "multilingual",
             )
         };
+        #[cfg(target_os = "macos")]
+        let english = fluid_version != "v3";
+        #[cfg(not(target_os = "macos"))]
+        let english = english_selected;
         let text = tokio::task::spawn_blocking(move || {
+            // Validate before model selection/fallback, retaining derived audio until decoding ends.
+            let input = ultravox_core::prepare_transcription_audio(&audio_path)
+                .map_err(|e| e.to_string())?;
+            let audio_path = input.path();
+            #[cfg(target_os = "macos")]
+            let path = audio_path.to_string_lossy();
+            if english {
+                let mut phonon_error = None;
+                if ultravox_core::phonon::is_installed(&models_dir_for_phonon) {
+                    match ultravox_core::phonon::transcribe_file(
+                        &models_dir_for_phonon,
+                        &audio_path,
+                        Some(&recording_id_for_task),
+                    ) {
+                        Ok(text) => return Ok(text),
+                        Err(ultravox_core::phonon::PhononError::Cancelled) => {
+                            return Err("transcription cancelled".to_string())
+                        }
+                        Err(error) => phonon_error = Some(error.to_string()),
+                    }
+                }
+                // Phonon-2 is still downloading, or could not run on this machine: use the
+                // previous English model if it is still on disk (it is only removed after
+                // Phonon-2 has loaded successfully).
+                #[cfg(target_os = "macos")]
+                let legacy_present = bridge::is_model_downloaded("v2", models_directory.as_deref());
+                #[cfg(not(target_os = "macos"))]
+                let legacy_present = model_path.is_file();
+                if !legacy_present {
+                    return Err(phonon_error.unwrap_or_else(|| {
+                        "Phonon-2 is still downloading; try again in a minute".to_string()
+                    }));
+                }
+                if let Some(error) = phonon_error {
+                    eprintln!("Phonon-2 failed ({error}); using the previous English model");
+                }
+            }
             #[cfg(target_os = "macos")]
             {
                 bridge::transcribe_file_with_version_for_recording_in_directory(
@@ -1463,6 +1647,16 @@ impl AppState {
                     models_directory.as_deref(),
                 )
                 .map_err(|_| "transcription failed".to_string())
+                .and_then(|text| {
+                    if text.trim().is_empty() {
+                        Err(format!(
+                            "transcription returned empty text: {}",
+                            ultravox_core::phonon::explain_empty(audio_path)
+                        ))
+                    } else {
+                        Ok(text)
+                    }
+                })
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -1472,20 +1666,23 @@ impl AppState {
         .await
         .map_err(|e| e.to_string())?;
 
-        match text {
-            Ok(text) => {
-                // Dictionary post-processing happens before history, events,
-                // clipboard, and paste for every transcription backend.
-                let processed_text = dictionary.apply(&text);
-                let final_text = if add_space
-                    && !processed_text.is_empty()
-                    && processed_text.ends_with(|c: char| c.is_ascii_punctuation())
-                {
+        // Route empty backend or post-processed output through the same failure
+        // path as decode errors, before Completed/history/clipboard side effects.
+        let text = text.and_then(|text| {
+            let text = require_transcription_text(text, &recording.output_path)?;
+            let processed_text =
+                require_transcription_text(dictionary.apply(&text), &recording.output_path)?;
+            Ok(
+                if add_space && processed_text.ends_with(|c: char| c.is_ascii_punctuation()) {
                     format!("{processed_text} ")
                 } else {
                     processed_text
-                };
+                },
+            )
+        });
 
+        match text {
+            Ok(final_text) => {
                 // Update history with the completed transcription. Do not
                 // overwrite a row that has already been cancelled or marked as
                 // failed by a different path.
@@ -1644,6 +1841,29 @@ mod tests {
             meeting_key: key.to_string().repeat(64),
             detected_at_ms: 0,
         }
+    }
+
+    #[test]
+    fn explicit_cancel_can_discard_missing_audio_but_not_other_failures() {
+        use ultravox_core::audio::AudioError;
+        assert!(cancellation_may_discard_audio(&AudioError::SilentInput));
+        assert!(!cancellation_may_discard_audio(&AudioError::PermissionDenied));
+        assert!(!cancellation_may_discard_audio(&AudioError::DeviceUnavailable));
+    }
+
+    #[test]
+    fn completion_rejects_trim_empty_transcripts() {
+        for text in ["", " ", "\n\t"] {
+            let error =
+                require_transcription_text(text.into(), std::path::Path::new("missing.wav"))
+                    .unwrap_err();
+            assert!(error.contains("transcription returned empty text"));
+        }
+        assert_eq!(
+            require_transcription_text("speech".into(), std::path::Path::new("missing.wav"))
+                .unwrap(),
+            "speech"
+        );
     }
 
     #[test]

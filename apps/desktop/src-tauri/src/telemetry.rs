@@ -10,7 +10,7 @@ use tauri::AppHandle;
 use tokio::sync::{watch, Mutex};
 use uuid::Uuid;
 
-const ENDPOINT: &str = "https://analytics.implosecybernetics.com/api/app-telemetry/event";
+const ENDPOINT: &str = "https://analytics.paretocybernetics.com/api/app-telemetry/event";
 const SCHEMA: &str = "lds.app-telemetry.event.v2";
 const APP: &str = "ultravox";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);

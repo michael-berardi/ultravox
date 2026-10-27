@@ -24,7 +24,9 @@ Supported pack IDs (use these exact strings, not ISO language codes):
 
 ## CLI reference
 
-Use an available Pro `ultravox-control` binary on macOS. Studio commands open their own local store; they do not send requests to the running UI. **Set the data directory deliberately**: the CLI defaults to the OS temporary directory's `ultravox-control/`, not the desktop's data directory. For tests:
+Use an available Pro `ultravox-control` binary on macOS. The supported copy is the one inside the installed app, `/Applications/UltraVox.app/Contents/MacOS/ultravox-control`, so it always matches the app version after an update. Make the `ultravox-control` on your `PATH` a two-line wrapper that runs that path (`#!/bin/sh` then `exec /Applications/UltraVox.app/Contents/MacOS/ultravox-control "$@"`, mode 755) instead of a copied binary, so an app update never leaves a stale CLI behind; and check what a shell resolves with `ultravox-control version` (prints the version and the real binary path).
+
+`transcribe <wav> v2` and `import-smoke <media> v2` name the cause when no text comes back: silent audio (peak below -80 dBFS) is reported as silent, and audible audio that still yields nothing says no speech was recognised. Short or quiet clips that end right as the speaker stops are retried with silence padded around them before giving up; level is never changed. Studio commands open their own local store; they do not send requests to the running UI. **Set the data directory deliberately**: the CLI defaults to the OS temporary directory's `ultravox-control/`, not the desktop's data directory. For tests:
 
 ```bash
 export ULTRAVOX_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-studio.XXXXXX")"
@@ -66,7 +68,7 @@ Compare the printed transcription with the sentence; use `v3` for multilingual t
 
 ## Local data and privacy
 
-The desktop uses its app data directory (normally `~/Library/Application Support/com.imploselabs.ultravox/` on macOS), honoring `ULTRAVOX_DATA_DIR`. The CLI override and distinct default are described above.
+The desktop uses its app data directory (normally `~/Library/Application Support/com.paretocybernetics.ultravox/` on macOS), honoring `ULTRAVOX_DATA_DIR`. The CLI override and distinct default are described above.
 
 ```text
 <data-dir>/voice-studio/

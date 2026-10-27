@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-export const TRANSCRIBING_INDICATOR_DELAY_MS = 60_000;
 
 export function useDelayedVisibility(key: string | null, delayMs: number): boolean {
   const [visibleKey, setVisibleKey] = useState<string | null>(null);

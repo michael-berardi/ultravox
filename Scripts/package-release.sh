@@ -8,6 +8,8 @@
 #   linux x86_64 : ./Scripts/package-release.sh   (requires webkit2gtk)
 #   Windows      : run inside Git Bash/MSYS2; NSIS comes from tauri.conf
 set -euo pipefail
+# Installed apps must be readable by every user (Kate BUG 7: a 077 umask shipped a root-only 0700 bundle).
+umask 022
 
 export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
@@ -33,7 +35,20 @@ copy_compat() {
   base="${src##*/}"
   tail="${base#UltraVox}"
   for family in UltraVox-Light UltraVox-Pro; do
-    cp -f "$src" "${OUTPUT_DIR}/${family}${tail}"
+    if [[ "$base" == *.zip ]]; then
+      # Older updaters look for <archive stem>/UltraVox.app inside the zip, so
+      # the payload folder must be renamed to match each compatibility name.
+      local stage payload
+      stage="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-compat.XXXXXX")"
+      ditto -x -k "$src" "$stage"
+      payload="${family}${tail%.zip}"
+      mv "$stage/${base%.zip}" "$stage/${payload}"
+      rm -f "${OUTPUT_DIR}/${family}${tail}"
+      ditto -c -k --sequesterRsrc --keepParent "$stage/${payload}" "${OUTPUT_DIR}/${family}${tail}"
+      rm -rf "$stage"
+    else
+      cp -f "$src" "${OUTPUT_DIR}/${family}${tail}"
+    fi
     write_sha "${OUTPUT_DIR}/${family}${tail}"
   done
 }
@@ -45,9 +60,6 @@ APP_PATH="${APP_PATH:-${ROOT_DIR}/target/release/bundle/macos/${PRODUCT}.app}"
 CLI_PATH="${CLI_PATH:-${ROOT_DIR}/target/release/ultravox-control}"
 BUILD_QUEUE="${BUILD_QUEUE:-}"
 ALLOW_ADHOC="${ALLOW_ADHOC:-0}"
-ADAPTER_SOURCE="${ROOT_DIR}/third_party/mediaremote-adapter"
-ADAPTER_BUILD="${ROOT_DIR}/target/release/mediaremote-adapter-build"
-ADAPTER_STAGE="${ROOT_DIR}/target/release/mediaremote"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   case "$(uname -s)" in
@@ -108,6 +120,19 @@ fi
 # PKG_SIGNING=app-only stages the Developer-ID zip without the installer
 # package, installer identity, or notarization (owner-directed local builds).
 PKG_SIGNING="${PKG_SIGNING:-full}"
+BUILD_FEATURES="custom-protocol,ultravox-pro"
+case "${ULTRAVOX_LOCAL_QA_BUILD:-0}" in
+  0) ;;
+  1)
+    [[ "$PKG_SIGNING" == "app-only" && "$OUTPUT_DIR" != "$ROOT_DIR/release" ]] || {
+      echo 'Private renderer diagnostics require app-only signing and a separate private output directory.' >&2
+      exit 1
+    }
+    BUILD_FEATURES="$BUILD_FEATURES,local-qa"
+    ;;
+  *) echo 'ULTRAVOX_LOCAL_QA_BUILD must be 0 or 1.' >&2; exit 1 ;;
+esac
+export VITE_MIRROR_DEBUG=0
 if [[ "$ALLOW_ADHOC" != "1" ]]; then
   : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY is required}"
   if [[ "$PKG_SIGNING" == "full" ]]; then
@@ -157,26 +182,13 @@ NODE
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   run_heavy env CI=false pnpm --filter ultravox-desktop tauri build --bundles app -- \
-    --no-default-features --features custom-protocol,ultravox-pro
+    --no-default-features --features "$BUILD_FEATURES"
   run_heavy cargo build --release -p ultravox --no-default-features \
-    --features cli,custom-protocol,ultravox-pro --bin ultravox-control
-  run_heavy cmake -S "$ADAPTER_SOURCE" -B "$ADAPTER_BUILD" -DCMAKE_BUILD_TYPE=Release
-  run_heavy cmake --build "$ADAPTER_BUILD" --target MediaRemoteAdapter
-  rm -rf "$ADAPTER_STAGE"
-  mkdir -p "$ADAPTER_STAGE"
-  ditto "$ADAPTER_BUILD/MediaRemoteAdapter.framework" \
-    "$ADAPTER_STAGE/MediaRemoteAdapter.framework"
-  install -m 0755 "$ADAPTER_SOURCE/bin/mediaremote-adapter.pl" \
-    "$ADAPTER_STAGE/mediaremote-adapter.pl"
-  install -m 0644 "$ADAPTER_SOURCE/LICENSE" "$ADAPTER_STAGE/LICENSE"
+    --features "cli,$BUILD_FEATURES" --bin ultravox-control
+
 fi
 if [[ ! -d "$APP_PATH" || ! -x "$CLI_PATH" ]]; then
   echo "Missing UltraVox.app or ultravox-control release binary." >&2
-  exit 1
-fi
-if [[ ! -d "$ADAPTER_STAGE/MediaRemoteAdapter.framework" \
-  || ! -x "$ADAPTER_STAGE/mediaremote-adapter.pl" ]]; then
-  echo "Missing bundled MediaRemote metadata adapter." >&2
   exit 1
 fi
 
@@ -191,11 +203,9 @@ if [[ "$AUDIO_INPUT_ENTITLEMENT" != "true" ]]; then
 fi
 EXPECTED_VERSION="$VERSION" REQUIRE_SIGNED=0 ALLOW_ADHOC=1 \
   "${ROOT_DIR}/Scripts/verify-app.sh" "$APP_PATH"
-APP_ADAPTER_DIR="${APP_PATH}/Contents/Resources/mediaremote"
-rm -rf "$APP_ADAPTER_DIR"
-mkdir -p "$APP_ADAPTER_DIR"
-ditto "$ADAPTER_STAGE/." "$APP_ADAPTER_DIR/"
-APP_ADAPTER_FRAMEWORK="${APP_ADAPTER_DIR}/MediaRemoteAdapter.framework"
+# Ship the CLI inside the app so agents (dictionary review, voice handoff
+# checks) find it on every install, not only in the zip payload.
+install -m 0755 "$CLI_PATH" "${APP_PATH}/Contents/MacOS/ultravox-control"
 
 
 if [[ "$SIGNED_RELEASE" == "1" ]]; then
@@ -205,28 +215,17 @@ if [[ "$SIGNED_RELEASE" == "1" ]]; then
   # Sign the app once, up front. Every artifact (zip and pkg payload) must be
   # produced from this exact signed bundle; re-signing after stapling would
   # drop the notarization ticket.
-  codesign --force --options runtime $local_ts \
-    --sign "$APPLE_SIGNING_IDENTITY" "$APP_ADAPTER_FRAMEWORK"
   codesign --force --deep --options runtime $local_ts \
     --entitlements "${ROOT_DIR}/apps/desktop/src-tauri/Entitlements.plist" \
     --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
   codesign --force --options runtime $local_ts --sign "$APPLE_SIGNING_IDENTITY" "$CLI_PATH"
 else
-  codesign --force --sign - "$APP_ADAPTER_FRAMEWORK"
   codesign --force --deep \
     --entitlements "${ROOT_DIR}/apps/desktop/src-tauri/Entitlements.plist" \
     --sign - "$APP_PATH"
   codesign --force --sign - "$CLI_PATH"
 fi
 codesign --verify --strict "$CLI_PATH"
-codesign --verify --strict "$APP_ADAPTER_FRAMEWORK"
-if [[ "$SIGNED_RELEASE" == "1" ]]; then
-  codesign -dv --verbose=4 "$APP_ADAPTER_FRAMEWORK" 2>&1 \
-    | grep -E '^TeamIdentifier=T63VT9UAY2$' >/dev/null || {
-      echo "MediaRemoteAdapter.framework must be signed by Developer ID team T63VT9UAY2." >&2
-      exit 1
-    }
-fi
 POST_SIGN_AUDIO_INPUT="$(
   codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null \
     | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null \
@@ -250,6 +249,14 @@ rm -f "$VERSIONED_PKG" "${VERSIONED_PKG}.sha256" \
   "${OUTPUT_DIR}/UltraVox-Pro-${PLATFORM}.pkg" "${OUTPUT_DIR}/UltraVox-Pro-${PLATFORM}.pkg.sha256" \
   "${OUTPUT_DIR}/UltraVox-Pro-${PLATFORM}.zip" "${OUTPUT_DIR}/UltraVox-Pro-${PLATFORM}.zip.sha256"
 
+# Every user must be able to read and run the app: folders 0755, files 0644 or 0755, no extended
+# attributes (they became ._ AppleDouble entries in the pkg payload). Modes are not part of the signature.
+normalize_bundle() {
+  /usr/bin/xattr -cr "$1"
+  /bin/chmod -R u+rwX,go+rX,go-w "$1"
+  /usr/bin/find "$1" -perm -u+x -type f -exec /bin/chmod go+x {} +
+}
+normalize_bundle "$APP_PATH"
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ultravox-release.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 PAYLOAD_DIR="${STAGING_DIR}/${PAYLOAD_NAME}"
@@ -266,6 +273,7 @@ if [[ "$SIGNED_RELEASE" == "1" && "$PKG_SIGNING" == "full" ]]; then
   # auto-update.
   xcrun notarytool submit "$ARCHIVE_PATH" --keychain-profile "$NOTARYTOOL_PROFILE" --no-s3-acceleration --wait
   xcrun stapler staple "$APP_PATH"
+  normalize_bundle "$APP_PATH"
 
   rm -rf "${PAYLOAD_DIR}/${PRODUCT}.app"
   ditto "$APP_PATH" "${PAYLOAD_DIR}/${PRODUCT}.app"

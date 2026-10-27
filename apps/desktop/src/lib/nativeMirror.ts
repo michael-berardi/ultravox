@@ -34,6 +34,7 @@ const SIMULATED: Record<string, unknown> = {
   get_app_telemetry_status: SIMULATED_TELEMETRY,
   set_app_telemetry_enabled: SIMULATED_TELEMETRY,
   get_permission_status: SIMULATED_PERMISSIONS,
+  get_legacy_migration_notice: null,
   request_permission: SIMULATED_PERMISSIONS,
 };
 const SUPPRESSED = new Set(['set_theme_material', 'record_app_telemetry_usage']);

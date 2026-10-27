@@ -3,18 +3,18 @@ import React, { useEffect } from "react";
 import type { ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { RendererBoundary } from "./components/RendererBoundary";
 import { SettingsPage } from "./pages/SettingsPage";
 import type { AppConfig } from "./ipc";
 import {
   ThemeHarness,
   parseHarnessPro,
-  parseHarnessSource,
-  parseHarnessSpectrum,
-  parseHarnessState,
   qaProStatus,
 } from "./qa/ThemeHarness";
 import { initTheme, THEMES } from "./themes";
 import "./index.css";
+import "./components/VoiceGlow.css";
+import "./SurfaceUnderpaint.css";
 
 installNativeMirror();
 
@@ -62,13 +62,10 @@ const qaConfig: AppConfig = {
   onboarding_completed: true,
   model_language: "english",
   theme: "midnight",
-  media_panel_enabled: false,
-  reactive_visuals_enabled: false,
   show_meeting_mode: true,
   show_lecture_mode: true,
   show_transcribe_url: false,
 };
-const harnessReactive = params.get("qa-reactive") !== "0";
 const requestedRecordingLevel = Number(params.get("qa-recording-level") ?? 0);
 const harnessRecordingLevel = Number.isFinite(requestedRecordingLevel)
   ? Math.min(1, Math.max(0, requestedRecordingLevel))
@@ -100,6 +97,7 @@ function BootReady({ children }: { children: ReactNode }) {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BootReady>
+      <RendererBoundary>
       {requestedSettings === "dictionary" ? (
         <SettingsPage
           initialConfig={qaConfig}
@@ -113,16 +111,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <ThemeHarness
           drop={params.get("qa-drop") === "1"}
           pro={harnessPro}
-          reactive={harnessReactive}
+          recordingActive={params.get("qa-recording") === "1" || harnessRecordingLevel > 0}
           recordingLevel={harnessRecordingLevel}
           transcriptionDurationMs={harnessTranscriptionDuration}
-          state={parseHarnessState(params.get("qa-state"))}
-          source={parseHarnessSource(params.get("qa-source"))}
-          spectrum={parseHarnessSpectrum(params.get("qa-spectrum"))}
         />
       ) : (
         <App />
       )}
+      </RendererBoundary>
     </BootReady>
   </React.StrictMode>,
 );

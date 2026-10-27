@@ -1,7 +1,31 @@
 import XCTest
+import AVFoundation
 @testable import UltraVoxMacOSBridge
 
 final class UltraVoxMacOSBridgeTests: XCTestCase {
+
+    // Pure permission tests: never request OS access or create audio capture.
+    func testMicrophoneNativeMapping() {
+        XCTAssertEqual(microphoneAuthorizationCode(.notDetermined), 0)
+        XCTAssertEqual(microphoneAuthorizationCode(.authorized), 1)
+        XCTAssertEqual(microphoneAuthorizationCode(.denied), 2)
+        XCTAssertEqual(microphoneAuthorizationCode(.restricted), 3)
+    }
+
+    func testMicrophonePendingAndTimeoutAreNotDenial() {
+        XCTAssertEqual(microphoneRequestOutcome(status: .notDetermined, timedOut: false), 0)
+        XCTAssertEqual(microphoneRequestOutcome(status: .notDetermined, timedOut: true), 4)
+        XCTAssertEqual(microphoneRequestOutcome(status: .authorized, timedOut: true), 1)
+        XCTAssertEqual(microphoneRequestOutcome(status: .denied, timedOut: true), 2)
+        XCTAssertEqual(microphoneRequestOutcome(status: .restricted, timedOut: false), 3)
+    }
+
+    func testMicrophoneConsentCannotBeRepeatedAfterClaim() {
+        let gate = MicrophoneRequestGate()
+        XCTAssertTrue(gate.claim())
+        XCTAssertFalse(gate.claim())
+        XCTAssertFalse(gate.claim())
+    }
 
     // MARK: - Modifier discrimination
 
@@ -136,137 +160,6 @@ final class UltraVoxMacOSBridgeTests: XCTestCase {
         XCTAssertEqual(origin.y, visibleFrame.minY + 8)
     }
 
-    // MARK: - Media panel support
-
-    func testSystemAudioSignalMapsRMSDecibelsToUnitLevel() {
-        XCTAssertEqual(SystemAudioSignal.normalizedLevel(rms: 0), 0)
-        XCTAssertEqual(SystemAudioSignal.normalizedLevel(rms: 0.001), 0, accuracy: 0.0001)
-        XCTAssertEqual(SystemAudioSignal.normalizedLevel(rms: 0.01), 1.0 / 3.0, accuracy: 0.0001)
-        XCTAssertEqual(SystemAudioSignal.normalizedLevel(rms: 0.1), 2.0 / 3.0, accuracy: 0.0001)
-        XCTAssertEqual(SystemAudioSignal.normalizedLevel(rms: 1), 1, accuracy: 0.0001)
-    }
-
-    func testSystemAudioSpectrumSeparatesFrequencyBands() {
-        let sampleRate = 48_000.0
-        let frequency = 1_000.0
-        let samples = (0..<2_048).map { index in
-            Float(0.5 * sin(2 * Double.pi * frequency * Double(index) / sampleRate))
-        }
-        var spectrum = [Float](
-            repeating: 0,
-            count: SystemAudioSignal.bandFrequencies.count
-        )
-        samples.withUnsafeBufferPointer { buffer in
-            SystemAudioSignal.accumulateSpectrum(
-                samples: buffer.baseAddress!,
-                count: buffer.count,
-                sampleRate: sampleRate,
-                into: &spectrum
-            )
-        }
-        let target = SystemAudioSignal.bandFrequencies.firstIndex(of: frequency)!
-        XCTAssertEqual(spectrum.count, 11)
-        XCTAssertGreaterThan(spectrum[target], spectrum[0] + 0.2)
-        XCTAssertGreaterThan(spectrum[target], spectrum[9] + 0.2)
-    }
-
-    func testMediaTransportCommandsMapToStableSendCommandCodes() {
-        XCTAssertEqual(MediaTransportCommand(rawValue: "play_pause")?.sendCommandCode, 2)
-        XCTAssertEqual(MediaTransportCommand(rawValue: "next")?.sendCommandCode, 4)
-        XCTAssertEqual(MediaTransportCommand(rawValue: "previous")?.sendCommandCode, 5)
-        XCTAssertNil(MediaTransportCommand(rawValue: "stop"))
-        XCTAssertNil(MediaTransportCommand(rawValue: "PLAY_PAUSE"))
-    }
-
-    func testPlayingStateDerivesFromPlaybackRate() {
-        XCTAssertTrue(
-            NowPlayingSnapshot.playingState(
-                from: ["kMRMediaRemoteNowPlayingInfoPlaybackRate": 1.5])!)
-        XCTAssertFalse(
-            NowPlayingSnapshot.playingState(
-                from: ["kMRMediaRemoteNowPlayingInfoPlaybackRate": 0.0])!)
-        XCTAssertNil(NowPlayingSnapshot.playingState(from: [:]))
-    }
-
-    func testNowPlayingTimeParsingRejectsMalformedValues() {
-        XCTAssertEqual(
-            NowPlayingSnapshot.time(
-                "kMRMediaRemoteNowPlayingInfoElapsedTime",
-                from: ["kMRMediaRemoteNowPlayingInfoElapsedTime": 12.5]),
-            12.5)
-        XCTAssertNil(
-            NowPlayingSnapshot.time(
-                "kMRMediaRemoteNowPlayingInfoDuration",
-                from: ["kMRMediaRemoteNowPlayingInfoDuration": -1.0]))
-        XCTAssertNil(
-            NowPlayingSnapshot.time(
-                "kMRMediaRemoteNowPlayingInfoDuration",
-                from: ["kMRMediaRemoteNowPlayingInfoDuration": "unknown"]))
-    }
-
-    func testBundleFamilyMatchingIsConservative() {
-        XCTAssertTrue(BundleFamily.matches(
-            "com.google.Chrome", "com.google.Chrome.helper.renderer"))
-        XCTAssertTrue(BundleFamily.matches(
-            "com.apple.Safari", "com.apple.WebKit.WebContent"))
-        XCTAssertTrue(BundleFamily.matches("com.example.player", "com.example.player"))
-        XCTAssertFalse(BundleFamily.matches(
-            "com.google.Chrome", "com.google.Chromeish.helper"))
-        XCTAssertFalse(BundleFamily.matches("com.google.Chrome", "com.apple.Safari"))
-        XCTAssertFalse(BundleFamily.matches(nil, "com.google.Chrome"))
-    }
-
-    func testTransportCapabilityResolutionUsesSupportedAndEnabledCommands() {
-        let resolved = MediaTransportCapabilities.resolve(
-            sendAvailable: true,
-            supported: Set([4, 5]),
-            enabled: Set([4]))
-        XCTAssertTrue(resolved.playPause)
-        XCTAssertFalse(resolved.previous)
-        XCTAssertTrue(resolved.next)
-
-        let unavailable = MediaTransportCapabilities.resolve(
-            sendAvailable: true,
-            supported: nil,
-            enabled: nil)
-        XCTAssertTrue(unavailable.playPause)
-        XCTAssertFalse(unavailable.previous)
-        XCTAssertFalse(unavailable.next)
-
-        let unsendable = MediaTransportCapabilities.resolve(
-            sendAvailable: false,
-            supported: Set([4, 5]),
-            enabled: Set([4, 5]))
-        XCTAssertFalse(unsendable.playPause)
-        XCTAssertFalse(unsendable.previous)
-        XCTAssertFalse(unsendable.next)
-    }
-
-    func testAvailableMediaRemoteBridgeExposesPlayPause() {
-        guard ultravox_macos_bridge_media_remote_available() == 1 else { return }
-        var playPause: Int32 = 0
-        var previous: Int32 = 0
-        var next: Int32 = 0
-        XCTAssertEqual(
-            ultravox_macos_bridge_media_transport_capabilities(
-                &playPause, &previous, &next),
-            1)
-        XCTAssertEqual(playPause, 1)
-    }
-
-    func testActiveAudioProcessBridgeReturnsKnownValue() {
-        // Capture-free probe must return a well-formed signal in any
-        // environment: 1 when another process runs output audio, else 0.
-        var processID: pid_t = 0
-        var appName: UnsafeMutablePointer<CChar>? = nil
-        var bundleId: UnsafeMutablePointer<CChar>? = nil
-        let result = ultravox_macos_bridge_active_audio_process(
-            &processID, &appName, &bundleId)
-        XCTAssertTrue(result == 0 || result == 1)
-        if result == 1 { XCTAssertGreaterThan(processID, 0) }
-        if let appName { ultravox_macos_bridge_free_string(appName) }
-        if let bundleId { ultravox_macos_bridge_free_string(bundleId) }
-    }
     func testMicrophoneAuthorizationStatusReturnsKnownValue() {
         let status = ultravox_macos_bridge_microphone_authorization_status()
         XCTAssertTrue((0...3).contains(status))

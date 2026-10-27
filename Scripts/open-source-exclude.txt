@@ -16,8 +16,17 @@ Scripts/build-organization-bundle
 Scripts/mirror-control
 Scripts/publish-release.sh
 
+# Internal identity-recovery operations and mock security fixtures:
+docs/recovery-release.md
+Scripts/tests/recovery-publish.py
+Scripts/tests/recovery-bridge.py
+Scripts/tests/recovery-guard.py
+
 # Internal licensing contract (names private keychain items):
 docs/pro-licensing.md
 
 # Voice Studio core (compiled only with the Pro feature):
 crates/ultravox-core/src/voice_studio.rs
+
+# Tracked local QA evidence remains private (exclude this exact directory).
+.local-qa/

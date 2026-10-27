@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "UltraVox",
-  "identifier": "com.imploselabs.ultravox",
-  "version": "0.11.0",
+  "identifier": "com.paretocybernetics.ultravox",
+  "version": "0.13.3",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
@@ -64,18 +64,22 @@
   },
   "bundle": {
     "active": true,
-    "resources": {"../../../skills/dictionary-review/SKILL.md": "skills/dictionary-review/SKILL.md", "../../../skills/voice-studio/SKILL.md": "skills/voice-studio/SKILL.md"},
+    "resources": {"../../../skills/dictionary-review/SKILL.md": "skills/dictionary-review/SKILL.md", "../../../skills/voice-studio/SKILL.md": "skills/voice-studio/SKILL.md", "../LEGAL_NOTICES.md": "LEGAL_NOTICES.md", "../licenses/voice-glow.MIT.txt": "licenses/voice-glow.MIT.txt"},
     "targets": ["app", "dmg", "deb", "rpm", "appimage", "msi", "nsis"],
     "icon": [
       "icons/icon.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "copyright": "Copyright © 2024-present Implose Cybernetics",
+    "copyright": "Copyright © 2024-present Pareto Cybernetics",
     "category": "Productivity",
     "macOS": {
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist",
+      "frameworks": [
+        "../../../third_party/phonon2/libphonon2_enc-macos-arm64.dylib",
+        "../../../third_party/phonon2/libphonon2_tdt-macos-arm64.dylib"
+      ],
       "signingIdentity": "-"
     },
     "shortDescription": "Real-time audio transcription",

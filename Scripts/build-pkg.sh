@@ -1,9 +1,10 @@
 #!/bin/bash
 set -euo pipefail
+umask 022
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="UltraVox"
-BUNDLE_ID="com.imploselabs.ultravox"
+BUNDLE_ID="com.paretocybernetics.ultravox"
 VERSION="${VERSION:-$(node -p "require('${ROOT_DIR}/apps/desktop/package.json').version")}"
 ARCH="${PACKAGE_ARCH:-$(uname -m)}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/release}"
@@ -94,13 +95,48 @@ if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "log
   done
 fi
 SCRIPT
-chmod 700 "${PACKAGE_SCRIPTS_DIR}/preinstall"
+chmod 755 "${PACKAGE_SCRIPTS_DIR}/preinstall"
+cat > "${PACKAGE_SCRIPTS_DIR}/postinstall" <<'SCRIPT'
+#!/bin/zsh
+# Kate BUG 7: an installed app that only root can read is invisible to the user, Spotlight and UltraTerm.
+set -u
+APP="$2/UltraVox.app"
+[[ -d "$APP" ]] || APP="/Applications/UltraVox.app"
+/bin/chmod -R u+rwX,go+rX,go-w "$APP"
+/usr/bin/find "$APP" -perm -u+x -type f -exec /bin/chmod go+x {} +
+CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console)"
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "loginwindow" ]]; then
+  if ! /usr/bin/sudo -u "$CONSOLE_USER" /bin/test -x "$APP/Contents/MacOS/ultravox-control"; then
+    echo "UltraVox postinstall: $CONSOLE_USER cannot run $APP/Contents/MacOS/ultravox-control" >&2
+    exit 1
+  fi
+fi
+exit 0
+SCRIPT
+chmod 755 "${PACKAGE_SCRIPTS_DIR}/postinstall"
 
+
+# Installer must replace the canonical app, not relocate to a stray copy with
+# the same bundle ID. Explicit component policy requires pkgbuild root mode.
+PAYLOAD_ROOT="${PACKAGE_WORK_DIR}/payload"
+COMPONENT_PLIST="${PACKAGE_WORK_DIR}/components.plist"
+cat > "$COMPONENT_PLIST" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><array><dict>
+<key>RootRelativeBundlePath</key><string>UltraVox.app</string>
+<key>BundleIsRelocatable</key><false/>
+<key>BundleHasStrictIdentifier</key><true/>
+<key>BundleIsVersionChecked</key><true/>
+<key>BundleOverwriteAction</key><string>upgrade</string>
+</dict></array></plist>
+PLIST
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$PKG_PATH"
 PKGBUILD_ARGS=(
-  --component "$APP_PATH"
+  --root "$PAYLOAD_ROOT"
+  --component-plist "$COMPONENT_PLIST"
   --install-location /Applications
   --identifier "$BUNDLE_ID"
   --version "$VERSION"
@@ -113,6 +149,10 @@ fi
 if [[ -n "${APPLE_INSTALLER_SIGNING_IDENTITY:-}" ]]; then
   PKGBUILD_ARGS+=(--sign "$APPLE_INSTALLER_SIGNING_IDENTITY")
 fi
+/usr/bin/xattr -cr "$APP_PATH"
+/bin/chmod -R u+rwX,go+rX,go-w "$APP_PATH"
+mkdir -p "$PAYLOAD_ROOT"
+ditto "$APP_PATH" "$PAYLOAD_ROOT/UltraVox.app"
 pkgbuild "${PKGBUILD_ARGS[@]}" "$PKG_PATH"
 
 if [[ "${NOTARIZE:-0}" == "1" ]]; then

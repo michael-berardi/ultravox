@@ -1,0 +1,34 @@
+/* These are opaque backplates, not replacements for the theme materials.
+   The window and panels retain their existing alpha gradients/highlights;
+   their final compositing no longer depends on desktop wallpaper or vibrancy.
+   #root also covers DEV harnesses that do not mount .app-shell. */
+:root { --window-underpaint: #020307; }
+:root[data-theme="midnight"] { --window-underpaint: #020307; }
+:root[data-theme="frutiger-aero"] { --window-underpaint: #e2f3fc; }
+:root[data-theme="frutiger-dark"] { --window-underpaint: #000206; }
+:root[data-theme="winamp"] { --window-underpaint: #141625; }
+:root[data-theme="winamp-mmd3"] { --window-underpaint: #101528; }
+:root[data-theme="winamp-bento"] { --window-underpaint: #18191d; }
+:root[data-theme="winamp-hifi"] { --window-underpaint: #0e0e11; }
+:root[data-theme="pioneer"] { --window-underpaint: #02080f; }
+:root[data-theme="olive"] { --window-underpaint: #161711; }
+:root[data-theme="nord-frost"] { --window-underpaint: #e5eaf3; }
+:root[data-theme="solar-dusk"] { --window-underpaint: #180e10; }
+:root[data-theme="vapor"] { --window-underpaint: #100a20; }
+:root[data-theme="obsidian-rite"] { --window-underpaint: #050309; }
+:root[data-theme="crystal"] { --window-underpaint: #eef2f6; }
+#root { background-color: var(--window-underpaint); }
+.renderer-fallback {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  background-color: var(--window-underpaint, #020307);
+  color: var(--text, #f7f8fa);
+  overflow-wrap: anywhere;
+}
+.renderer-fallback h1 { margin: 0; font-size: 20px; }
+.renderer-fallback p { margin: 8px 0 0; }

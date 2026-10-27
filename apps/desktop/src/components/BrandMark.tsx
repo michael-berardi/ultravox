@@ -7,7 +7,7 @@ import type { ProStatus } from "../ipc";
 
 /**
  * UltraVox brand cluster for window chrome: a compact voice-ring mark, the
- * wordmark, and the Implose Cybernetics attribution. Every color derives from
+ * wordmark, and the Pareto Cybernetics attribution. Every color derives from
  * the active theme's custom properties, so the mark integrates with all
  * fourteen themes without per-theme overrides.
  */
@@ -30,7 +30,7 @@ export function BrandMark({ suffix }: { suffix?: string }) {
   return (
     <span className="brand">
       <span className="brand-name">{suffix ? `UltraVox ${suffix}` : "UltraVox"}</span>
-      <span className="brand-by">by Implose Cybernetics</span>
+      <span className="brand-by">by Pareto Cybernetics</span>
     </span>
   );
 }

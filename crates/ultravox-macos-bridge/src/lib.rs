@@ -13,20 +13,21 @@
 
 use libc::{c_char, c_double, c_int};
 use std::ffi::{CStr, CString};
-use std::io::Read;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Instant;
 
 #[allow(dead_code)]
 extern "C" {
     fn ultravox_macos_bridge_version() -> *mut c_char;
+    fn ultravox_macos_bridge_begin_latency_activity(reason: *const c_char) -> i64;
+    fn ultravox_macos_bridge_end_latency_activity(token: i64) -> c_int;
     fn ultravox_macos_bridge_free_string(s: *mut c_char);
 
     fn ultravox_macos_bridge_is_accessibility_trusted(prompt: c_int) -> c_int;
     fn ultravox_macos_bridge_microphone_authorization_status() -> c_int;
     fn ultravox_macos_bridge_request_microphone_access() -> c_int;
+    fn ultravox_macos_bridge_request_microphone_access_outcome() -> c_int;
+    fn ultravox_macos_bridge_main_bundle_identity() -> *mut c_char;
     fn ultravox_macos_bridge_screen_recording_authorization_status() -> c_int;
     fn ultravox_macos_bridge_request_screen_recording_access() -> c_int;
     fn ultravox_macos_bridge_start_meeting_capture(
@@ -86,42 +87,7 @@ extern "C" {
         directory: *const c_char,
     ) -> c_int;
     fn ultravox_macos_bridge_get_model_progress(version: *const c_char) -> c_double;
-    fn ultravox_macos_bridge_active_audio_process(
-        process_id: *mut c_int,
-        app_name: *mut *mut c_char,
-        bundle_id: *mut *mut c_char,
-    ) -> c_int;
-    fn ultravox_macos_bridge_set_system_audio_meter_enabled(
-        enabled: c_int,
-        error: *mut *mut c_char,
-    ) -> c_int;
-    fn ultravox_macos_bridge_get_system_audio_level() -> c_double;
-    fn ultravox_macos_bridge_get_system_audio_spectrum(
-        bands: *mut c_double,
-        capacity: c_int,
-    ) -> c_int;
-    fn ultravox_macos_bridge_get_output_volume(volume: *mut c_double) -> c_int;
-    fn ultravox_macos_bridge_set_output_volume(volume: c_double) -> c_int;
-    fn ultravox_macos_bridge_get_output_muted(muted: *mut c_int) -> c_int;
-    fn ultravox_macos_bridge_set_output_muted(muted: c_int) -> c_int;
-    fn ultravox_macos_bridge_media_remote_available() -> c_int;
-    fn ultravox_macos_bridge_media_transport_capabilities(
-        play_pause: *mut c_int,
-        previous: *mut c_int,
-        next: *mut c_int,
-    ) -> c_int;
-    fn ultravox_macos_bridge_now_playing(
-        process_id: *mut c_int,
-        app_name: *mut *mut c_char,
-        bundle_id: *mut *mut c_char,
-        title: *mut *mut c_char,
-        artist: *mut *mut c_char,
-        album: *mut *mut c_char,
-        elapsed_seconds: *mut c_double,
-        duration_seconds: *mut c_double,
-        is_playing: *mut c_int,
-    ) -> c_int;
-    fn ultravox_macos_bridge_media_transport(command: *const c_char) -> c_int;
+
 }
 
 /// Returns the bridge version string.
@@ -144,7 +110,13 @@ pub enum MicrophoneAuthorizationStatus {
 }
 
 pub fn microphone_authorization_status() -> MicrophoneAuthorizationStatus {
-    match unsafe { ultravox_macos_bridge_microphone_authorization_status() } {
+    microphone_status_from_native(unsafe {
+        ultravox_macos_bridge_microphone_authorization_status()
+    })
+}
+
+fn microphone_status_from_native(value: i32) -> MicrophoneAuthorizationStatus {
+    match value {
         0 => MicrophoneAuthorizationStatus::NotDetermined,
         1 => MicrophoneAuthorizationStatus::Authorized,
         2 => MicrophoneAuthorizationStatus::Denied,
@@ -155,6 +127,61 @@ pub fn microphone_authorization_status() -> MicrophoneAuthorizationStatus {
 /// Requests microphone access when authorization has not yet been decided.
 pub fn request_microphone_access() -> bool {
     unsafe { ultravox_macos_bridge_request_microphone_access() != 0 }
+}
+
+/// Detailed explicit-request outcome; pending and timeout are not denials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicrophoneRequestOutcome {
+    Pending,
+    Authorized,
+    Denied,
+    Restricted,
+    TimedOut,
+}
+
+fn microphone_request_outcome_from_native(value: i32) -> MicrophoneRequestOutcome {
+    match value {
+        1 => MicrophoneRequestOutcome::Authorized,
+        2 => MicrophoneRequestOutcome::Denied,
+        3 => MicrophoneRequestOutcome::Restricted,
+        4 => MicrophoneRequestOutcome::TimedOut,
+        _ => MicrophoneRequestOutcome::Pending,
+    }
+}
+
+pub fn request_microphone_access_outcome() -> MicrophoneRequestOutcome {
+    microphone_request_outcome_from_native(unsafe {
+        ultravox_macos_bridge_request_microphone_access_outcome()
+    })
+}
+
+/// Read-only Bundle.main identity from the calling GUI, not a helper process.
+/// The caller must validate the fixed JSON schema and bound its metadata.
+pub fn main_bundle_identity_json() -> Option<String> {
+    let value = take_bridge_string(unsafe { ultravox_macos_bridge_main_bundle_identity() });
+    (!value.is_empty() && value.len() <= 16 * 1024).then_some(value)
+}
+
+/// Read live status; this never requests consent.
+pub fn microphone_recording_readiness() -> Result<(), &'static str> {
+    microphone_recording_readiness_for(microphone_authorization_status())
+}
+
+fn microphone_recording_readiness_for(
+    status: MicrophoneAuthorizationStatus,
+) -> Result<(), &'static str> {
+    match status {
+        MicrophoneAuthorizationStatus::Authorized => Ok(()),
+        MicrophoneAuthorizationStatus::NotDetermined => Err(
+            "UltraVox doesn't have microphone access yet. Allow it from the permission screen or in System Settings > Privacy & Security > Microphone.",
+        ),
+        MicrophoneAuthorizationStatus::Denied => Err(
+            "Microphone access is turned off for UltraVox. Turn it on in System Settings > Privacy & Security > Microphone.",
+        ),
+        MicrophoneAuthorizationStatus::Restricted => Err(
+            "macOS is restricting microphone access on this Mac, so UltraVox can't record.",
+        ),
+    }
 }
 
 /// Runtime Screen Recording preflight; TCC database rows are not authoritative.
@@ -371,6 +398,30 @@ pub fn set_indicator_state(state: &str) -> i32 {
     }
 }
 
+/// Keeps macOS from App Napping UltraVox while held. A hidden app is napped,
+/// which starves the audio writer thread until the capture buffer overflows;
+/// recording and transcription hold one of these for their whole lifetime.
+#[derive(Debug)]
+pub struct LatencyActivity {
+    token: i64,
+}
+
+impl LatencyActivity {
+    pub fn begin(reason: &str) -> Self {
+        let reason = CString::new(reason.replace('\0', " ")).unwrap_or_default();
+        let token = unsafe { ultravox_macos_bridge_begin_latency_activity(reason.as_ptr()) };
+        Self { token }
+    }
+}
+
+impl Drop for LatencyActivity {
+    fn drop(&mut self) {
+        if unsafe { ultravox_macos_bridge_end_latency_activity(self.token) } != 1 {
+            eprintln!("UltraVox latency activity {} was already ended", self.token);
+        }
+    }
+}
+
 /// Hides the nonactivating indicator panel.
 pub fn hide_indicator() -> i32 {
     unsafe { ultravox_macos_bridge_hide_indicator() }
@@ -491,492 +542,6 @@ pub fn model_progress(version: &str) -> f64 {
     }
 }
 
-// MARK: - Media panel support
-
-/// Source application detected through public CoreAudio process state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AudioSource {
-    pub process_id: i32,
-    pub app_name: Option<String>,
-    pub bundle_id: Option<String>,
-}
-
-/// Default-output volume and mute state. `None` members mean the current
-/// device does not support that control; callers must surface that as
-/// "not available" rather than a fabricated value.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OutputVolumeState {
-    pub volume: Option<f64>,
-    pub muted: Option<bool>,
-}
-
-/// Now-playing metadata from optional runtime MediaRemote access.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NowPlayingInfo {
-    pub process_id: i32,
-    pub app_name: Option<String>,
-    pub bundle_id: Option<String>,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub artwork_data_url: Option<String>,
-    pub elapsed_seconds: Option<f64>,
-    pub duration_seconds: Option<f64>,
-    pub is_playing: Option<bool>,
-}
-
-/// Runtime MediaRemote command capabilities. Secondary commands are false
-/// unless the supported-command and command-info APIs prove they are enabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransportCapabilities {
-    pub play_pause: bool,
-    pub previous: bool,
-    pub next: bool,
-}
-
-/// Transport commands accepted by [`media_transport`].
-pub const TRANSPORT_COMMANDS: [&str; 3] = ["play_pause", "previous", "next"];
-
-struct AdapterCache {
-    fetched_at: Option<Instant>,
-    value: Option<NowPlayingInfo>,
-}
-
-static ADAPTER_CACHE: LazyLock<Mutex<AdapterCache>> = LazyLock::new(|| {
-    Mutex::new(AdapterCache {
-        fetched_at: None,
-        value: None,
-    })
-});
-const MAX_ADAPTER_OUTPUT_BYTES: usize = 1536 * 1024;
-const MAX_ARTWORK_BASE64_BYTES: usize = 1024 * 1024;
-
-fn adapter_directory() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("ULTRAVOX_MEDIA_ADAPTER_DIR") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(binary_dir) = executable.parent() {
-            candidates.push(binary_dir.join("mediaremote"));
-            if let Some(contents_dir) = binary_dir.parent() {
-                candidates.push(contents_dir.join("Resources").join("mediaremote"));
-                candidates.push(
-                    contents_dir
-                        .join("UltraVox.app")
-                        .join("Contents")
-                        .join("Resources")
-                        .join("mediaremote"),
-                );
-            }
-        }
-    }
-    candidates.into_iter().find(|directory| {
-        directory.join("mediaremote-adapter.pl").is_file()
-            && directory.join("MediaRemoteAdapter.framework").is_dir()
-    })
-}
-
-fn adapter_string(value: &serde_json::Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn adapter_seconds(value: &serde_json::Value, key: &str) -> Option<f64> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_f64)
-        .filter(|value| value.is_finite() && *value >= 0.0)
-}
-
-fn parse_adapter_now_playing(value: &serde_json::Value) -> Option<NowPlayingInfo> {
-    let title = adapter_string(value, "title");
-    let artist = adapter_string(value, "artist");
-    let album = adapter_string(value, "album");
-    if title.is_none() && artist.is_none() && album.is_none() {
-        return None;
-    }
-    let artwork_data_url = adapter_string(value, "artworkData").and_then(|data| {
-        let mime = adapter_string(value, "artworkMimeType")?;
-        (mime.starts_with("image/") && data.len() <= MAX_ARTWORK_BASE64_BYTES)
-            .then(|| format!("data:{mime};base64,{data}"))
-    });
-    Some(NowPlayingInfo {
-        process_id: value
-            .get("processIdentifier")
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or(0),
-        app_name: None,
-        bundle_id: adapter_string(value, "bundleIdentifier"),
-        title,
-        artist,
-        album,
-        artwork_data_url,
-        elapsed_seconds: adapter_seconds(value, "elapsedTimeNow")
-            .or_else(|| adapter_seconds(value, "elapsedTime")),
-        duration_seconds: adapter_seconds(value, "duration"),
-        is_playing: value
-            .get("playing")
-            .and_then(serde_json::Value::as_bool)
-            .or_else(|| {
-                value
-                    .get("playbackRate")
-                    .and_then(serde_json::Value::as_f64)
-                    .map(|rate| rate > 0.0)
-            }),
-    })
-}
-
-fn read_adapter_now_playing() -> Option<NowPlayingInfo> {
-    let directory = adapter_directory()?;
-    let mut child = Command::new("/usr/bin/perl")
-        .arg(directory.join("mediaremote-adapter.pl"))
-        .arg(directory.join("MediaRemoteAdapter.framework"))
-        .arg("get")
-        .arg("--now")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut bytes = Vec::with_capacity(64 * 1024);
-    let mut stdout = child.stdout.take()?;
-    if stdout
-        .by_ref()
-        .take((MAX_ADAPTER_OUTPUT_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .is_err()
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    }
-    drop(stdout);
-    if bytes.len() > MAX_ADAPTER_OUTPUT_BYTES {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    }
-    let status = child.wait().ok()?;
-    if !status.success() {
-        return None;
-    }
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    parse_adapter_now_playing(&value)
-}
-
-/// Reads current Control Center metadata through the bundled BSD-licensed
-/// MediaRemote adapter. `/usr/bin/perl` provides the required system
-/// entitlement on macOS 15.4+; results are cached across the 1 Hz UI poll.
-pub fn adapter_now_playing() -> Option<NowPlayingInfo> {
-    let mut cache = ADAPTER_CACHE.lock().ok()?;
-    if cache
-        .fetched_at
-        .is_some_and(|time| time.elapsed() < Duration::from_secs(2))
-    {
-        return cache.value.clone();
-    }
-    let value = read_adapter_now_playing();
-    cache.fetched_at = Some(Instant::now());
-    cache.value = value.clone();
-    value
-}
-
-/// Returns true only for an exact bundle ID or a known browser helper/main
-/// family. Arbitrary bundle ID prefixes are deliberately rejected.
-pub fn same_bundle_family(left: Option<&str>, right: Option<&str>) -> bool {
-    fn family(bundle_id: &str) -> Option<&'static str> {
-        const BROWSER_BASES: [&str; 7] = [
-            "com.google.Chrome",
-            "com.microsoft.edgemac",
-            "com.brave.Browser",
-            "company.thebrowser.Browser",
-            "org.mozilla.firefox",
-            "com.vivaldi.Vivaldi",
-            "com.operasoftware.Opera",
-        ];
-        const SAFARI_FAMILY: [&str; 4] = [
-            "com.apple.Safari",
-            "com.apple.WebKit.Networking",
-            "com.apple.WebKit.WebContent",
-            "com.apple.WebKit.GPU",
-        ];
-        if SAFARI_FAMILY.contains(&bundle_id) {
-            return Some("com.apple.Safari");
-        }
-        BROWSER_BASES.into_iter().find(|base| {
-            bundle_id == *base
-                || bundle_id
-                    .strip_prefix(base)
-                    .is_some_and(|suffix| suffix == ".helper" || suffix.starts_with(".helper."))
-        })
-    }
-
-    match (left, right) {
-        (Some(left), Some(right)) if left == right && !left.is_empty() => true,
-        (Some(left), Some(right)) => family(left)
-            .zip(family(right))
-            .is_some_and(|(left_family, right_family)| left_family == right_family),
-        _ => false,
-    }
-}
-
-/// Returns true when source and now-playing metadata identify the same app.
-pub fn same_media_app(source: &AudioSource, now_playing: &NowPlayingInfo) -> bool {
-    (source.process_id > 0
-        && now_playing.process_id > 0
-        && source.process_id == now_playing.process_id)
-        || same_bundle_family(
-            source.bundle_id.as_deref(),
-            now_playing.bundle_id.as_deref(),
-        )
-}
-
-/// Returns the best other process currently running audio output, or `None`
-/// when no other process is active. The native bridge prefers the MediaRemote
-/// client PID, then a known browser helper/main family, then the first active
-/// process. Capture-free: only public process-state properties are read and
-/// this process is always excluded.
-pub fn active_audio_source() -> Option<AudioSource> {
-    unsafe {
-        let mut process_id: c_int = 0;
-        let mut app_name: *mut c_char = std::ptr::null_mut();
-        let mut bundle_id: *mut c_char = std::ptr::null_mut();
-        if ultravox_macos_bridge_active_audio_process(
-            &mut process_id,
-            &mut app_name,
-            &mut bundle_id,
-        ) != 1
-        {
-            return None;
-        }
-        let app_name = take_bridge_string(app_name);
-        let bundle_id = take_bridge_string(bundle_id);
-        Some(AudioSource {
-            process_id,
-            app_name: (!app_name.is_empty()).then_some(app_name),
-            bundle_id: (!bundle_id.is_empty()).then_some(bundle_id),
-        })
-    }
-}
-
-/// Starts or stops the ScreenCaptureKit system-output meter.
-///
-/// The native stream excludes UltraVox audio and never captures the
-/// microphone. Callers must stop it when reactive media UI is not visible.
-pub fn set_system_audio_meter_enabled(enabled: bool) -> Result<(), String> {
-    unsafe {
-        let mut error: *mut c_char = std::ptr::null_mut();
-        let result =
-            ultravox_macos_bridge_set_system_audio_meter_enabled(enabled as c_int, &mut error);
-        let message = take_bridge_string(error);
-        if result == 1 {
-            Ok(())
-        } else if message.is_empty() {
-            Err("system audio meter is unavailable".to_string())
-        } else {
-            Err(message)
-        }
-    }
-}
-
-/// Latest RMS-derived system-output level in [0, 1].
-pub fn system_audio_level() -> f64 {
-    let level = unsafe { ultravox_macos_bridge_get_system_audio_level() };
-    if level.is_finite() {
-        level.clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
-}
-
-/// Number of low-to-high frequency bins produced by the native meter.
-pub const SYSTEM_AUDIO_SPECTRUM_BANDS: usize = 11;
-
-/// Latest real system-output frequency magnitudes, low to high.
-pub fn system_audio_spectrum() -> Vec<f64> {
-    let mut bands = vec![0.0; SYSTEM_AUDIO_SPECTRUM_BANDS];
-    let written = unsafe {
-        ultravox_macos_bridge_get_system_audio_spectrum(
-            bands.as_mut_ptr(),
-            SYSTEM_AUDIO_SPECTRUM_BANDS as c_int,
-        )
-    };
-    if written != SYSTEM_AUDIO_SPECTRUM_BANDS as c_int {
-        return vec![0.0; SYSTEM_AUDIO_SPECTRUM_BANDS];
-    }
-    for band in &mut bands {
-        *band = if band.is_finite() {
-            band.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-    }
-    bands
-}
-
-/// Reads default-output volume and mute. Unsupported controls report `None`.
-pub fn output_volume_state() -> OutputVolumeState {
-    unsafe {
-        let mut volume: c_double = 0.0;
-        let volume_ok = ultravox_macos_bridge_get_output_volume(&mut volume) == 1;
-        let mut muted: c_int = 0;
-        let muted_ok = ultravox_macos_bridge_get_output_muted(&mut muted) == 1;
-        OutputVolumeState {
-            volume: volume_ok.then(|| volume.clamp(0.0, 1.0)),
-            muted: muted_ok.then_some(muted != 0),
-        }
-    }
-}
-
-/// Validates a volume value in [0, 1]; rejects NaN and out-of-range input.
-fn validate_unit_volume(volume: f64) -> Result<f64, String> {
-    if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
-        return Err("volume must be between 0 and 1".to_string());
-    }
-    Ok(volume)
-}
-
-/// Sets the system default-output volume in [0, 1].
-///
-/// Errors when the value is invalid or the device has no settable volume.
-pub fn set_system_volume(volume: f64) -> Result<(), String> {
-    let clamped = validate_unit_volume(volume)?;
-    let ok = unsafe { ultravox_macos_bridge_set_output_volume(clamped) } == 1;
-    if ok {
-        Ok(())
-    } else {
-        Err("default output device does not support volume changes".to_string())
-    }
-}
-
-/// Sets the system default-output mute state.
-///
-/// Errors when the device has no mute control.
-pub fn set_system_muted(muted: bool) -> Result<(), String> {
-    let ok = unsafe { ultravox_macos_bridge_set_output_muted(muted as c_int) } == 1;
-    if ok {
-        Ok(())
-    } else {
-        Err("default output device does not support mute".to_string())
-    }
-}
-
-/// Returns true when MediaRemote's system-session send API resolved.
-pub fn transport_available() -> bool {
-    unsafe { ultravox_macos_bridge_media_remote_available() != 0 }
-}
-
-/// Reads runtime MediaRemote command capabilities. Missing secondary command
-/// discovery APIs safely report previous/next as false; play/pause remains
-/// independently available when the send API resolves.
-pub fn transport_capabilities() -> TransportCapabilities {
-    unsafe {
-        let mut play_pause = 0;
-        let mut previous = 0;
-        let mut next = 0;
-        let _ = ultravox_macos_bridge_media_transport_capabilities(
-            &mut play_pause,
-            &mut previous,
-            &mut next,
-        );
-        TransportCapabilities {
-            play_pause: play_pause != 0,
-            previous: previous != 0,
-            next: next != 0,
-        }
-    }
-}
-
-fn valid_seconds(value: c_double) -> Option<f64> {
-    value
-        .is_finite()
-        .then_some(value)
-        .filter(|value| *value >= 0.0)
-}
-
-/// Fetches now-playing metadata, or `None` when MediaRemote is unavailable
-/// or did not reply in time.
-pub fn now_playing() -> Option<NowPlayingInfo> {
-    unsafe {
-        let mut process_id: c_int = 0;
-        let mut app_name: *mut c_char = std::ptr::null_mut();
-        let mut bundle_id: *mut c_char = std::ptr::null_mut();
-        let mut title: *mut c_char = std::ptr::null_mut();
-        let mut artist: *mut c_char = std::ptr::null_mut();
-        let mut album: *mut c_char = std::ptr::null_mut();
-        let mut elapsed_seconds: c_double = -1.0;
-        let mut duration_seconds: c_double = -1.0;
-        let mut is_playing: c_int = -1;
-        if ultravox_macos_bridge_now_playing(
-            &mut process_id,
-            &mut app_name,
-            &mut bundle_id,
-            &mut title,
-            &mut artist,
-            &mut album,
-            &mut elapsed_seconds,
-            &mut duration_seconds,
-            &mut is_playing,
-        ) != 1
-        {
-            return None;
-        }
-        let app_name = take_bridge_string(app_name);
-        let bundle_id = take_bridge_string(bundle_id);
-        let title = take_bridge_string(title);
-        let artist = take_bridge_string(artist);
-        let album = take_bridge_string(album);
-        Some(NowPlayingInfo {
-            process_id,
-            app_name: (!app_name.is_empty()).then_some(app_name),
-            bundle_id: (!bundle_id.is_empty()).then_some(bundle_id),
-            title: (!title.is_empty()).then_some(title),
-            artist: (!artist.is_empty()).then_some(artist),
-            album: (!album.is_empty()).then_some(album),
-            artwork_data_url: None,
-            elapsed_seconds: valid_seconds(elapsed_seconds),
-            duration_seconds: valid_seconds(duration_seconds),
-            is_playing: match is_playing {
-                1 => Some(true),
-                0 => Some(false),
-                _ => None,
-            },
-        })
-    }
-}
-
-/// Validates a media transport command without crossing the FFI boundary.
-fn validate_media_transport_command(command: &str) -> Result<&str, String> {
-    TRANSPORT_COMMANDS
-        .contains(&command)
-        .then_some(command)
-        .ok_or_else(|| {
-            format!(
-                "unknown transport command: {command} (expected one of {})",
-                TRANSPORT_COMMANDS.join(", ")
-            )
-        })
-}
-
-/// Sends a media transport command (`play_pause`, `previous`, or `next`)
-/// through optional runtime MediaRemote access.
-///
-/// Errors on an unknown command without touching the FFI, or when the
-/// transport is unavailable / delivery failed.
-pub fn media_transport(command: &str) -> Result<(), String> {
-    let command = validate_media_transport_command(command)?;
-    let command = CString::new(command).map_err(|_| "command contained interior NUL")?;
-    match unsafe { ultravox_macos_bridge_media_transport(command.as_ptr()) } {
-        1 => Ok(()),
-        _ => Err("media transport is unavailable on this system".to_string()),
-    }
-}
-
 fn take_bridge_string(ptr: *mut c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -996,6 +561,45 @@ fn c_char_to_string(ptr: *const c_char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_microphone_mapping_and_readiness_are_precise() {
+        for (raw, status) in [
+            (0, MicrophoneAuthorizationStatus::NotDetermined),
+            (1, MicrophoneAuthorizationStatus::Authorized),
+            (2, MicrophoneAuthorizationStatus::Denied),
+            (3, MicrophoneAuthorizationStatus::Restricted),
+        ] {
+            assert_eq!(microphone_status_from_native(raw), status);
+            assert_eq!(microphone_recording_readiness_for(status).is_ok(), raw == 1);
+        }
+        let pending =
+            microphone_recording_readiness_for(MicrophoneAuthorizationStatus::NotDetermined)
+                .unwrap_err();
+        assert!(pending.contains("doesn't have microphone access yet"));
+        assert!(!pending.contains("turned off"));
+        assert!(!pending.contains("unresolved"));
+        assert_eq!(
+            microphone_request_outcome_from_native(0),
+            MicrophoneRequestOutcome::Pending
+        );
+        assert_eq!(
+            microphone_request_outcome_from_native(4),
+            MicrophoneRequestOutcome::TimedOut
+        );
+        assert_eq!(
+            microphone_request_outcome_from_native(2),
+            MicrophoneRequestOutcome::Denied
+        );
+        assert_eq!(
+            microphone_request_outcome_from_native(3),
+            MicrophoneRequestOutcome::Restricted
+        );
+        assert_eq!(
+            microphone_request_outcome_from_native(1),
+            MicrophoneRequestOutcome::Authorized
+        );
+    }
 
     #[test]
     fn test_version_returns_non_empty() {
@@ -1048,173 +652,6 @@ mod tests {
     fn test_transcribe_missing_file_fails() {
         let result = transcribe_file("/this/path/does/not/exist.wav");
         assert!(result.is_err(), "missing file should fail validation");
-    }
-
-    #[test]
-    fn test_volume_validation_rejects_invalid_values() {
-        assert_eq!(validate_unit_volume(0.0), Ok(0.0));
-        assert_eq!(validate_unit_volume(1.0), Ok(1.0));
-        assert_eq!(validate_unit_volume(0.42), Ok(0.42));
-        assert!(validate_unit_volume(-0.01).is_err());
-        assert!(validate_unit_volume(1.01).is_err());
-        assert!(validate_unit_volume(f64::NAN).is_err());
-        assert!(validate_unit_volume(f64::INFINITY).is_err());
-    }
-
-    #[test]
-    fn test_media_transport_rejects_unknown_commands_without_ffi() {
-        for command in ["", "stop", "PLAY_PAUSE", "play_pause;"] {
-            let result = validate_media_transport_command(command);
-            assert!(result.is_err(), "{command:?} should be rejected");
-            assert!(result.unwrap_err().contains("unknown transport command"));
-        }
-    }
-
-    #[test]
-    fn test_transport_command_list_matches_accepted_inputs() {
-        for command in TRANSPORT_COMMANDS {
-            assert_eq!(validate_media_transport_command(command), Ok(command));
-        }
-    }
-
-    #[test]
-    fn test_bundle_family_matching_is_conservative() {
-        assert!(same_bundle_family(
-            Some("com.google.Chrome"),
-            Some("com.google.Chrome.helper.renderer")
-        ));
-        assert!(same_bundle_family(
-            Some("com.apple.Safari"),
-            Some("com.apple.WebKit.WebContent")
-        ));
-        assert!(same_bundle_family(
-            Some("com.example.player"),
-            Some("com.example.player")
-        ));
-        assert!(!same_bundle_family(
-            Some("com.google.Chrome"),
-            Some("com.google.Chromeish.helper")
-        ));
-        assert!(!same_bundle_family(
-            Some("com.google.Chrome"),
-            Some("com.apple.Safari")
-        ));
-        assert!(!same_bundle_family(
-            Some("com.apple.Music"),
-            Some("com.spotify.client")
-        ));
-        assert!(!same_bundle_family(None, Some("com.google.Chrome")));
-    }
-
-    #[test]
-    fn test_metadata_match_requires_pid_or_bundle_family() {
-        let source = AudioSource {
-            process_id: 42,
-            app_name: Some("Chrome".to_string()),
-            bundle_id: Some("com.google.Chrome".to_string()),
-        };
-        let browser_helper = NowPlayingInfo {
-            process_id: 99,
-            app_name: Some("Google Chrome Helper".to_string()),
-            bundle_id: Some("com.google.Chrome.helper.renderer".to_string()),
-            title: Some("Track".to_string()),
-            artist: Some("Artist".to_string()),
-            album: Some("Album".to_string()),
-            artwork_data_url: None,
-            elapsed_seconds: Some(12.5),
-            duration_seconds: Some(180.0),
-            is_playing: Some(true),
-        };
-        assert!(same_media_app(&source, &browser_helper));
-        assert!(same_media_app(
-            &source,
-            &NowPlayingInfo {
-                process_id: 42,
-                ..browser_helper.clone()
-            }
-        ));
-        assert!(!same_media_app(
-            &source,
-            &NowPlayingInfo {
-                process_id: 99,
-                bundle_id: Some("com.apple.Music".to_string()),
-                ..browser_helper
-            }
-        ));
-    }
-
-    #[test]
-    fn test_now_playing_wire_metadata_preserves_optional_fields() {
-        let info = NowPlayingInfo {
-            process_id: 7,
-            app_name: Some("Music".to_string()),
-            bundle_id: Some("com.apple.Music".to_string()),
-            title: Some("Song".to_string()),
-            artist: Some("Artist".to_string()),
-            album: Some("Album".to_string()),
-            artwork_data_url: Some("data:image/jpeg;base64,abc".to_string()),
-            elapsed_seconds: Some(1.25),
-            duration_seconds: Some(123.0),
-            is_playing: Some(false),
-        };
-        assert_eq!(info.album.as_deref(), Some("Album"));
-        assert_eq!(
-            info.artwork_data_url.as_deref(),
-            Some("data:image/jpeg;base64,abc")
-        );
-        assert_eq!(info.elapsed_seconds, Some(1.25));
-        assert_eq!(info.duration_seconds, Some(123.0));
-        assert_eq!(info.app_name.as_deref(), Some("Music"));
-    }
-
-    #[test]
-    fn test_adapter_metadata_parses_preview_and_artwork() {
-        let value = serde_json::json!({
-            "processIdentifier": 42,
-            "bundleIdentifier": "com.google.Chrome.app.youtube",
-            "title": "Track",
-            "artist": "Artist",
-            "album": "Album",
-            "elapsedTimeNow": 12.5,
-            "duration": 180,
-            "playing": true,
-            "artworkMimeType": "image/jpeg",
-            "artworkData": "YWJj"
-        });
-        let info = parse_adapter_now_playing(&value).unwrap();
-        assert_eq!(info.title.as_deref(), Some("Track"));
-        assert_eq!(info.artist.as_deref(), Some("Artist"));
-        assert_eq!(
-            info.artwork_data_url.as_deref(),
-            Some("data:image/jpeg;base64,YWJj")
-        );
-        assert_eq!(info.elapsed_seconds, Some(12.5));
-        assert_eq!(info.is_playing, Some(true));
-    }
-
-    #[test]
-    fn test_invalid_wire_times_are_rejected() {
-        assert_eq!(valid_seconds(-1.0), None);
-        assert_eq!(valid_seconds(f64::NAN), None);
-        assert_eq!(valid_seconds(f64::INFINITY), None);
-        assert_eq!(valid_seconds(0.0), Some(0.0));
-    }
-
-    #[test]
-    fn test_active_audio_source_is_well_formed() {
-        // Environment-dependent: Some in any environment where another process
-        // plays audio, None otherwise. Either way the struct must be coherent.
-        if let Some(source) = active_audio_source() {
-            assert!(source.process_id > 0);
-        }
-    }
-
-    #[test]
-    fn test_output_volume_state_is_well_formed() {
-        let state = output_volume_state();
-        if let Some(volume) = state.volume {
-            assert!((0.0..=1.0).contains(&volume));
-        }
     }
 }
 

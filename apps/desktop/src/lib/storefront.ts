@@ -1,10 +1,10 @@
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 /** Store page for the optional UltraVox Pro license. */
-export const PRO_STORE_URL = "https://implosecybernetics.com/software/?product=ultravox";
+export const PRO_STORE_URL = "https://paretocybernetics.com/software/?product=ultravox";
 
-/** Project page carrying the official UltraVox download. */
-export const PRO_DOWNLOAD_URL = "https://implosecybernetics.com/projects/ultravox/";
+/** Public project page (source, releases and install steps) for the official UltraVox download. */
+export const PRO_DOWNLOAD_URL = "https://github.com/michael-berardi/ultravox";
 
 async function openLink(url: string): Promise<void> {
   try {

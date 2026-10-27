@@ -18,7 +18,63 @@ use tokio::net::UnixStream;
 use ultravox_macos_bridge as bridge;
 use uuid::Uuid;
 
-const USAGE: &str = "Usage: ultravox-control [health|status|model-catalog|history-smoke|download-smoke|shortcut-config-smoke|dictionary-smoke|dictionary-apply <text> <dictionary>|retex-scan <vault> [vault...]|retex-apply <vault> <text>|audio-devices|media-state|media-meter-smoke|media-transport <play_pause|previous|next>|live-record-smoke|recording-id-db-smoke|paste-bridge-dry-run|caret-bridge-dry-run|transcribe-fixture-smoke|transcribe <path> [v2|v3]|import-smoke <path> [v2|v3]|voice-health|voice-start|voice-stop <id>|voice-status <id>|voice-cancel <id>]";
+const USAGE: &str = "Usage: ultravox-control [version|health|status|model-catalog|history-smoke|download-smoke|shortcut-config-smoke|dictionary-smoke|dictionary-apply <text> <dictionary>|retex-scan <vault> [vault...]|retex-apply <vault> <text>|audio-devices|live-record-smoke|recording-id-db-smoke|paste-bridge-dry-run|caret-bridge-dry-run|transcribe-fixture-smoke|transcribe <path> [v2|v3]|import-smoke <path> [v2|v3]|permission-status|voice-health|voice-start|voice-stop <id>|voice-status <id>|voice-cancel <id>]";
+
+#[cfg(all(test, unix))]
+mod permission_ipc_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn permission_status_routes_only_to_gui_socket() {
+        let path = std::env::temp_dir().join(format!("uvperm-{}.sock", Uuid::new_v4().simple()));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let length = stream.read_u32().await.unwrap() as usize;
+            assert!(length < 1024);
+            let mut payload = vec![0; length];
+            stream.read_exact(&mut payload).await.unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(request["command"], "permission-status");
+            assert_eq!(request["version"], 1);
+            assert_eq!(request.as_object().unwrap().len(), 3);
+            let response = serde_json::to_vec(&serde_json::json!({
+                "version":1,"requestId":request["requestId"],"ok":true,
+                "state":"permission-status","permissions":{"guiPid":123}
+            }))
+            .unwrap();
+            stream.write_u32(response.len() as u32).await.unwrap();
+            stream.write_all(&response).await.unwrap();
+        });
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            run_voice_request_at(&path, "permission-status", None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    // Synthetic: a GUI that accepts the connection but never answers.
+    #[tokio::test]
+    async fn permission_status_read_times_out_when_gui_is_unresponsive() {
+        let path = std::env::temp_dir().join(format!("uvperm-{}.sock", Uuid::new_v4().simple()));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            drop(stream);
+        });
+        let error = run_permission_status_at(&path, Duration::from_millis(200))
+            .await
+            .unwrap_err();
+        assert!(error.contains("did not answer"), "{error}");
+        server.abort();
+        std::fs::remove_file(path).unwrap();
+    }
+}
 
 fn data_dir() -> PathBuf {
     std::env::var("ULTRAVOX_DATA_DIR")
@@ -556,138 +612,6 @@ fn run_caret_bridge_dry_run() -> Result<(), String> {
     println!("caret-bridge-dry-run: skipped (macOS only)");
     Ok(())
 }
-#[cfg(target_os = "macos")]
-fn run_media_state() -> Result<(), String> {
-    let audio_source = bridge::active_audio_source()
-        .filter(|source| source.app_name.is_some() || source.bundle_id.is_some());
-    let now_playing = bridge::adapter_now_playing()
-        .or_else(bridge::now_playing)
-        .filter(|item| {
-            item.title.is_some()
-                || item.artist.is_some()
-                || item.album.is_some()
-                || item.artwork_data_url.is_some()
-                || item.duration_seconds.is_some()
-                || item.is_playing.is_some()
-        });
-    let capabilities = bridge::transport_capabilities();
-    let source = now_playing
-        .as_ref()
-        .map(|item| {
-            serde_json::json!({
-                "processId": item.process_id,
-                "appName": item.app_name,
-                "bundleId": item.bundle_id,
-            })
-        })
-        .or_else(|| {
-            audio_source.as_ref().map(|item| {
-                serde_json::json!({
-                    "processId": item.process_id,
-                    "appName": item.app_name,
-                    "bundleId": item.bundle_id,
-                })
-            })
-        });
-    let value = serde_json::json!({
-        "active": now_playing.is_some() || audio_source.is_some(),
-        "source": source,
-        "audioSource": audio_source.as_ref().map(|source| serde_json::json!({
-            "processId": source.process_id,
-            "appName": source.app_name,
-            "bundleId": source.bundle_id,
-        })),
-        "nowPlaying": now_playing.as_ref().map(|item| serde_json::json!({
-            "processId": item.process_id,
-            "appName": item.app_name,
-            "bundleId": item.bundle_id,
-            "title": item.title,
-            "artist": item.artist,
-            "album": item.album,
-            "artworkAvailable": item.artwork_data_url.is_some(),
-            "elapsedSeconds": item.elapsed_seconds,
-            "durationSeconds": item.duration_seconds,
-            "isPlaying": item.is_playing,
-        })),
-        "mediaRemoteAvailable": bridge::transport_available(),
-        "transportCapabilities": {
-            "playPause": capabilities.play_pause,
-            "previous": capabilities.previous,
-            "next": capabilities.next,
-        },
-        "isPlaying": audio_source.is_some().then_some(true)
-            .or_else(|| now_playing.as_ref().and_then(|item| item.is_playing)),
-        "transportAvailable": bridge::transport_available(),
-        "previousAvailable": bridge::transport_available(),
-        "nextAvailable": bridge::transport_available(),
-    });
-    println!(
-        "{}",
-        serde_json::to_string(&value).map_err(|e| e.to_string())?
-    );
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn run_media_state() -> Result<(), String> {
-    Err("media-state requires macOS".to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn run_media_transport(command: &str) -> Result<(), String> {
-    if !matches!(command, "play_pause" | "previous" | "next") {
-        return Err(format!(
-            "unknown media transport command: {command} (expected play_pause, previous, or next)"
-        ));
-    }
-    if !bridge::transport_available() {
-        return Err("system media session is unavailable".to_string());
-    }
-    bridge::media_transport(command).map_err(|error| format!("media transport failed: {error}"))
-}
-
-#[cfg(target_os = "macos")]
-async fn run_media_meter_smoke() -> Result<(), String> {
-    bridge::set_system_audio_meter_enabled(true)?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let mut samples = Vec::with_capacity(16);
-    let mut band_peaks = vec![0.0_f64; bridge::SYSTEM_AUDIO_SPECTRUM_BANDS];
-    let mut last_spectrum = vec![0.0_f64; bridge::SYSTEM_AUDIO_SPECTRUM_BANDS];
-    for _ in 0..16 {
-        samples.push(bridge::system_audio_level());
-        last_spectrum = bridge::system_audio_spectrum();
-        for (peak, band) in band_peaks.iter_mut().zip(&last_spectrum) {
-            *peak = peak.max(*band);
-        }
-        tokio::time::sleep(Duration::from_millis(80)).await;
-    }
-    bridge::set_system_audio_meter_enabled(false)?;
-    let peak = samples.iter().copied().fold(0.0_f64, f64::max);
-    println!(
-        "{}",
-        serde_json::to_string(&serde_json::json!({
-            "sampleCount": samples.len(),
-            "peak": peak,
-            "samples": samples,
-            "spectrumBandCount": last_spectrum.len(),
-            "bandPeaks": band_peaks,
-            "lastSpectrum": last_spectrum,
-        }))
-        .map_err(|error| error.to_string())?
-    );
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn run_media_meter_smoke() -> Result<(), String> {
-    Err("media-meter-smoke requires macOS".to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn run_media_transport(_command: &str) -> Result<(), String> {
-    Err("media transport requires macOS".to_string())
-}
-
 fn run_transcribe_fixture_smoke() -> Result<(), String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
@@ -708,10 +632,9 @@ fn run_transcribe_fixture_smoke() -> Result<(), String> {
         return Err("transcribe fixture file is empty".to_string());
     }
 
-    #[cfg(target_os = "macos")]
     {
-        let result = bridge::transcribe_file(fixture_path.to_string_lossy().as_ref())
-            .map_err(|_| "transcribe fixture failed".to_string())?;
+        let result = transcribe_any(fixture_path.to_string_lossy().as_ref(), "v2")
+            .map_err(|e| format!("transcribe fixture failed: {e}"))?;
         if result.is_empty() {
             return Err("transcribe fixture returned empty text".to_string());
         }
@@ -731,12 +654,6 @@ fn run_transcribe_fixture_smoke() -> Result<(), String> {
         println!("transcribe-fixture-smoke: ok");
         println!("  fixture: {}", fixture_path.display());
         println!("  transcription: {result}");
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        println!("transcribe-fixture-smoke: ok (macOS only)");
-        println!("  fixture: {}", fixture_path.display());
     }
 
     Ok(())
@@ -763,15 +680,13 @@ fn run_import_smoke(path: &str, version: &str) -> Result<(), String> {
         return Err("decoded audio is empty".to_string());
     }
 
-    #[cfg(target_os = "macos")]
     {
-        let result =
-            bridge::transcribe_file_with_version(decoded.to_string_lossy().as_ref(), version)
-                .map_err(|_| "transcription failed".to_string());
+        let result = transcribe_any(decoded.to_string_lossy().as_ref(), version);
+        let empty_cause = empty_text_error(&decoded, version);
         let _ = std::fs::remove_file(&decoded);
         let result = result?;
         if result.is_empty() {
-            return Err("transcription returned empty text".to_string());
+            return Err(empty_cause);
         }
         println!("import-smoke: ok");
         println!("  path: {}", source.display());
@@ -779,16 +694,73 @@ fn run_import_smoke(path: &str, version: &str) -> Result<(), String> {
         println!("  transcription: {result}");
     }
 
+    Ok(())
+}
+
+/// Models directory the app uses, or `ULTRAVOX_MODELS_DIR`.
+fn cli_models_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("ULTRAVOX_MODELS_DIR") {
+        return PathBuf::from(dir);
+    }
+    #[cfg(target_os = "macos")]
+    let base =
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
+    #[cfg(target_os = "windows")]
+    let base = std::env::var_os("APPDATA").map(PathBuf::from);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    let base = base.unwrap_or_default();
+    let current = base.join("com.paretocybernetics.ultravox").join("models");
+    // The recovery bridge retains Pareto data; 0.13.4 performs the move back.
+    let legacy = base.join("com.imploselabs.ultravox").join("models");
+    if !current.exists() && legacy.exists() {
+        legacy
+    } else {
+        current
+    }
+}
+
+/// English (`v2`) uses Phonon-2 when it is installed; `v3` (multilingual) uses the macOS bridge.
+fn transcribe_any(path: &str, version: &str) -> Result<String, String> {
+    let input = ultravox_core::prepare_transcription_audio(std::path::Path::new(path))
+        .map_err(|e| e.to_string())?;
+    let normalized_path = input.path().to_string_lossy();
+    let path = normalized_path.as_ref();
+    if version != "v3" {
+        let dir = cli_models_dir();
+        if ultravox_core::phonon::is_installed(&dir) {
+            return ultravox_core::phonon::transcribe_file(&dir, std::path::Path::new(path), None)
+                .map_err(|e| e.to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let text = bridge::transcribe_file_with_version(path, version)
+            .map_err(|_| format!("the {version} model is not available"))?;
+        if text.trim().is_empty() {
+            return Err(empty_text_error(input.path(), version));
+        }
+        Ok(text)
+    }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = std::fs::remove_file(&decoded);
-        println!("import-smoke: ok (decode only, transcription is macOS only)");
-        println!("  path: {}", source.display());
-        println!("  decoded duration: {duration_ms}ms");
-        let _ = version;
+        Err(format!(
+            "no model for {version}: install Phonon-2 in {}",
+            cli_models_dir().display()
+        ))
     }
+}
 
-    Ok(())
+/// Error for a transcription that produced no text, naming why (silent audio, no speech found).
+fn empty_text_error(wav: &std::path::Path, version: &str) -> String {
+    let cause = if version != "v3" && ultravox_core::phonon::is_installed(&cli_models_dir()) {
+        ultravox_core::phonon::explain_empty(wav)
+    } else {
+        "the model returned no text".to_string()
+    };
+    format!("transcription returned empty text: {cause}")
 }
 
 fn run_transcribe(path: &str, version: &str) -> Result<(), String> {
@@ -804,12 +776,11 @@ fn run_transcribe(path: &str, version: &str) -> Result<(), String> {
         return Err("audio file is empty".to_string());
     }
 
-    #[cfg(target_os = "macos")]
     {
-        let result = bridge::transcribe_file_with_version(path.to_string_lossy().as_ref(), version)
-            .map_err(|_| "transcription failed".to_string())?;
+        let result = transcribe_any(path.to_string_lossy().as_ref(), version)
+            .map_err(|e| format!("transcription failed: {e}"))?;
         if result.is_empty() {
-            return Err("transcription returned empty text".to_string());
+            return Err(empty_text_error(&path, version));
         }
         println!("transcribe: ok");
         println!("  path: {}", path.display());
@@ -817,18 +788,41 @@ fn run_transcribe(path: &str, version: &str) -> Result<(), String> {
         println!("  transcription: {result}");
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        println!("transcribe: ok (macOS only)");
-        println!("  path: {}", path.display());
-        println!("  version: {version}");
-    }
-
     Ok(())
 }
 
+/// A read-only status check must not hang the caller if the app is wedged.
+#[cfg(unix)]
+const PERMISSION_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[cfg(unix)]
 async fn run_voice_request(command: &str, recording_id: Option<&str>) -> Result<(), String> {
+    let socket = ultravox_desktop_lib::voice_ipc::socket_path();
+    if command == "permission-status" {
+        return run_permission_status_at(&socket, PERMISSION_STATUS_TIMEOUT).await;
+    }
+    run_voice_request_at(&socket, command, recording_id).await
+}
+
+#[cfg(unix)]
+async fn run_permission_status_at(
+    socket: &std::path::Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(
+        timeout,
+        run_voice_request_at(socket, "permission-status", None),
+    )
+    .await
+    .map_err(|_| "UltraVox did not answer the permission-status request in time".to_string())?
+}
+
+#[cfg(unix)]
+async fn run_voice_request_at(
+    socket: &std::path::Path,
+    command: &str,
+    recording_id: Option<&str>,
+) -> Result<(), String> {
     let mut request = serde_json::json!({
         "version": 1,
         "requestId": Uuid::new_v4().to_string(),
@@ -839,7 +833,7 @@ async fn run_voice_request(command: &str, recording_id: Option<&str>) -> Result<
     }
 
     let payload = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    let mut stream = UnixStream::connect(ultravox_desktop_lib::voice_ipc::socket_path())
+    let mut stream = UnixStream::connect(socket)
         .await
         .map_err(|e| e.to_string())?;
     stream
@@ -873,6 +867,68 @@ async fn run_voice_request(command: &str, recording_id: Option<&str>) -> Result<
             .as_str()
             .unwrap_or("voice request failed")
             .to_string())
+    }
+}
+
+#[cfg(all(feature = "local-qa", unix))]
+async fn run_renderer_qa(command: &str, args: &[String]) -> Result<(), String> {
+    if std::env::var_os("ULTRAVOX_LOCAL_QA").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return Err("local QA disabled: requires ULTRAVOX_LOCAL_QA=1".into());
+    }
+    if (matches!(command, "renderer-stats" | "renderer-health") && !args.is_empty()) || args.len() > 1 {
+        return Err(
+            "renderer-health/stats take no arguments; renderer-capture takes one optional PNG path"
+                .into(),
+        );
+    }
+    let id = Uuid::new_v4().to_string();
+    let mut request = serde_json::json!({"version":1,"requestId":id,"command":command});
+    if let Some(path) = args.first() {
+        request["path"] = path.clone().into();
+    }
+    let value = tokio::time::timeout(Duration::from_secs(24), async {
+        let payload = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+        if payload.len() > 1024 {
+            return Err("QA request too large".to_string());
+        }
+        let mut stream = UnixStream::connect(ultravox_desktop_lib::voice_ipc::socket_path())
+            .await
+            .map_err(|e| e.to_string())?;
+        stream
+            .write_u32(payload.len() as u32)
+            .await
+            .map_err(|e| e.to_string())?;
+        stream
+            .write_all(&payload)
+            .await
+            .map_err(|e| e.to_string())?;
+        stream.flush().await.map_err(|e| e.to_string())?;
+        let length = stream.read_u32().await.map_err(|e| e.to_string())? as usize;
+        if length == 0 || length > 64 * 1024 {
+            return Err("invalid QA response length".to_string());
+        }
+        let mut response = vec![0; length];
+        stream
+            .read_exact(&mut response)
+            .await
+            .map_err(|e| e.to_string())?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&response).map_err(|e| e.to_string())?;
+        if value["version"] != 1 || value["requestId"] != id {
+            return Err("QA response protocol/request mismatch".to_string());
+        }
+        Ok(value)
+    })
+    .await
+    .map_err(|_| "renderer QA IPC timed out")??;
+    println!(
+        "{}",
+        serde_json::to_string(&value).map_err(|e| e.to_string())?
+    );
+    if value["ok"] == true {
+        Ok(())
+    } else {
+        Err("renderer QA rejected; see JSON response".into())
     }
 }
 
@@ -1014,6 +1070,14 @@ async fn main() -> ExitCode {
         | "studio-remove-voice"
         | "studio-rename-voice"
         | "studio-status" => run_studio(command, &args[2..]),
+        "version" | "--version" | "-V" => {
+            let exe = std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .map_or_else(|e| format!("unknown ({e})"), |p| p.display().to_string());
+            println!("ultravox-control {}", env!("CARGO_PKG_VERSION"));
+            println!("  binary: {exe}");
+            Ok(())
+        }
         "health" => run_health(&data_dir()),
         "status" => run_status(),
         "model-catalog" => run_model_catalog(),
@@ -1031,9 +1095,6 @@ async fn main() -> ExitCode {
             args.get(3).map(String::as_str).unwrap_or(""),
         ),
         "audio-devices" => run_audio_devices().await,
-        "media-state" => run_media_state(),
-        "media-meter-smoke" => run_media_meter_smoke().await,
-        "media-transport" => run_media_transport(args.get(2).map(String::as_str).unwrap_or("")),
         "live-record-smoke" => run_live_record_smoke().await,
         "recording-id-db-smoke" => run_recording_id_db_smoke().await,
         "paste-bridge-dry-run" => run_paste_bridge_dry_run(),
@@ -1055,6 +1116,16 @@ async fn main() -> ExitCode {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let version = args.get(3).map(|s| s.as_str()).unwrap_or("v2");
             run_import_smoke(path, version)
+        }
+        #[cfg(all(feature = "local-qa", unix))]
+        "renderer-health" | "renderer-stats" | "renderer-capture" => run_renderer_qa(command, &args[2..]).await,
+        // Read the running GUI's native status; never preflight the CLI helper.
+        "permission-status" => {
+            if args.len() != 2 {
+                Err("permission-status takes no arguments".into())
+            } else {
+                run_voice_request("permission-status", None).await
+            }
         }
         "voice-health" => run_voice_request("health", None).await,
         "voice-start" => run_voice_request("start", Some(&Uuid::new_v4().to_string())).await,

@@ -39,7 +39,6 @@ pub fn invoke_allowed(label: &str, command: &str) -> bool {
                 | "get_app_info"
                 | "get_app_status"
                 | "get_pro_status"
-                | "get_media_state"
                 | "voice_generations_list"
                 | "get_settings"
                 | "get_permission_status"

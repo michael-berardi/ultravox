@@ -5,7 +5,7 @@ description: >
   permissioned on-device voice cloning and speech synthesis.
 category: engineering
 version: 1.0.0
-author: Implose Cybernetics
+author: Pareto Cybernetics
 tags: [ultravox, voice-studio, cloning, speech, local]
 trigger_keywords: [ultravox voice studio, clone voice, synthesize speech, pockettts]
 ---

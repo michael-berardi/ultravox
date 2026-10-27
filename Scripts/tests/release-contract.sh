@@ -39,7 +39,7 @@ for script in "$ROOT_DIR"/Scripts/package-*.sh; do
   fi
 done
 for file in "$VERIFY_APP" "$VERIFY_PKG" "$BUILD_PKG"; do
-  assert_contains "$file" 'com.imploselabs.ultravox'
+  assert_contains "$file" 'com.paretocybernetics.ultravox'
 done
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" 'UltraVox uses Screen &amp; System Audio Recording'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" '<string>UltraVox</string>'
@@ -49,9 +49,10 @@ assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'Screen Recor
 assert_not_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'Screen Recording access is disabled for UltraTerm'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'Privacy_ScreenCapture'
 assert_contains "$PACKAGE_RELEASE" 'verify-app.sh'
-for file in "$VERIFY_APP" "$VERIFY_PKG" "$PACKAGE_RELEASE"; do
+for file in "$VERIFY_APP" "$VERIFY_PKG"; do
   assert_contains "$file" 'T63VT9UAY2'
 done
+assert_contains "$PACKAGE_RELEASE" 'REQUIRE_SIGNED="$SIGNED_RELEASE"'
 assert_contains "$BUILD_PKG" 'verify-app.sh'
 assert_contains "$VERIFY_APP" 'codesign --verify --deep --strict'
 assert_contains "$VERIFY_APP" 'Designated requirement does not bind'
@@ -60,6 +61,12 @@ assert_contains "$VERIFY_PKG" 'Per-user installation is disabled'
 assert_contains "$VERIFY_PKG" 'PackageInfo'
 assert_contains "$VERIFY_PKG" 'xcrun stapler validate'
 assert_contains "$BUILD_PKG" '--install-location /Applications'
+assert_contains "$BUILD_PKG" '--component-plist "$COMPONENT_PLIST"'
+assert_contains "$BUILD_PKG" '--root "$PAYLOAD_ROOT"'
+assert_contains "$BUILD_PKG" 'ditto "$APP_PATH" "$PAYLOAD_ROOT/UltraVox.app"'
+assert_not_contains "$BUILD_PKG" '--component "$APP_PATH"'
+assert_contains "$BUILD_PKG" '<key>BundleIsRelocatable</key><false/>'
+assert_contains "$VERIFY_PKG" 'count(/pkg-info/relocate/bundle)'
 assert_contains "$BUILD_PKG" 'Refusing to produce an unsigned production package'
 assert_not_contains "$BUILD_PKG" '--requirements'
 assert_contains "$PACKAGE_RELEASE" 'APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY is required'
@@ -69,11 +76,13 @@ assert_not_contains "$PACKAGE_RELEASE" '/Users/'
 assert_contains "$PACKAGE_RELEASE" 'ARCHIVE_NAME="${PAYLOAD_NAME}.zip"'
 assert_contains "$PACKAGE_RELEASE" 'verify-app.sh'
 assert_contains "$ROOT_DIR/.gitmodules" 'third_party/mediaremote-adapter'
-assert_contains "$PACKAGE_RELEASE" 'MediaRemoteAdapter.framework'
-assert_contains "$PACKAGE_RELEASE" 'mediaremote-adapter.pl'
-assert_contains "$PACKAGE_RELEASE" 'ADAPTER_SOURCE/LICENSE'
-assert_contains "$PACKAGE_RELEASE" 'codesign --verify --strict "$APP_ADAPTER_FRAMEWORK"'
-assert_contains "$PACKAGE_RELEASE" 'MediaRemoteAdapter.framework must be signed by Developer ID team T63VT9UAY2'
+# The retired music helper remains archival source only, never a build or bundle input.
+assert_not_contains "$PACKAGE_RELEASE" 'MediaRemoteAdapter'
+assert_not_contains "$PACKAGE_RELEASE" 'mediaremote-adapter'
+assert_not_contains "$PACKAGE_RELEASE" 'ADAPTER_'
+assert_not_contains "$PACKAGE_RELEASE" 'cmake'
+assert_contains "$VERIFY_APP" 'Retired music helper must not be bundled'
+assert_not_contains "$VERIFY_APP" 'APP_ADAPTER_FRAMEWORK'
 
 # One product, one asset family: UltraVox-<platform> with compatibility copies.
 assert_contains "$PACKAGE_RELEASE" 'PAYLOAD_NAME="UltraVox-${PLATFORM}"'
@@ -88,6 +97,24 @@ assert_contains "$BUILD_PKG" 'UltraVox Light.app'
 assert_contains "$BUILD_PKG" 'UltraVox Pro.app'
 assert_contains "$PUBLISH_RELEASE" 'PUBLIC_REPO:-michael-berardi/ultravox'
 assert_contains "$PUBLISH_RELEASE" 'gh release upload'
+assert_contains "$PUBLISH_RELEASE" 'MIKE_APPROVED_PUBLIC_RELEASE'
+assert_contains "$PUBLISH_RELEASE" '--verify-tag --draft --latest=false'
+assert_contains "$PUBLISH_RELEASE" 'REVIEWED_SOURCE_COMMIT'
+assert_contains "$PUBLISH_RELEASE" 'verify_latest_bridge'
+assert_contains "$PUBLISH_RELEASE" 'Only v0.13.3 bridge activation may be latest=true'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/lib.rs" 'bridge_guard::intercept'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/bridge_guard.rs" 'Install final'
+assert_not_contains "$ROOT_DIR/README.md" '/releases/latest'
+assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.4'
+assert_contains "$PUBLISH_RELEASE" 'macos-arm64-recovery'
+assert_contains "$PUBLISH_RELEASE" 'Keep that endpoint pinned to v0.13.3'
+assert_contains "$PUBLISH_RELEASE" 'shasum -a 256 -c'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" '/releases?per_page=100'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" '/releases/download/{tag}'
+assert_not_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" '/releases/latest/download'
+assert_not_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'format!("{feed}/releases/latest")'
+assert_contains "$PUBLISH_RELEASE" 'refusing to overwrite immutable assets'
+assert_not_contains "$PUBLISH_RELEASE" '--clobber'
 assert_not_contains "$PUBLISH_RELEASE" 'ultravox-''light'
 assert_contains "$PACKAGE_ALL" 'Scripts/package-release.sh'
 assert_not_contains "$PACKAGE_ALL" 'ultravox-''light'
@@ -112,8 +139,16 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`invalid release version $
 if (desktopJson.version !== version || tauri.version !== version || cargoVersion !== version) {
   throw new Error(`version metadata drift: root=${version} desktop=${desktopJson.version} tauri=${tauri.version} cargo=${cargoVersion}`);
 }
-if (tauri.productName !== 'UltraVox' || tauri.identifier !== 'com.imploselabs.ultravox') throw new Error('Tauri identity drift');
-if (!tauri.bundle?.copyright?.includes('Implose Cybernetics')) throw new Error('public product branding must use Implose Cybernetics');
+for (const crate of ['crates/ultravox-core/Cargo.toml', 'crates/ultravox-macos-bridge/Cargo.toml']) {
+  const v = fs.readFileSync(path.join(root, crate), 'utf8').match(/^version = "([^"]+)"$/m)?.[1];
+  if (v !== version) throw new Error(`workspace version drift: ${crate}=${v}`);
+}
+const lock = fs.readFileSync(path.join(root, 'Cargo.lock'), 'utf8');
+for (const crate of ['ultravox', 'ultravox-core', 'ultravox-macos-bridge']) {
+  if (!lock.includes(`name = "${crate}"\nversion = "${version}"`)) throw new Error(`lock version drift: ${crate}`);
+}
+if (tauri.productName !== 'UltraVox' || tauri.identifier !== 'com.paretocybernetics.ultravox') throw new Error('Tauri identity drift');
+if (!tauri.bundle?.copyright?.includes('Pareto Cybernetics')) throw new Error('public product branding must use Pareto Cybernetics');
 if (tauriDev.identifier !== 'com.imploselabs.ultravox.dev') throw new Error('Tauri development identity must stay isolated from production TCC grants');
 if (!packageJson.scripts['desktop:dev'].includes('tauri:dev') || !desktopJson.scripts['tauri:dev'].includes('tauri.dev.conf.json')) {
   throw new Error('development scripts must use the isolated Tauri identity');

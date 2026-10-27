@@ -49,35 +49,10 @@ export type AppConfig = {
   onboarding_completed: boolean;
   model_language: string;
   theme: string;
-  media_panel_enabled: boolean;
-  reactive_visuals_enabled: boolean;
   show_meeting_mode: boolean;
   show_lecture_mode: boolean;
   show_transcribe_url: boolean;
 };
-export type MediaTransportCommand = "play_pause" | "previous" | "next";
-
-export type MediaState = {
-  active: boolean;
-  appName?: string | null;
-  bundleId?: string | null;
-  title?: string | null;
-  artist?: string | null;
-  album?: string | null;
-  /** Bounded in-memory `data:image/…` artwork from the canonical adapter.
-   *  The renderer must reject anything else; remote URLs are never sent. */
-  artworkDataUrl?: string | null;
-  elapsedSeconds?: number | null;
-  durationSeconds?: number | null;
-  isPlaying?: boolean | null;
-  volume?: number | null;
-  muted?: boolean | null;
-  volumeAvailable: boolean;
-  transportAvailable: boolean;
-  previousAvailable: boolean;
-  nextAvailable: boolean;
-};
-
 /** Which flavor of the one product this binary is: the public source build
  * (no Pro module) or the official build we sign and distribute. */
 export type BuildFlavor = "open-source" | "official";
@@ -116,10 +91,14 @@ export type AppStatusResponse = {
 
 export type PermissionState = "granted" | "denied" | "not_determined" | "unavailable";
 
+// Result of the one-shot macOS microphone prompt; only sent by explicit requests.
+export type MicrophoneRequestOutcome = "pending" | "authorized" | "denied" | "restricted" | "timed_out";
+
 export type PermissionStatus = {
   microphone: PermissionState;
   accessibility: PermissionState;
   screen_recording: PermissionState;
+  microphone_request?: MicrophoneRequestOutcome;
 };
 
 export type PermissionKind = "microphone" | "accessibility" | "screen_recording";
@@ -155,7 +134,7 @@ export type BridgeVersion = {
   version: string;
 };
 
-export type ModelFamily = "whisper" | "fluidaudio";
+export type ModelFamily = "whisper" | "fluidaudio" | "phonon";
 export type ModelVersion = "v2" | "v3";
 
 export type ModelEntry = {
@@ -368,6 +347,11 @@ export async function getPermissionStatus(): Promise<PermissionStatus> {
   return await invoke<PermissionStatus>("get_permission_status");
 }
 
+/** Why macOS asks for permissions again after the rebrand's identifier change; null unless this install was migrated. */
+export async function getLegacyMigrationNotice(): Promise<string | null> {
+  return await invoke<string | null>("get_legacy_migration_notice");
+}
+
 export async function requestPermission(kind: PermissionKind): Promise<PermissionStatus> {
   return await invoke<PermissionStatus>("request_permission", { kind });
 }
@@ -449,35 +433,9 @@ export async function getModelCatalog(): Promise<ModelCatalog> {
   return await invoke<ModelCatalog>("get_model_catalog");
 }
 
-export async function getMediaState(): Promise<MediaState> {
-  return await invoke<MediaState>("get_media_state");
-}
-
-
 export async function getInputLevel(): Promise<number> {
   return await invoke<number>("get_input_level");
 }
-export async function setSystemAudioMeterEnabled(enabled: boolean): Promise<void> {
-  return await invoke("set_system_audio_meter_enabled", { enabled });
-}
-
-/** Eleven normalized [0,1] bands, low to high frequency. */
-export async function getSystemAudioSpectrum(): Promise<number[]> {
-  return await invoke<number[]>("get_system_audio_spectrum");
-}
-
-export async function setSystemVolume(volume: number): Promise<void> {
-  return await invoke("set_system_volume", { volume });
-}
-
-export async function setSystemMuted(muted: boolean): Promise<void> {
-  return await invoke("set_system_muted", { muted });
-}
-
-export async function mediaTransport(command: MediaTransportCommand): Promise<void> {
-  return await invoke("media_transport", { command });
-}
-
 export async function getDownloadProgress(id: string): Promise<DownloadProgress> {
   return await invoke<DownloadProgress>("get_download_progress", { id });
 }
