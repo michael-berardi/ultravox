@@ -4,7 +4,7 @@ umask 022
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="UltraVox"
-BUNDLE_ID="com.paretocybernetics.ultravox"
+BUNDLE_ID="com.imploselabs.ultravox"
 VERSION="${VERSION:-$(node -p "require('${ROOT_DIR}/apps/desktop/package.json').version")}"
 ARCH="${PACKAGE_ARCH:-$(uname -m)}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/release}"

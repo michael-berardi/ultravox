@@ -42,23 +42,20 @@ fn download_base_url(version: &str) -> Result<String, String> {
         None => format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases/download/{tag}"),
     })
 }
-fn release_page_url() -> String {
-    format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases")
-}
 #[cfg(feature = "ultravox-pro")]
 const UPDATE_SERVICE_ORIGIN: &str = "https://software.paretocybernetics.com";
 #[cfg(feature = "ultravox-pro")]
 const UPDATE_SERVICE_PATH_PREFIX: &str = "/api/v1/ultravox/download/";
 const PAYLOAD_NAME: &str = "UltraVox-macos-arm64";
-const EXPECTED_BUNDLE_ID: &str = "com.paretocybernetics.ultravox";
-/// The original identity is restored by 0.13.4. This bridge alone retains the
-/// shipped Pareto identity so 0.13.0/0.13.1/0.13.2 can verify their replacement.
+const EXPECTED_BUNDLE_ID: &str = "com.imploselabs.ultravox";
+/// Temporary Pareto-ID releases (including the recovery bridge) are migrated
+/// back; the original identity is permanent and preserves its existing grants.
 #[cfg(target_os = "macos")]
-const LEGACY_BUNDLE_ID: &str = "com.imploselabs.ultravox";
+const LEGACY_BUNDLE_ID: &str = "com.paretocybernetics.ultravox";
 
-/// Recovery bridge only: two explicit production identities, never a prefix match.
+/// After recovery, only the permanent original production identity qualifies.
 fn accepted_bundle_id(identifier: &str) -> bool {
-    matches!(identifier, "com.imploselabs.ultravox" | "com.paretocybernetics.ultravox")
+    identifier == EXPECTED_BUNDLE_ID
 }
 const EXPECTED_TEAM_ID: &str = "T63VT9UAY2";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -689,7 +686,7 @@ verify_identity() {
   /usr/bin/codesign --verify --deep --strict "$1" >/dev/null 2>&1 || return 1
   details="$(/usr/bin/codesign -dv --verbose=4 "$1" 2>&1)" || return 1
   bundle_id=""
-  for candidate in com.imploselabs.ultravox com.paretocybernetics.ultravox; do
+  for candidate in com.imploselabs.ultravox; do
     if printf '%s\n' "$details" | /usr/bin/grep -Fxq "Identifier=${candidate}"; then bundle_id="$candidate"; fi
   done
   [ -n "$bundle_id" ] || return 1
@@ -1417,10 +1414,10 @@ mod tests {
     }
 
     #[test]
-    fn signature_validation_accepts_the_recovery_identity() {
+    fn signature_validation_rejects_temporary_identity_after_recovery() {
         let details = "Identifier=com.paretocybernetics.ultravox\nAuthority=Developer ID Application: Michael Berardi (T63VT9UAY2)\nTeamIdentifier=T63VT9UAY2\n";
         let requirement = "designated => identifier \"com.paretocybernetics.ultravox\" and anchor apple generic and certificate leaf[subject.OU] = T63VT9UAY2";
-        assert!(validate_signature(details, requirement).is_ok());
+        assert!(validate_signature(details, requirement).is_err());
         // The requirement must name the identifier the signature carries.
         assert!(validate_signature(
             details,
@@ -1438,8 +1435,8 @@ mod tests {
     }
 
     #[test]
-    fn install_helper_accepts_only_the_recovery_allowlist() {
-        assert!(INSTALL_HELPER.contains("for candidate in com.imploselabs.ultravox com.paretocybernetics.ultravox; do"));
+    fn install_helper_accepts_only_the_original_final_identity() {
+        assert!(INSTALL_HELPER.contains("for candidate in com.imploselabs.ultravox; do"));
         assert!(INSTALL_HELPER.contains(r#"designated => identifier \"${bundle_id}\""#));
     }
 

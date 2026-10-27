@@ -712,9 +712,9 @@ fn cli_models_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
     let base = base.unwrap_or_default();
-    let current = base.join("com.paretocybernetics.ultravox").join("models");
-    // The recovery bridge retains Pareto data; 0.13.4 performs the move back.
-    let legacy = base.join("com.imploselabs.ultravox").join("models");
+    let current = base.join("com.imploselabs.ultravox").join("models");
+    // Temporary Pareto-ID releases kept data here; the final moves it back on first launch.
+    let legacy = base.join("com.paretocybernetics.ultravox").join("models");
     if !current.exists() && legacy.exists() {
         legacy
     } else {

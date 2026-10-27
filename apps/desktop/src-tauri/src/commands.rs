@@ -23,7 +23,7 @@ use crate::state::AppState;
 use crate::update::{self, UpdateInfo, UpdatePreferences};
 
 pub const APP_NAME: &str = "UltraVox";
-pub const APP_IDENTIFIER: &str = "com.paretocybernetics.ultravox";
+pub const APP_IDENTIFIER: &str = "com.imploselabs.ultravox";
 /// Bundle identifier used to decide whether the global recording shortcut
 /// hands off to UltraTerm instead of the native mini-recorder flow.
 pub const ULTRATERM_BUNDLE_IDENTIFIER: &str = "com.libertydesignstudio.ultraterm";

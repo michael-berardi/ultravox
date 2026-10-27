@@ -39,7 +39,7 @@ for script in "$ROOT_DIR"/Scripts/package-*.sh; do
   fi
 done
 for file in "$VERIFY_APP" "$VERIFY_PKG" "$BUILD_PKG"; do
-  assert_contains "$file" 'com.paretocybernetics.ultravox'
+  assert_contains "$file" 'com.imploselabs.ultravox'
 done
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" 'UltraVox uses Screen &amp; System Audio Recording'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/Info.plist" '<string>UltraVox</string>'
@@ -147,7 +147,7 @@ const lock = fs.readFileSync(path.join(root, 'Cargo.lock'), 'utf8');
 for (const crate of ['ultravox', 'ultravox-core', 'ultravox-macos-bridge']) {
   if (!lock.includes(`name = "${crate}"\nversion = "${version}"`)) throw new Error(`lock version drift: ${crate}`);
 }
-if (tauri.productName !== 'UltraVox' || tauri.identifier !== 'com.paretocybernetics.ultravox') throw new Error('Tauri identity drift');
+if (tauri.productName !== 'UltraVox' || tauri.identifier !== 'com.imploselabs.ultravox') throw new Error('Tauri identity drift');
 if (!tauri.bundle?.copyright?.includes('Pareto Cybernetics')) throw new Error('public product branding must use Pareto Cybernetics');
 if (tauriDev.identifier !== 'com.imploselabs.ultravox.dev') throw new Error('Tauri development identity must stay isolated from production TCC grants');
 if (!packageJson.scripts['desktop:dev'].includes('tauri:dev') || !desktopJson.scripts['tauri:dev'].includes('tauri.dev.conf.json')) {

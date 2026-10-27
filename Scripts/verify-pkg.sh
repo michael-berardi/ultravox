@@ -4,7 +4,7 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="UltraVox"
-BUNDLE_ID="com.paretocybernetics.ultravox"
+BUNDLE_ID="com.imploselabs.ultravox"
 TEAM_ID="T63VT9UAY2"
 PKG_PATH="${1:-}"
 INSTALL_MODE="${2:-}"
