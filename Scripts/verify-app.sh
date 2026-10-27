@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PRODUCT_NAME="UltraVox"
-BUNDLE_ID="com.paretocybernetics.ultravox"
+BUNDLE_ID="com.imploselabs.ultravox"
 TEAM_ID="T63VT9UAY2"
 EXPECTED_VERSION="${EXPECTED_VERSION:-}"
 APP_PATH="${1:-}"
