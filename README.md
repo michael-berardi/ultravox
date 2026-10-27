@@ -7,7 +7,7 @@ Private speech-to-text for Mac. Dictate into any app and transcribe meetings, le
 </p>
 
 <p align="center">
-  <a href="https://github.com/michael-berardi/ultravox/releases/latest"><strong>Download for Mac</strong></a>
+  <a href="https://github.com/michael-berardi/ultravox/releases/tag/v0.13.4"><strong>Download for Mac</strong></a>
   ·
   <a href="#privacy">Privacy</a>
   ·
@@ -37,7 +37,7 @@ Buy a license or start a 14-day trial in **Settings → Pro**.
 
 ## Install
 
-1. Download `UltraVox-macos-arm64.pkg` (installer) or `UltraVox-macos-arm64.zip` from the [latest release](https://github.com/michael-berardi/ultravox/releases/latest).
+1. Download `UltraVox-macos-arm64.pkg` (installer) or `UltraVox-macos-arm64.zip` from the [latest release](https://github.com/michael-berardi/ultravox/releases/tag/v0.13.4).
 2. Open the installer, or unzip the archive and move `UltraVox.app` to `/Applications`. Releases are signed with a Developer ID and notarized by Apple.
 3. To verify a download, put the file and its `.sha256` file in one folder and run `shasum -a 256 -c UltraVox-macos-arm64.pkg.sha256`.
 
