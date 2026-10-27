@@ -24,12 +24,9 @@ crates/ultravox-macos-bridge/
 - Accessibility trust, caret positioning, and text insertion
 - Global recording and meeting shortcuts
 - Native recording-status indicator windows
-- ScreenCaptureKit meeting audio capture
-- Capture-free CoreAudio process activity and output volume/mute control
-- Audio-only ScreenCaptureKit system-output spectrum metering for reactive visuals
-- Optional runtime MediaRemote metadata and supported system-session controls
+- ScreenCaptureKit meeting and system-audio-only lecture capture
 
-MediaRemote is loaded dynamically and treated as optional. Missing metadata returns unavailable values rather than fabricated results; transport commands still route to the canonical system session. Source detection never captures PCM. The reactive spectrum starts only while visible, excludes UltraVox audio, and never captures the microphone.
+The recording animation reads the existing native microphone level. It does not start a second capture stream.
 
 ## Build and test
 

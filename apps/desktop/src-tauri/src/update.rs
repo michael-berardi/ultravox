@@ -10,29 +10,78 @@ use tauri::AppHandle;
 /// Canonical public release repository. All builds update from its releases.
 pub const PUBLIC_RELEASE_REPO: &str = "michael-berardi/ultravox";
 
-fn release_api_url() -> String {
-    format!("https://api.github.com/repos/{PUBLIC_RELEASE_REPO}/releases/latest")
+/// Private installed-candidate QA only: a staged feed root serving
+/// `releases` (GitHub release-list JSON) and `download/<asset>`. Candidates
+/// from it still pass every checksum, Developer ID and notarization check.
+#[cfg(feature = "local-qa")]
+fn qa_feed() -> Option<String> {
+    std::env::var("ULTRAVOX_QA_UPDATE_FEED")
+        .ok()
+        .filter(|value| value.starts_with("http://127.0.0.1:"))
+        .map(|value| value.trim_end_matches('/').to_string())
 }
-fn download_base_url() -> String {
-    format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases/latest/download")
+#[cfg(not(feature = "local-qa"))]
+fn qa_feed() -> Option<String> {
+    None
+}
+fn release_api_url() -> String {
+    match qa_feed() {
+        Some(feed) => format!("{feed}/releases"),
+        // The legacy latest endpoint stays pinned to the identity bridge forever.
+        // Bound the new stable feed; missing older entries fail closed, never downgrade.
+        None => format!("https://api.github.com/repos/{PUBLIC_RELEASE_REPO}/releases?per_page=100"),
+    }
+}
+fn download_base_url(version: &str) -> Result<String, String> {
+    let parsed = Version::parse(version)
+        .filter(|v| version == format!("{}.{}.{}", v.0, v.1, v.2))
+        .ok_or_else(|| "Update download version is not canonical stable semantic versioning.".to_string())?;
+    let tag = format!("v{}.{}.{}", parsed.0, parsed.1, parsed.2);
+    Ok(match qa_feed() {
+        Some(feed) => format!("{feed}/download"),
+        None => format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases/download/{tag}"),
+    })
 }
 fn release_page_url() -> String {
     format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases")
 }
 #[cfg(feature = "ultravox-pro")]
-const UPDATE_SERVICE_ORIGIN: &str = "https://software.implosecybernetics.com";
+const UPDATE_SERVICE_ORIGIN: &str = "https://software.paretocybernetics.com";
 #[cfg(feature = "ultravox-pro")]
 const UPDATE_SERVICE_PATH_PREFIX: &str = "/api/v1/ultravox/download/";
 const PAYLOAD_NAME: &str = "UltraVox-macos-arm64";
-const EXPECTED_BUNDLE_ID: &str = "com.imploselabs.ultravox";
+const EXPECTED_BUNDLE_ID: &str = "com.paretocybernetics.ultravox";
+/// The original identity is restored by 0.13.4. This bridge alone retains the
+/// shipped Pareto identity so 0.13.0/0.13.1/0.13.2 can verify their replacement.
+#[cfg(target_os = "macos")]
+const LEGACY_BUNDLE_ID: &str = "com.imploselabs.ultravox";
+
+/// Recovery bridge only: two explicit production identities, never a prefix match.
+fn accepted_bundle_id(identifier: &str) -> bool {
+    matches!(identifier, "com.imploselabs.ultravox" | "com.paretocybernetics.ultravox")
+}
 const EXPECTED_TEAM_ID: &str = "T63VT9UAY2";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 static INSTALL_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+/// Automatic updates are on unless the user turned them off (Mike 2026-10-08). The preferences file is written only
+/// when the user changes the toggle, so a missing file or a missing field means "never chose": on. A saved `false`
+/// is an explicit off and is kept.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpdatePreferences {
+    #[serde(default = "automatic_by_default")]
     pub automatic: bool,
+}
+
+fn automatic_by_default() -> bool {
+    true
+}
+
+impl Default for UpdatePreferences {
+    fn default() -> Self {
+        Self { automatic: automatic_by_default() }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, Eq, PartialEq)]
@@ -41,7 +90,7 @@ pub enum UpdateChannel {
     /// Public GitHub release assets; the default channel for every build.
     #[default]
     Public,
-    /// Authenticated Implose distribution channel, used as a fallback by
+    /// Authenticated Pareto distribution channel, used as a fallback by
     /// official builds that hold a stored access key.
     Service,
 }
@@ -61,7 +110,7 @@ pub struct UpdateInfo {
     pub service_sha256: Option<String>,
 }
 
-/// Platform tag understood by the Implose distribution service; also used in
+/// Platform tag understood by the Pareto distribution service; also used in
 /// release asset names.
 pub(crate) fn distribution_platform() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -190,50 +239,58 @@ async fn public_check(current_version: &str) -> Result<Option<UpdateInfo>, Strin
         .map_err(|error| format!("Failed to reach GitHub releases: {error}"))?
         .error_for_status()
         .map_err(|error| format!("GitHub release check failed: {error}"))?;
-    let release: serde_json::Value = response
+    let metadata: serde_json::Value = response
         .json()
         .await
         .map_err(|error| format!("Failed to read GitHub release metadata: {error}"))?;
-    if release["draft"].as_bool().unwrap_or(true) || release["prerelease"].as_bool().unwrap_or(true)
-    {
-        return Ok(None);
-    }
+    public_update_info(&metadata, current_version)
+}
+
+/// New stable feed deliberately ignores legacy GitHub "latest". Only final
+/// original-ID releases (>=0.13.4) with this platform's immutable assets qualify.
+fn select_public_release(metadata: &serde_json::Value) -> Result<Option<&serde_json::Value>, String> {
+    let releases = metadata.as_array()
+        .ok_or_else(|| "Stable update feed must be a release list.".to_string())?;
+    let (artifact, checksum) = platform_assets();
+    Ok(releases.iter().filter_map(|release| {
+        if release["draft"].as_bool() != Some(false) || release["prerelease"].as_bool() != Some(false) {
+            return None;
+        }
+        let tag = release["tag_name"].as_str()?;
+        let version = Version::parse(tag)?;
+        if version < Version(0, 13, 4) || tag != format!("v{}.{}.{}", version.0, version.1, version.2) {
+            return None;
+        }
+        let assets = release["assets"].as_array()?;
+        if ![&artifact, &checksum].iter().all(|required| assets.iter().any(|asset| asset["name"].as_str() == Some(required.as_str()))) {
+            return None;
+        }
+        Some((version, release))
+    }).max_by_key(|(version, _)| *version).map(|(_, release)| release))
+}
+
+fn public_update_info(metadata: &serde_json::Value, current_version: &str) -> Result<Option<UpdateInfo>, String> {
+    let current = Version::parse(current_version)
+        .ok_or_else(|| "Current app version is not stable semantic versioning.".to_string())?;
+    let Some(release) = select_public_release(metadata)? else { return Ok(None); };
     let tag = release["tag_name"]
         .as_str()
         .ok_or_else(|| "Release metadata is missing tag_name.".to_string())?;
     let latest_version = tag.trim().trim_start_matches('v').to_string();
-    let current = Version::parse(current_version)
-        .ok_or_else(|| "Current app version is not stable semantic versioning.".to_string())?;
     let latest = Version::parse(&latest_version)
         .ok_or_else(|| "Latest release is not stable semantic versioning.".to_string())?;
-    if latest <= current {
-        return Ok(None);
-    }
-    let (artifact, checksum) = platform_assets();
-    for required in [artifact, checksum] {
-        let present = release["assets"]
-            .as_array()
-            .is_some_and(|assets| assets.iter().any(|asset| asset["name"] == required));
-        if !present {
-            return Err(format!(
-                "Stable release is missing required asset {required}."
-            ));
-        }
-    }
+    if latest <= current { return Ok(None); }
     Ok(Some(UpdateInfo {
         current_version: current_version.to_string(),
         latest_version,
-        release_url: release["html_url"]
-            .as_str()
-            .map(str::to_string)
-            .unwrap_or_else(release_page_url),
+        release_url: format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases/tag/{tag}"),
         channel: UpdateChannel::Public,
         service_download_url: None,
         service_sha256: None,
     }))
 }
 
-/// Authenticated manifest from the Implose distribution service (official
+/// Authenticated manifest from the Pareto distribution service (official
 /// builds with a stored access key only).
 #[cfg(feature = "ultravox-pro")]
 async fn service_check(current_version: &str) -> Result<Option<UpdateInfo>, String> {
@@ -295,7 +352,7 @@ async fn service_check(current_version: &str) -> Result<Option<UpdateInfo>, Stri
         .filter(|url| {
             reqwest::Url::parse(url).is_ok_and(|parsed| {
                 parsed.scheme() == "https"
-                    && parsed.host_str() == Some("software.implosecybernetics.com")
+                    && parsed.host_str() == Some("software.paretocybernetics.com")
                     && parsed.path().starts_with(UPDATE_SERVICE_PATH_PREFIX)
             })
         })
@@ -418,9 +475,9 @@ fn parse_signature_details(details: &str) -> SignatureIdentity {
 
 fn validate_signature(details: &str, requirements: &str) -> Result<(), String> {
     let identity = parse_signature_details(details);
-    if identity.identifier.as_deref() != Some(EXPECTED_BUNDLE_ID) {
+    let Some(bundle_id) = identity.identifier.as_deref().filter(|id| accepted_bundle_id(id)) else {
         return Err("Update bundle identifier does not match UltraVox.".to_string());
-    }
+    };
     if identity.team_identifier.as_deref() != Some(EXPECTED_TEAM_ID) {
         return Err("Update Developer Team does not match UltraVox.".to_string());
     }
@@ -434,8 +491,9 @@ fn validate_signature(details: &str, requirements: &str) -> Result<(), String> {
     else {
         return Err("Update designated requirement does not match UltraVox.".to_string());
     };
-    let identifier_quoted = format!("designated => identifier \"{EXPECTED_BUNDLE_ID}\"");
-    let identifier_unquoted = format!("designated => identifier {EXPECTED_BUNDLE_ID}");
+    // The designated requirement must name the same identifier the signature carries.
+    let identifier_quoted = format!("designated => identifier \"{bundle_id}\"");
+    let identifier_unquoted = format!("designated => identifier {bundle_id}");
     let team_quoted = format!("certificate leaf[subject.OU] = \"{EXPECTED_TEAM_ID}\"");
     let team_unquoted = format!("certificate leaf[subject.OU] = {EXPECTED_TEAM_ID}");
     let identifier_matches = designated
@@ -474,7 +532,7 @@ fn verify_bundle_metadata(app: &Path, expected_version: &str) -> Result<(), Stri
         &["-c", "Print :CFBundleIdentifier", info_arg.as_str()],
         "inspect the update bundle identifier",
     )?;
-    if identifier.trim() != EXPECTED_BUNDLE_ID {
+    if !accepted_bundle_id(identifier.trim()) {
         return Err("Update Info.plist bundle identifier does not match UltraVox.".to_string());
     }
     let version = command_output(
@@ -514,6 +572,14 @@ fn verify_app(
         "inspect the update designated requirement",
     )?;
     validate_signature(&details, &requirements)?;
+    let plist_id = command_output(
+        "/usr/libexec/PlistBuddy",
+        &["-c", "Print :CFBundleIdentifier", app.join("Contents/Info.plist").to_string_lossy().as_ref()],
+        "compare the update metadata and signature identity",
+    )?;
+    if parse_signature_details(&details).identifier.as_deref() != Some(plist_id.trim()) {
+        return Err("Update metadata and signature identifiers disagree.".to_string());
+    }
     if require_notarization {
         verify_notarization(app)?;
     }
@@ -601,7 +667,8 @@ source_app="$2"
 target_app="$3"
 backup_app="$4"
 staging="$5"
-bundle_id="com.imploselabs.ultravox"
+required_identifier="${6:-}"
+bundle_id=""
 team_id="T63VT9UAY2"
 verify_notarized() {
   attempt=0
@@ -621,14 +688,26 @@ verify_notarized() {
 verify_identity() {
   /usr/bin/codesign --verify --deep --strict "$1" >/dev/null 2>&1 || return 1
   details="$(/usr/bin/codesign -dv --verbose=4 "$1" 2>&1)" || return 1
-  case "$details" in *"Identifier=${bundle_id}"*) ;; *) return 1 ;; esac
-  case "$details" in *"TeamIdentifier=${team_id}"*) ;; *) return 1 ;; esac
-  case "$details" in *"Authority=Developer ID Application:"*"${team_id}"*) ;; *) return 1 ;; esac
+  bundle_id=""
+  for candidate in com.imploselabs.ultravox com.paretocybernetics.ultravox; do
+    if printf '%s\n' "$details" | /usr/bin/grep -Fxq "Identifier=${candidate}"; then bundle_id="$candidate"; fi
+  done
+  [ -n "$bundle_id" ] || return 1
+  [ -z "$required_identifier" ] || [ "$bundle_id" = "$required_identifier" ] || return 1
+  printf '%s\n' "$details" | /usr/bin/grep -Fxq "TeamIdentifier=${team_id}" || return 1
+  printf '%s\n' "$details" | /usr/bin/grep -Eq "^Authority=Developer ID Application: .+ \(${team_id}\)$" || return 1
+  case "$details" in *'(adhoc)'*|*'Signature=adhoc'*) return 1 ;; esac
+  plist_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist")" || return 1
+  [ "$plist_id" = "$bundle_id" ] || return 1
   requirements="$(/usr/bin/codesign -d -r- "$1" 2>&1)" || return 1
-  case "$requirements" in *'designated =>'*) ;; *) return 1 ;; esac
-  case "$requirements" in *'identifier "com.imploselabs.ultravox"'*) ;; *) return 1 ;; esac
-  case "$requirements" in *'anchor apple generic'*) ;; *) return 1 ;; esac
-  case "$requirements" in *certificate*OU*"${team_id}"*) ;; *) return 1 ;; esac
+  designated="$(printf '%s\n' "$requirements" | /usr/bin/grep '^designated =>')"
+  first_clause="${designated%% and *}"
+  [ "$first_clause" = "designated => identifier \"${bundle_id}\"" ] ||
+    [ "$first_clause" = "designated => identifier ${bundle_id}" ] || return 1
+  clauses="$(printf '%s\n' "$designated" | /usr/bin/awk -F ' and ' '{for (i=1; i<=NF; i++) print $i}')"
+  printf '%s\n' "$clauses" | /usr/bin/grep -Fxq 'anchor apple generic' || return 1
+  printf '%s\n' "$clauses" | /usr/bin/grep -Fxq "certificate leaf[subject.OU] = \"${team_id}\"" ||
+    printf '%s\n' "$clauses" | /usr/bin/grep -Fxq "certificate leaf[subject.OU] = ${team_id}" || return 1
   verify_notarized "$1" || return 1
 }
 while /bin/kill -0 "$pid" 2>/dev/null; do /bin/sleep 0.2; done
@@ -706,11 +785,28 @@ fi
 /bin/rm -rf "$backup_app" "$staging"
 "#;
 
+/// Prefix of the error returned while the app is busy; the frontend retries
+/// automatic installs later instead of reporting a failure.
+pub const UPDATE_BUSY_PREFIX: &str = "Update waits:";
+
+/// Refuses to replace the app while it holds the user's work.
+async fn ensure_idle(app: &AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<crate::state::AppState>() else {
+        return Ok(());
+    };
+    match state.busy_reason().await {
+        Some(reason) => Err(format!("{UPDATE_BUSY_PREFIX} {reason}.")),
+        None => Ok(()),
+    }
+}
+
 pub async fn install(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
     let _install_guard = INSTALL_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .try_lock()
         .map_err(|_| "An UltraVox update is already being installed.".to_string())?;
+    ensure_idle(&app).await?;
     if info.current_version != env!("CARGO_PKG_VERSION") {
         return Err("Update was checked against a different app version.".to_string());
     }
@@ -731,7 +827,7 @@ pub async fn install(app: AppHandle, info: UpdateInfo) -> Result<(), String> {
     }
 }
 
-/// Authenticated download through the Implose distribution service (official
+/// Authenticated download through the Pareto distribution service (official
 /// builds with a stored access key only).
 #[cfg(feature = "ultravox-pro")]
 async fn download_service(url: &str, target: &Path) -> Result<(), String> {
@@ -776,7 +872,7 @@ async fn fetch_platform_artifact(info: &UpdateInfo) -> Result<(PathBuf, PathBuf)
 
     let staged_ok: Result<(), String> = match info.channel {
         UpdateChannel::Public => {
-            let base = download_base_url();
+            let base = download_base_url(&info.latest_version)?;
             download(&format!("{base}/{asset}"), &artifact_path).await?;
             download(&format!("{base}/{checksum}"), &checksum_path).await
         }
@@ -813,6 +909,44 @@ async fn fetch_platform_artifact(info: &UpdateInfo) -> Result<(PathBuf, PathBuf)
 // macOS ------------------------------------------------------------------
 
 async fn install_macos(app: AppHandle, info: &UpdateInfo) -> Result<(), String> {
+    schedule_macos(Some(&app), info, None).await?;
+    app.exit(0);
+    Ok(())
+}
+
+/// Original-only bootstrap: no AppState, preferences, Pro credentials or
+/// permission APIs. Explicit consent is obtained by the pre-Builder guard.
+#[cfg(target_os = "macos")]
+pub(crate) async fn bootstrap_original_update() -> Result<(), String> {
+    ensure_recovery_process_is_alone()?;
+    let info = public_check(env!("CARGO_PKG_VERSION")).await?
+        .ok_or_else(|| "No stable final update is available; manually install v0.13.4.".to_string())?;
+    if Version::parse(&info.latest_version).map_or(true, |v| v < Version(0, 13, 4)) {
+        return Err("Recovery requires final version 0.13.4 or newer.".into());
+    }
+    schedule_macos(None, &info, Some("com.imploselabs.ultravox")).await
+}
+
+/// The bootstrap owns no sessions, but a separate app copy might. Never replace
+/// the bundle while another UltraVox process could be recording user work.
+#[cfg(target_os = "macos")]
+fn ensure_recovery_process_is_alone() -> Result<(), String> {
+    let output = Command::new("/usr/bin/pgrep").args(["-x", "ultravox"]).output()
+        .map_err(|error| format!("Cannot inspect other UltraVox processes: {error}"))?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err("Cannot safely inspect other UltraVox processes; retry or install final manually.".into());
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let pid = line.trim().parse::<u32>()
+            .map_err(|_| "Cannot safely read the UltraVox process list.".to_string())?;
+        if pid != process::id() {
+            return Err("Quit other UltraVox copies before retrying recovery; they may hold active work.".into());
+        }
+    }
+    Ok(())
+}
+
+async fn schedule_macos(app: Option<&AppHandle>, info: &UpdateInfo, required_identifier: Option<&str>) -> Result<(), String> {
     let bundle = current_bundle()?;
     // Candidate identity is the trust boundary below. Requiring the running
     // bundle's Developer ID signature cannot make that process trustworthy and
@@ -846,10 +980,43 @@ async fn install_macos(app: AppHandle, info: &UpdateInfo) -> Result<(), String> 
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or(PAYLOAD_NAME);
-    let candidate = unpacked_arg.join(payload_dir).join("UltraVox.app");
+    let mut candidate = unpacked_arg.join(payload_dir).join("UltraVox.app");
+    if !candidate.is_dir() {
+        // Unified, Light and Pro archive names share one payload; accept the
+        // single UltraVox* folder whichever asset name it was served under.
+        if let Some(found) = single_payload_app(&unpacked_arg) {
+            candidate = found;
+        }
+    }
     if let Err(error) = verify_app(&candidate, &info.latest_version, true) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
+    }
+    if let Some(identifier) = required_identifier {
+        let plist_id = command_output(
+            "/usr/libexec/PlistBuddy",
+            &["-c", "Print :CFBundleIdentifier", candidate.join("Contents/Info.plist").to_string_lossy().as_ref()],
+            "inspect the recovery final identity",
+        );
+        if !matches!(plist_id, Ok(ref value) if value.trim() == identifier) {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err("Recovery update must retain the original application identity.".into());
+        }
+    }
+    // A recording may have started while the update downloaded. Bootstrap
+    // cannot be busy: no stores, capture, hotkeys or frontend were initialized.
+    if let Some(app) = app {
+        if let Err(error) = ensure_idle(app).await {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if required_identifier.is_some() {
+        if let Err(error) = ensure_recovery_process_is_alone() {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error);
+        }
     }
     let backup = bundle.with_file_name(format!(".UltraVox.previous-{}.app", process::id()));
     let result = Command::new("/bin/sh")
@@ -861,6 +1028,7 @@ async fn install_macos(app: AppHandle, info: &UpdateInfo) -> Result<(), String> 
         .arg(&bundle)
         .arg(&backup)
         .arg(&staging_dir)
+        .arg(required_identifier.unwrap_or(""))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -870,7 +1038,6 @@ async fn install_macos(app: AppHandle, info: &UpdateInfo) -> Result<(), String> 
         let _ = fs::remove_dir_all(&staging_dir);
     }
     result?;
-    app.exit(0);
     Ok(())
 }
 
@@ -1010,6 +1177,18 @@ fn install_windows(_app: AppHandle, _info: &UpdateInfo) -> Result<(), String> {
     unreachable!("Windows updates dispatch only on Windows")
 }
 
+/// The one `UltraVox*/UltraVox.app` payload inside an unpacked update archive.
+fn single_payload_app(root: &Path) -> Option<PathBuf> {
+    let mut found = fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("UltraVox"))
+        .map(|entry| entry.path().join("UltraVox.app"))
+        .filter(|app| app.is_dir());
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
 /// Pre-0.11 installs could leave separate edition bundles beside the unified app.
 #[cfg(target_os = "macos")]
 const LEGACY_EDITION_BUNDLES: &[&str] = &["UltraVox Light.app", "UltraVox Pro.app"];
@@ -1043,7 +1222,10 @@ pub fn reconcile_legacy_editions() {
                 &["-c", "Print :CFBundleIdentifier", info_arg.as_str()],
                 "inspect a legacy UltraVox bundle",
             );
-            if identifier.as_deref().map(str::trim) != Ok(EXPECTED_BUNDLE_ID) {
+            if !matches!(
+                identifier.as_deref().map(str::trim),
+                Ok(EXPECTED_BUNDLE_ID) | Ok(LEGACY_BUNDLE_ID)
+            ) {
                 eprintln!(
                     "legacy edition cleanup: skipping {} (not UltraVox)",
                     app.display()
@@ -1104,6 +1286,19 @@ fn move_to_trash(app: &Path, trash: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
 
+    #[test]
+    fn update_payload_is_found_under_any_single_ultravox_folder() {
+        let root = std::env::temp_dir().join(format!("uv-payload-{}", std::process::id()));
+        fs::create_dir_all(root.join("UltraVox-Pro-macos-arm64/UltraVox.app")).unwrap();
+        assert_eq!(
+            super::single_payload_app(&root),
+            Some(root.join("UltraVox-Pro-macos-arm64/UltraVox.app"))
+        );
+        fs::create_dir_all(root.join("UltraVox-macos-arm64/UltraVox.app")).unwrap();
+        assert_eq!(super::single_payload_app(&root), None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn legacy_edition_bundles_move_to_trash_without_clobbering() {
@@ -1129,9 +1324,66 @@ mod tests {
         assert!(Version::parse("0.2.2.1").is_none());
     }
 
+    #[cfg(not(feature = "local-qa"))]
     #[test]
-    fn automatic_updates_are_opt_in() {
-        assert!(!UpdatePreferences::default().automatic);
+    fn consumer_builds_ignore_the_qa_update_feed() {
+        std::env::set_var("ULTRAVOX_QA_UPDATE_FEED", "http://127.0.0.1:9/");
+        assert!(release_api_url().starts_with("https://api.github.com/repos/"));
+        assert!(download_base_url("0.13.4").unwrap().starts_with("https://github.com/"));
+        std::env::remove_var("ULTRAVOX_QA_UPDATE_FEED");
+    }
+
+    #[test]
+    fn stable_feed_bypasses_the_pinned_bridge_and_selects_highest_supported_version() {
+        let (artifact, checksum) = platform_assets();
+        let release = |tag: &str| serde_json::json!({
+            "tag_name": tag, "draft": false, "prerelease": false,
+            "assets": [{"name": artifact}, {"name": checksum}]
+        });
+        let mut draft = release("v99.0.0"); draft["draft"] = true.into();
+        let mut prerelease = release("v98.0.0"); prerelease["prerelease"] = true.into();
+        let mut unsupported = release("v97.0.0"); unsupported["assets"] = serde_json::json!([]);
+        let metadata = serde_json::json!([
+            release("v0.13.4"), release("v0.13.3"), release("v0.14.0"), draft,
+            prerelease, unsupported, release("v0.15.0-beta"), release("v00.16.0")
+        ]);
+        let update = public_update_info(&metadata, "0.13.3").unwrap().unwrap();
+        assert_eq!(update.latest_version, "0.14.0");
+        assert_eq!(update.release_url, format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases/tag/v0.14.0"));
+        assert!(public_update_info(&metadata, "0.14.0").unwrap().is_none());
+        assert!(public_update_info(&metadata, "0.15.0").unwrap().is_none());
+        assert!(public_update_info(&serde_json::json!([release("v0.13.3")]), "0.13.3").unwrap().is_none());
+        assert_eq!(public_update_info(&serde_json::json!([release("v0.13.4")]), "0.13.3").unwrap().unwrap().latest_version, "0.13.4");
+        assert!(public_update_info(&serde_json::json!({}), "0.13.3").is_err());
+        assert!(public_update_info(&metadata, "invalid").is_err());
+        assert!(public_update_info(&serde_json::json!([]), "0.13.3").unwrap().is_none());
+    }
+
+    #[cfg(not(feature = "local-qa"))]
+    #[test]
+    fn stable_download_uses_exact_selected_tag_not_legacy_latest() {
+        assert_eq!(release_api_url(), format!("https://api.github.com/repos/{PUBLIC_RELEASE_REPO}/releases?per_page=100"));
+        assert_eq!(download_base_url("0.13.4").unwrap(), format!("https://github.com/{PUBLIC_RELEASE_REPO}/releases/download/v0.13.4"));
+        for invalid in ["../latest", "v0.13.4", "0.13.04", "0.13.4-beta", "0.13.4/asset", " 0.13.4"] {
+            assert!(download_base_url(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn busy_refusals_carry_the_prefix_the_frontend_waits_on() {
+        // apps/desktop/src/lib/updater.ts UPDATE_BUSY_PREFIX
+        assert_eq!(UPDATE_BUSY_PREFIX, "Update waits:");
+    }
+
+    #[test]
+    fn automatic_updates_are_on_unless_turned_off() {
+        assert!(UpdatePreferences::default().automatic);
+        let never_chose: UpdatePreferences = serde_json::from_str("{}").unwrap();
+        assert!(never_chose.automatic);
+        let turned_off: UpdatePreferences = serde_json::from_str(r#"{"automatic":false}"#).unwrap();
+        assert!(!turned_off.automatic);
+        let turned_on: UpdatePreferences = serde_json::from_str(r#"{"automatic":true}"#).unwrap();
+        assert!(turned_on.automatic);
     }
 
     #[test]
@@ -1165,8 +1417,35 @@ mod tests {
     }
 
     #[test]
+    fn signature_validation_accepts_the_recovery_identity() {
+        let details = "Identifier=com.paretocybernetics.ultravox\nAuthority=Developer ID Application: Michael Berardi (T63VT9UAY2)\nTeamIdentifier=T63VT9UAY2\n";
+        let requirement = "designated => identifier \"com.paretocybernetics.ultravox\" and anchor apple generic and certificate leaf[subject.OU] = T63VT9UAY2";
+        assert!(validate_signature(details, requirement).is_ok());
+        // The requirement must name the identifier the signature carries.
+        assert!(validate_signature(
+            details,
+            &requirement.replace("com.paretocybernetics.ultravox", "com.imploselabs.attacker")
+        )
+        .is_err());
+        assert!(validate_signature(
+            &details.replace("com.paretocybernetics.ultravox", "com.imploselabs.other"),
+            &requirement.replace("com.paretocybernetics.ultravox", "com.imploselabs.other")
+        )
+        .is_err());
+        assert!(
+            validate_signature(&details.replace("T63VT9UAY2", "OTHERTEAM"), requirement).is_err()
+        );
+    }
+
+    #[test]
+    fn install_helper_accepts_only_the_recovery_allowlist() {
+        assert!(INSTALL_HELPER.contains("for candidate in com.imploselabs.ultravox com.paretocybernetics.ultravox; do"));
+        assert!(INSTALL_HELPER.contains(r#"designated => identifier \"${bundle_id}\""#));
+    }
+
+    #[test]
     fn current_bundle_metadata_allows_signed_recovery_from_ad_hoc_installs() {
-        let root = tempfile::tempdir_in("/private/tmp").unwrap();
+        let root = tempfile::tempdir().unwrap();
         let app = root.path().join("UltraVox.app");
         let contents = app.join("Contents");
         std::fs::create_dir_all(&contents).unwrap();

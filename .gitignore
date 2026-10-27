@@ -46,6 +46,3 @@ htmlcov/
 .pytest_cache/
 __pycache__/
 *.py[cod]
-
-# Local QA output
-.local-qa/

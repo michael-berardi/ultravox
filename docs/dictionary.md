@@ -19,6 +19,8 @@ The parser bounds source size, entry count, aliases per entry, and field length.
 
 ## Agent dictionary review skill (core)
 
+The quickest way to fix recurring mistakes: ask your agent to "update my UltraVox dictionary" and give it the skill below. It finds the words UltraVox keeps mishearing, adds safe corrections, and proves each one works.
+
 UltraVox bundles an agent skill at `skills/dictionary-review/SKILL.md` in the repository and inside every install at `Resources/skills/dictionary-review/SKILL.md`. **Settings → Dictionary → Agent dictionary review** reveals the file or copies its contents; UltraVox never installs anything into an agent on its own.
 
 Give the file to any AI agent and it will: snapshot the local database read-only into a scratch directory, analyze completed transcripts for recurring mis-transcriptions, refuse common-word aliases, apply verified entries to `custom_dictionary` only (quitting and relaunching the app around the edit), verify every correction and negative control with `ultravox-control dictionary-apply`, and report additions, flagged candidates, and refusals. All processing stays on the device.

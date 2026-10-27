@@ -62,7 +62,8 @@ leak() {
     fail "leak gate did not catch: ${name}"
   fi
 }
-leak admin-endpoint 'software.implosecybernetics.com/api/'"admin"
+leak admin-endpoint 'software.paretocybernetics.com/api/'"admin"
+leak admin-endpoint-legacy 'software.implosecybernetics.com/api/'"admin" # pareto-legacy: remove after 2027-08-23
 leak admin-flag 'DISTRIBUTION_''ADMIN'
 leak access-key "imp_""live_51AbCdEfGhIjKlMnOpQrSt"
 leak dev-vars '.'"dev.vars"

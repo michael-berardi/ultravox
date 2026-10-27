@@ -30,6 +30,7 @@ const SIMULATED: Record<string, unknown> = {
   register_device_license: SIMULATED_LICENSE,
   activate_distribution_access: SIMULATED_LICENSE,
   get_permission_status: SIMULATED_PERMISSIONS,
+  get_legacy_migration_notice: null,
   request_permission: SIMULATED_PERMISSIONS,
 };
 let mirrorRoute: ((cmd: string, args: any, transport: InvokeFn) => Promise<any>) | null = null;

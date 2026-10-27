@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MediaPanel } from "../components/MediaPanel";
+import { UpdateButton } from "../components/UpdateButton";
 import { BrandMark, proBrandSuffix, startHeaderDrag } from "../components/BrandMark";
 import { ProLockBadge, ProLockPrompt } from "../components/ProLock";
 import { DropOverlay } from "../components/DropOverlay";
-import { RecordingMeter } from "../components/ReactiveMeter";
-import {
-  TRANSCRIBING_INDICATOR_DELAY_MS,
-  useDelayedVisibility,
-} from "../components/useDelayedVisibility";
-import { ThinkingOrb } from "thinking-orbs";
+import { RecordingSurround } from "../components/ReactiveMeter";
+import { useDelayedVisibility } from "../components/useDelayedVisibility";
+import { voicePhase } from "../components/voiceGlowLifecycle";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { AppStatus } from "../App";
 import { isProLockedError, proLockedMessage, type ProStatus } from "../lib/proStatus";
@@ -32,6 +29,7 @@ import {
   getModelCatalog,
   getModelProgress,
   getSettings,
+  getAppStatus,
   getInputLevel,
   setSettings,
   onRecordingAdded,
@@ -71,6 +69,10 @@ function importablePaths(paths: string[]): string[] {
   );
 }
 
+function isProcessingRecording(row: RecordingRow): boolean {
+  return ["pending", "converting", "transcribing"].includes(row.status);
+}
+
 export function MainWindow({
   status,
   initialRecording,
@@ -83,6 +85,7 @@ export function MainWindow({
   const proUnlocked = pro.unlocked;
   const proLocked = pro.available && !pro.unlocked;
   const [recording, setRecording] = useState(initialRecording);
+  const [recordingStarting, setRecordingStarting] = useState(false);
   const [meeting, setMeeting] = useState(initialMeeting);
   const [lecture, setLecture] = useState(false);
   const [meetingPending, setMeetingPending] = useState(false);
@@ -96,6 +99,8 @@ export function MainWindow({
   const [dropActive, setDropActive] = useState(false);
   const [fileImporting, setFileImporting] = useState(0);
   const [recordings, setRecordings] = useState<RecordingRow[]>([]);
+  // Activity must not disappear when history search filters out the work row.
+  const [processingRows, setProcessingRows] = useState<Record<string, RecordingRow>>({});
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -112,7 +117,6 @@ export function MainWindow({
   const [deletingAll, setDeletingAll] = useState(false);
   const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false);
   const [deleteAllError, setDeleteAllError] = useState<string | null>(null);
-  const [inputLevel, setInputLevel] = useState(0);
   const searchRef = useRef(search);
   const configRef = useRef<AppConfig | null>(null);
   const lectureRef = useRef(false);
@@ -145,6 +149,9 @@ export function MainWindow({
       const rows = query ? await searchRecordings(query) : await listRecordings();
       if (requestId === recordingsRequestRef.current) {
         setRecordings(rows);
+        if (!query) {
+          setProcessingRows(Object.fromEntries(rows.filter(isProcessingRecording).map((row) => [row.id, row])));
+        }
         setHistoryError(null);
       }
     } catch (loadError) {
@@ -217,7 +224,17 @@ export function MainWindow({
 
     async function setupListeners() {
       const results = await Promise.allSettled([
-        onRecordingAdded(() => void refreshRecordings()),
+        onRecordingAdded(({ recording: row }) => {
+          // Native emits the pending row before recording-stopped and updates
+          // it again on success/failure. Transition immediately, not on a timer.
+          setProcessingRows((current) => {
+            const next = { ...current };
+            if (isProcessingRecording(row)) next[row.id] = row;
+            else delete next[row.id];
+            return next;
+          });
+          void refreshRecordings();
+        }),
         onRecordingDeleted(() => void refreshRecordings()),
         onRecordingStarted(() => setRecording(true)),
         onRecordingStopped(() => setRecording(false)),
@@ -451,20 +468,32 @@ export function MainWindow({
   };
 
   const toggleRecording = async () => {
+    if (recordingStarting) return;
     setActivityError(null);
     setProLockNotice(null);
+    // Start decoration on the click, not on an RMS threshold or late event.
+    if (!recording) setRecordingStarting(true);
     try {
       if (recording) {
         await stopRecording();
+        setRecording(false);
+        await refreshRecordings();
       } else {
         await startRecording();
+        setRecording(true);
       }
     } catch (recordingError) {
+      // Reconcile after failure rather than relying on a possibly missed event.
+      // This is one read of the existing native state, never another capture.
+      try { setRecording((await getAppStatus()).recording); }
+      catch (cause) { console.warn("UltraVox recording state unavailable", cause); }
       activityFailure(
         "Dictation",
         `${recording ? "Could not stop recording" : "Could not start recording"}`,
         recordingError,
       );
+    } finally {
+      setRecordingStarting(false);
     }
   };
 
@@ -671,47 +700,18 @@ export function MainWindow({
     }
   };
 
-  const reactiveVisualsEnabled = config?.reactive_visuals_enabled ?? false;
-  useEffect(() => {
-    if (!recording || !reactiveVisualsEnabled) {
-      setInputLevel(0);
-      return;
-    }
-    let cancelled = false;
-    let timer: number | null = null;
-    const tick = async () => {
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        setInputLevel(0);
-      } else {
-        try {
-          const level = await getInputLevel();
-          if (!cancelled) setInputLevel(level);
-        } catch {
-          if (!cancelled) setInputLevel(0);
-        }
-      }
-      if (!cancelled) timer = window.setTimeout(() => void tick(), 80);
-    };
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer != null) window.clearTimeout(timer);
-    };
-  }, [reactiveVisualsEnabled, recording]);
-
   const selectedDownloaded = selectedModelId ? downloaded[selectedModelId] === true : false;
   const needsOnboarding = !modelStatusLoading && !selectedDownloaded;
-  const latestRecording = recordings[0];
-  const transcribing = ["pending", "converting", "transcribing"].includes(
-    latestRecording?.status ?? "",
-  );
-  const transcribingId = transcribing ? latestRecording?.id ?? null : null;
-  const showTranscribing = useDelayedVisibility(
-    transcribingId,
-    TRANSCRIBING_INDICATOR_DELAY_MS,
-  );
+  const processingRecording = Object.values(processingRows)[0];
+  const transcribing = processingRecording !== undefined;
+  // Actual native work is visible immediately; do not hold status for 60s.
+  const showTranscribing = transcribing;
+  const surroundPhase = voicePhase({
+    recording: recording || recordingStarting || meeting || lecture || meetingPending || lecturePending,
+    processing: transcribing,
+  });
   let statusKind: AppStatus | "recording" | "meeting" | "transcribing" = status;
-  if (recording) {
+  if (recording || recordingStarting) {
     statusKind = "recording";
   } else if (meeting || lecture || meetingPending || lecturePending) {
     statusKind = "meeting";
@@ -722,7 +722,9 @@ export function MainWindow({
   }
 
   let statusText = "Unavailable";
-  if (recording) {
+  if (recordingStarting) {
+    statusText = "Starting recording…";
+  } else if (recording) {
     statusText = "Recording";
   } else if (meetingPending || lecturePending) {
     const pendingLecture = lecture || lecturePending;
@@ -734,7 +736,7 @@ export function MainWindow({
   } else if (meeting) {
     statusText = "Meeting mode";
   } else if (showTranscribing) {
-    if (latestRecording?.status === "converting") {
+    if (processingRecording?.status === "converting") {
       statusText = "Preparing audio";
     } else {
       statusText = "Transcribing";
@@ -755,6 +757,7 @@ export function MainWindow({
       <header className="header" onMouseDown={startHeaderDrag}>
         <BrandMark suffix={proBrandSuffix(pro)} />
         <div className="header-actions">
+          <UpdateButton />
           {onOpenStudio && pro.available && (
             <button
               className={`icon-button studio-button${proLocked ? " pro-locked" : ""}`}
@@ -815,36 +818,27 @@ export function MainWindow({
             {modelError && <p className="setup-error" role="alert">{modelError}</p>}
           </section>
         ) : (
-          <section className="hero" aria-labelledby="activity-status">
+          <section className="hero" data-voice-phase={surroundPhase} aria-labelledby="activity-status">
+            <RecordingSurround
+              phase={surroundPhase}
+              readLevel={getInputLevel}
+              theme={config?.theme ?? "midnight"}
+            />
             <div
               id="activity-status"
               className={`status-label ${statusKind}`}
               aria-live="polite"
             >
               {statusKind === "ready" && <SmallMicIcon />}
-              {statusKind === "loading" && (
-                <ThinkingOrb state="working" size={20} theme="dark" aria-hidden="true" />
-              )}
-              {statusKind === "recording" && (
-                <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden="true" />
-              )}
-              {statusKind === "meeting" && (
-                <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden="true" />
-              )}
-              {statusKind === "transcribing" && (
-                <ThinkingOrb state="composing" size={20} theme="dark" aria-hidden="true" />
-              )}
               {statusText}
             </div>
-            {reactiveVisualsEnabled && recording && (
-              <RecordingMeter active level={inputLevel} />
-            )}
 
             <button
               className={`record-button ${recording || meeting || lecture ? "recording" : ""}`}
               onClick={() => void (lecture ? toggleLecture() : meeting ? toggleMeeting() : toggleRecording())}
               aria-label={lecture ? "Stop lecture" : meeting ? "Stop meeting" : recording ? "Stop recording" : "Start recording"}
               disabled={
+                recordingStarting ||
                 meetingPending ||
                 lecturePending ||
                 (!recording &&
@@ -945,49 +939,37 @@ export function MainWindow({
             </button>
           </div>
 
-          {historyError ? (
-            <div className="inline-error" role="alert">
-              <span>{historyError}</span>
-              <button className="text-button" type="button" onClick={() => void refreshRecordings()}>
-                Try again
-              </button>
-            </div>
-          ) : loading ? (
-            <div className="empty-state compact">
-              <WaveIcon />
-              <p>Loading messages…</p>
-            </div>
-          ) : recordings.length === 0 ? (
-            <div className="empty-state compact">
-              <WaveIcon />
-              <p>Your latest transcription will appear here.</p>
-            </div>
-          ) : (
-            <RecordingCard
-              row={recordings[0]}
-              context="latest"
-              onCopy={onCopy}
-              onRetry={onRetry}
-              retryDisabled={meeting || lecture}
-              onExport={onExport}
-              onDelete={onDelete}
-            />
-          )}
-          {proUnlocked ? (
-            <MediaPanel
-              enabled={config?.media_panel_enabled ?? false}
-              reactive={reactiveVisualsEnabled}
-              suppressed={recording || meeting || lecture || needsOnboarding}
-            />
-          ) : (
-            pro.available &&
-            (config?.media_panel_enabled ?? false) && (
-              <ProLockPrompt
-                copy="The media console is part of UltraVox Pro."
-                onOpenPro={onOpenPro}
+          {/* Fixed-height slot: whatever the latest message shows, the
+              recording panel above never grows or shrinks. */}
+          <div className="latest-slot">
+            {historyError ? (
+              <div className="inline-error" role="alert">
+                <span>{historyError}</span>
+                <button className="text-button" type="button" onClick={() => void refreshRecordings()}>
+                  Try again
+                </button>
+              </div>
+            ) : loading ? (
+              <div className="empty-state compact">
+                <WaveIcon />
+                <p>Loading messages…</p>
+              </div>
+            ) : recordings.length === 0 ? (
+              <div className="empty-state compact">
+                <p>No messages yet</p>
+              </div>
+            ) : (
+              <RecordingCard
+                row={recordings[0]}
+                context="latest"
+                onCopy={onCopy}
+                onRetry={onRetry}
+                retryDisabled={meeting || lecture}
+                onExport={onExport}
+                onDelete={onDelete}
               />
-            )
-          )}
+            )}
+          </div>
         </section>
       </main>
 

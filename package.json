@@ -1,8 +1,8 @@
 {
   "name": "ultravox",
   "private": true,
-  "version": "0.11.0",
-  "description": "Private, on-device transcription for macOS, Windows, and Linux with meeting capture, media import, live now-playing controls, and customizable themes",
+  "version": "0.13.3",
+  "description": "Private, on-device transcription for macOS, Windows, and Linux with meeting capture, media import, and customizable themes",
   "scripts": {
     "desktop:dev": "pnpm --filter ultravox-desktop tauri:dev",
     "desktop:qa:headless": "pnpm --filter ultravox-desktop qa:headless",

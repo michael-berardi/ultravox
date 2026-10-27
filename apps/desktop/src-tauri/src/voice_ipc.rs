@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::events::MeetingDetection;
@@ -35,7 +36,20 @@ struct VoiceRequest {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum VoiceCommand {
+    #[cfg(feature = "local-qa")]
+    #[serde(rename = "renderer-health")]
+    RendererHealth,
+    #[cfg(feature = "local-qa")]
+    #[serde(rename = "renderer-stats")]
+    RendererStats,
+    #[cfg(feature = "local-qa")]
+    #[serde(rename = "renderer-capture")]
+    RendererCapture {
+        path: Option<String>,
+    },
     Health,
+    #[serde(rename = "permission-status")]
+    PermissionStatus,
     ShowSettings,
     Listen,
     Start {
@@ -74,6 +88,11 @@ struct VoiceResponse {
     audio_level: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permissions: Option<GuiPermissionStatus>,
+    #[cfg(feature = "local-qa")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    renderer: Option<serde_json::Value>,
 }
 
 impl VoiceResponse {
@@ -87,6 +106,9 @@ impl VoiceResponse {
             transcript: None,
             audio_level: None,
             error: None,
+            permissions: None,
+            #[cfg(feature = "local-qa")]
+            renderer: None,
         }
     }
 
@@ -100,7 +122,97 @@ impl VoiceResponse {
             transcript: None,
             audio_level: None,
             error: Some(error.into()),
+            permissions: None,
+            #[cfg(feature = "local-qa")]
+            renderer: None,
         }
+    }
+}
+
+/// Fixed read-only metadata; native microphone 0/1/2/3 means
+/// not-determined/authorized/denied/restricted. AX and screen preflight are 0/1
+/// (not trusted/not authorized vs trusted/authorized), not inferred TCC denial.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativePermissionValues {
+    microphone: u8,
+    accessibility: u8,
+    screen_recording: u8,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MainBundleIdentity {
+    bundle_id: Option<String>,
+    bundle_path: Option<String>,
+    executable_path: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn parse_main_bundle_identity(json: &str) -> Option<MainBundleIdentity> {
+    if json.len() > 16 * 1024 {
+        return None;
+    }
+    let identity: MainBundleIdentity = serde_json::from_str(json).ok()?;
+    if [
+        &identity.bundle_id,
+        &identity.bundle_path,
+        &identity.executable_path,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.len() > 4096 || value.chars().any(char::is_control))
+    {
+        return None;
+    }
+    Some(identity)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GuiPermissionStatus {
+    gui_pid: u32,
+    native: Option<NativePermissionValues>,
+    main_bundle: Option<MainBundleIdentity>,
+    recording: bool,
+    meeting: bool,
+    transcription: bool,
+}
+
+async fn gui_permission_status(state: &AppState) -> GuiPermissionStatus {
+    // A read-only status must never queue behind a start/stop transition (which
+    // can wait on the user), so each flag is read on its own. No config,
+    // history, audio content, or helper authorization calls enter this path.
+    let recording = state.session.lock().await.is_some();
+    let meeting = state.meeting_session.lock().await.is_some();
+    let transcription = state.active_transcription.lock().await.is_some();
+    #[cfg(target_os = "macos")]
+    let (native, main_bundle) = {
+        use ultravox_macos_bridge as bridge;
+        let microphone = match bridge::microphone_authorization_status() {
+            bridge::MicrophoneAuthorizationStatus::NotDetermined => 0,
+            bridge::MicrophoneAuthorizationStatus::Authorized => 1,
+            bridge::MicrophoneAuthorizationStatus::Denied => 2,
+            bridge::MicrophoneAuthorizationStatus::Restricted => 3,
+        };
+        let native = NativePermissionValues {
+            microphone,
+            accessibility: u8::from(bridge::is_accessibility_trusted(false)),
+            screen_recording: u8::from(bridge::screen_recording_authorized()),
+        };
+        let identity =
+            bridge::main_bundle_identity_json().and_then(|json| parse_main_bundle_identity(&json));
+        (Some(native), identity)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (native, main_bundle) = (None, None);
+    GuiPermissionStatus {
+        gui_pid: std::process::id(),
+        native,
+        main_bundle,
+        recording,
+        meeting,
+        transcription,
     }
 }
 
@@ -198,7 +310,7 @@ fn shared_temp_dir() -> &'static PathBuf {
 }
 
 fn app_socket_dir() -> PathBuf {
-    shared_temp_dir().join("com.imploselabs.ultravox")
+    shared_temp_dir().join("com.paretocybernetics.ultravox")
 }
 
 fn socket_path_from_env(env: Option<&std::ffi::OsStr>) -> PathBuf {
@@ -257,6 +369,57 @@ fn ensure_managed_entry(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// pareto-legacy: UltraTerm 3.3 and older connect to the voice socket under the
+/// old app identifier. A symlink there to the current socket keeps their
+/// dictation working until they move to the new path.
+fn legacy_socket_path() -> PathBuf {
+    shared_temp_dir()
+        .join("com.imploselabs.ultravox") // pareto-legacy
+        .join("voice-v1.sock")
+}
+
+fn legacy_link_is_ours(legacy: &std::path::Path, socket: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(legacy).is_ok_and(|m| m.file_type().is_symlink())
+        && std::fs::read_link(legacy).is_ok_and(|target| target == socket)
+}
+
+/// Points the legacy socket path at `socket`, unless a live older UltraVox
+/// still serves there. Only for the default socket, never an override.
+async fn ensure_legacy_socket_link(socket: &std::path::Path) -> Result<(), String> {
+    if socket != app_socket_dir().join("voice-v1.sock") {
+        return Ok(());
+    }
+    let legacy = legacy_socket_path();
+    if legacy_link_is_ours(&legacy, socket) {
+        return Ok(());
+    }
+    let parent = legacy
+        .parent()
+        .ok_or_else(|| "legacy voice socket path has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    prepare_managed_socket_dir(parent)?;
+    if let Ok(metadata) = std::fs::symlink_metadata(&legacy) {
+        if !metadata.file_type().is_symlink() && UnixStream::connect(&legacy).await.is_ok() {
+            return Ok(());
+        }
+        std::fs::remove_file(&legacy).map_err(|e| e.to_string())?;
+    }
+    std::os::unix::fs::symlink(socket, &legacy).map_err(|e| e.to_string())
+}
+
+/// Refreshes the legacy link, logging each distinct failure once.
+async fn refresh_legacy_link(socket: &std::path::Path, last_error: &mut Option<String>) {
+    match ensure_legacy_socket_link(socket).await {
+        Ok(()) => *last_error = None,
+        Err(error) => {
+            if last_error.as_deref() != Some(error.as_str()) {
+                eprintln!("UltraVox legacy voice socket link failed: {error}");
+                *last_error = Some(error);
+            }
+        }
+    }
+}
+
 fn owner_path() -> PathBuf {
     socket_path().with_extension("pid")
 }
@@ -269,7 +432,11 @@ pub fn start(app: AppHandle) {
     });
 }
 
+/// Set once shutdown cleanup ran so the socket watcher never re-creates it.
+static SOCKET_SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn cleanup_socket() {
+    SOCKET_SHUTDOWN.store(true, std::sync::atomic::Ordering::SeqCst);
     let owner = owner_path();
     let owned_by_this_process = std::fs::read_to_string(&owner)
         .ok()
@@ -278,47 +445,184 @@ pub fn cleanup_socket() {
     if !owned_by_this_process {
         return;
     }
-    let _ = std::fs::remove_file(socket_path());
+    let socket = socket_path();
+    if legacy_link_is_ours(&legacy_socket_path(), &socket) {
+        let _ = std::fs::remove_file(legacy_socket_path());
+    }
+    let _ = std::fs::remove_file(socket);
     let _ = std::fs::remove_file(owner);
 }
 
-async fn serve(app: AppHandle) -> Result<(), String> {
-    let path = socket_path();
+/// Wait between failed re-bind attempts.
+const REBIND_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+/// How often the listener checks that its socket file still exists.
+const SOCKET_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Identity of a bound socket file, used to notice when it was deleted or replaced.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct SocketIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+fn socket_identity(path: &std::path::Path) -> Option<SocketIdentity> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| SocketIdentity { dev: m.dev(), ino: m.ino() })
+}
+
+/// True when the file at `path` is no longer the socket this process bound.
+fn socket_was_lost(path: &std::path::Path, bound: SocketIdentity) -> bool {
+    socket_identity(path) != Some(bound)
+}
+
+/// Create the socket folder if needed, bind the socket and write the owner file.
+async fn bind_socket(path: &std::path::Path) -> Result<(UnixListener, SocketIdentity), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "voice socket path has no parent directory".to_string())?;
+    let owner = path.with_extension("pid");
     let managed_dir = is_managed_socket_dir(parent);
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     ensure_managed_socket_dir(parent)?;
     if managed_dir && path.exists() {
-        ensure_managed_entry(&path)?;
+        ensure_managed_entry(path)?;
     }
-    if managed_dir && owner_path().exists() {
-        ensure_managed_entry(&owner_path())?;
+    if managed_dir && owner.exists() {
+        ensure_managed_entry(&owner)?;
     }
     if path.exists() {
-        if UnixStream::connect(&path).await.is_ok() {
+        if UnixStream::connect(path).await.is_ok() {
             return Err(format!("voice socket already active at {}", path.display()));
         }
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(owner_path());
+        std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&owner);
     }
-    let listener = UnixListener::bind(&path).map_err(|e| e.to_string())?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+    let listener = UnixListener::bind(path).map_err(|e| e.to_string())?;
+    let identity = socket_identity(path)
+        .ok_or_else(|| "voice socket vanished right after bind".to_string())?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
-    std::fs::write(owner_path(), std::process::id().to_string()).map_err(|e| e.to_string())?;
-    std::fs::set_permissions(owner_path(), std::fs::Permissions::from_mode(0o600))
+    std::fs::write(&owner, std::process::id().to_string()).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&owner, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
+    Ok((listener, identity))
+}
+
+/// One-line account of what is missing, for the log. `last_ok` is the last
+/// watch tick that still saw the socket, so the deletion happened between
+/// `last_ok` and now. When the whole folder is gone, its parent's mtime is the
+/// moment its entry was removed.
+fn describe_loss(
+    path: &std::path::Path,
+    last_ok: chrono::DateTime<chrono::Local>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    let folder = path.parent();
+    let folder_state = match folder.map(std::fs::symlink_metadata) {
+        Some(Ok(_)) => "folder present, socket file missing or replaced",
+        Some(Err(_)) => "socket folder missing",
+        None => "socket path has no folder",
+    };
+    let parent_mtime = folder
+        .filter(|f| std::fs::symlink_metadata(f).is_err())
+        .and_then(|f| f.parent())
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .map(|t| chrono::DateTime::<chrono::Local>::from(t).to_rfc3339())
+        .unwrap_or_else(|| "unknown".to_string());
+    format!(
+        "{folder_state}; last seen intact {}, noticed {}, parent folder last modified {parent_mtime}",
+        last_ok.to_rfc3339(),
+        now.to_rfc3339()
+    )
+}
+
+async fn serve(app: AppHandle) -> Result<(), String> {
+    let path = socket_path();
     let service = Arc::new(VoiceIpcState::default());
+    let (mut listener, mut bound) = bind_socket(&path).await?;
+    let mut last_legacy_error: Option<String> = None;
+    refresh_legacy_link(&path, &mut last_legacy_error).await;
+    let mut lost_logged = false;
+    let mut last_accept_error: Option<String> = None;
+    let mut last_ok = chrono::Local::now();
+    let mut last_rebind_error: Option<String> = None;
+    let mut next_rebind = Instant::now();
+    let mut watch = tokio::time::interval(SOCKET_WATCH_INTERVAL);
+    watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        let (stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
-        let app = app.clone();
-        let service = service.clone();
-        tokio::spawn(async move {
-            if let Err(error) = serve_connection(stream, app, service).await {
-                eprintln!("UltraVox voice IPC request failed: {error}");
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        // e.g. out of file descriptors: keep the watcher alive and retry.
+                        let message = error.to_string();
+                        if last_accept_error.as_deref() != Some(message.as_str()) {
+                            eprintln!("UltraVox voice socket accept failed: {message}");
+                            last_accept_error = Some(message);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+                last_accept_error = None;
+                let app = app.clone();
+                let service = service.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = serve_connection(stream, app, service).await {
+                        eprintln!("UltraVox voice IPC request failed: {error}");
+                    }
+                });
             }
-        });
+            _ = watch.tick() => {
+                if SOCKET_SHUTDOWN.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
+                if !socket_was_lost(&path, bound) {
+                    last_ok = chrono::Local::now();
+                    refresh_legacy_link(&path, &mut last_legacy_error).await;
+                    continue;
+                }
+                if Instant::now() < next_rebind {
+                    continue;
+                }
+                if !lost_logged {
+                    eprintln!(
+                        "UltraVox voice socket {} was deleted or replaced ({}); re-binding",
+                        path.display(),
+                        describe_loss(&path, last_ok, chrono::Local::now())
+                    );
+                    lost_logged = true;
+                }
+                match bind_socket(&path).await {
+                    Ok((new_listener, identity)) => {
+                        if SOCKET_SHUTDOWN.load(std::sync::atomic::Ordering::SeqCst) {
+                            // Shutdown cleanup ran while binding: leave nothing behind.
+                            drop(new_listener);
+                            let _ = std::fs::remove_file(&path);
+                            let _ = std::fs::remove_file(owner_path());
+                            continue;
+                        }
+                        listener = new_listener;
+                        bound = identity;
+                        lost_logged = false;
+                        last_rebind_error = None;
+                        eprintln!("UltraVox voice socket re-bound at {}", path.display());
+                    }
+                    Err(error) => {
+                        // Retry after REBIND_RETRY_DELAY; log each distinct failure once.
+                        if last_rebind_error.as_deref() != Some(error.as_str()) {
+                            eprintln!("UltraVox voice socket re-bind failed: {error}");
+                            last_rebind_error = Some(error);
+                        }
+                        // Another UltraVox may own the socket; probe it gently.
+                        next_rebind = Instant::now() + REBIND_RETRY_DELAY;
+                    }
+                }
+            }
+        }
     }
 }
 fn verify_peer_uid(stream: &UnixStream) -> Result<(), String> {
@@ -350,9 +654,25 @@ async fn serve_connection(
 ) -> Result<(), String> {
     verify_peer_uid(&stream)?;
 
-    let request: VoiceRequest = read_json_frame(&mut stream)
-        .await
-        .map_err(|e| e.to_string())?;
+    let value: serde_json::Value = match read_json_frame(&mut stream).await {
+        Ok(value) => value,
+        // A bare connect-and-close is a liveness probe (another UltraVox
+        // checking whether this socket is active), not a failed request.
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let request = match parse_voice_request(value.clone()) {
+        Ok(request) => request,
+        Err(error) => {
+            let id = value["requestId"]
+                .as_str()
+                .filter(|id| valid_request_id(id))
+                .unwrap_or("");
+            return write_json_frame(&mut stream, &VoiceResponse::failure(id.to_string(), error))
+                .await
+                .map_err(|e| e.to_string());
+        }
+    };
     let request_id = request.request_id.clone();
     if !valid_request_id(&request.request_id) {
         let response = VoiceResponse::failure(String::new(), "invalid request id");
@@ -476,13 +796,33 @@ async fn handle_request(
     let state = app.state::<AppState>();
 
     match request.command {
+        #[cfg(feature = "local-qa")]
+        VoiceCommand::RendererHealth => {
+            let mut response = VoiceResponse::success(request_id, "renderer-health");
+            response.renderer = Some(crate::local_renderer_qa::health(&app)?);
+            Ok(response)
+        }
+        #[cfg(feature = "local-qa")]
+        VoiceCommand::RendererStats => {
+            renderer_response(app.clone(), request_id, false, None).await
+        }
+        #[cfg(feature = "local-qa")]
+        VoiceCommand::RendererCapture { path } => {
+            renderer_response(app.clone(), request_id, true, path).await
+        }
         VoiceCommand::Health => Ok(VoiceResponse::success(request_id, "ready")),
+        VoiceCommand::PermissionStatus => {
+            let mut response = VoiceResponse::success(request_id, "permission-status");
+            response.permissions = Some(gui_permission_status(&state).await);
+            Ok(response)
+        }
         VoiceCommand::ShowSettings => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let window = app
+                .get_webview_window("main")
+                .ok_or_else(|| "UltraVox main window is unavailable".to_string())?;
+            let _ = window.unminimize();
+            window.show().map_err(|error| format!("could not show UltraVox: {error}"))?;
+            let _ = window.set_focus();
             let _ = app.emit("navigate-to", "settings");
             Ok(VoiceResponse::success(request_id, "settings"))
         }
@@ -632,6 +972,63 @@ async fn handle_request(
     }
 }
 
+fn parse_voice_request(value: serde_json::Value) -> Result<VoiceRequest, String> {
+    if value["command"] == "permission-status" {
+        let object = value
+            .as_object()
+            .ok_or("invalid permission-status request")?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "version" | "requestId" | "command"))
+        {
+            return Err("unexpected permission-status request fields".into());
+        }
+    }
+    #[cfg(feature = "local-qa")]
+    if matches!(
+        value["command"].as_str(),
+        Some("renderer-health" | "renderer-stats" | "renderer-capture")
+    ) {
+        crate::local_renderer_qa::require_enabled()?;
+        validate_qa_fields(&value)?;
+    }
+    serde_json::from_value(value).map_err(|_| "invalid or unknown voice IPC command".into())
+}
+
+#[cfg(feature = "local-qa")]
+fn validate_qa_fields(value: &serde_json::Value) -> Result<(), String> {
+    let capture = value["command"] == "renderer-capture";
+    let object = value.as_object().ok_or("invalid QA request")?;
+    if object.keys().any(|key| {
+        !matches!(key.as_str(), "version" | "requestId" | "command") && !(capture && key == "path")
+    }) || (object.contains_key("path") && !value["path"].is_string())
+    {
+        return Err("unexpected renderer QA request fields".into());
+    }
+    if value["path"].as_str().is_some_and(|path| path.len() > 256) {
+        return Err("renderer capture path too long".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "local-qa")]
+async fn renderer_response(
+    app: AppHandle,
+    request_id: String,
+    capture: bool,
+    path: Option<String>,
+) -> Result<VoiceResponse, String> {
+    crate::local_renderer_qa::require_enabled()?;
+    let diagnostics = tauri::async_runtime::spawn_blocking(move || {
+        crate::local_renderer_qa::run(&app, capture, path)
+    })
+    .await
+    .map_err(|_| "renderer QA worker failed")??;
+    let mut response = VoiceResponse::success(request_id, "renderer-qa");
+    response.renderer = Some(diagnostics);
+    Ok(response)
+}
+
 fn parse_recording_id(value: &str) -> Result<Uuid, String> {
     Uuid::parse_str(value).map_err(|_| format!("invalid recording id: {value}"))
 }
@@ -675,6 +1072,206 @@ async fn write_json_frame<T: Serialize>(stream: &mut UnixStream, value: &T) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_link_is_ours_only_for_a_symlink_to_the_current_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("voice-v1.sock");
+        let legacy = dir.path().join("legacy.sock");
+        assert!(!legacy_link_is_ours(&legacy, &socket));
+        std::os::unix::fs::symlink(dir.path().join("other.sock"), &legacy).unwrap();
+        assert!(!legacy_link_is_ours(&legacy, &socket));
+        std::fs::remove_file(&legacy).unwrap();
+        std::os::unix::fs::symlink(&socket, &legacy).unwrap();
+        assert!(legacy_link_is_ours(&legacy, &socket));
+        std::fs::remove_file(&legacy).unwrap();
+        std::fs::write(&legacy, b"").unwrap();
+        assert!(!legacy_link_is_ours(&legacy, &socket));
+    }
+
+    #[cfg(not(feature = "local-qa"))]
+    #[test]
+    fn consumer_build_rejects_renderer_qa() {
+        for command in ["renderer-health", "renderer-stats", "renderer-capture"] {
+            assert!(parse_voice_request(
+                serde_json::json!({"version":1,"requestId":"qa","command":command})
+            )
+            .is_err());
+        }
+    }
+    #[cfg(feature = "local-qa")]
+    #[test]
+    fn qa_accepts_only_fixed_command_fields() {
+        let stats = serde_json::json!({"version":1,"requestId":"qa","command":"renderer-stats"});
+        assert!(validate_qa_fields(&stats).is_ok());
+        for field in ["path", "script", "crop", "focus", "text", "recordingId"] {
+            let mut invalid = stats.clone();
+            invalid[field] = "anything".into();
+            assert!(validate_qa_fields(&invalid).is_err(), "{field}");
+        }
+        let mut capture =
+            serde_json::json!({"version":1,"requestId":"qa","command":"renderer-capture"});
+        assert!(validate_qa_fields(&capture).is_ok());
+        capture["path"] = "/tmp/screenshots/hero.png".into();
+        assert!(validate_qa_fields(&capture).is_ok());
+        capture["path"] = serde_json::Value::Null;
+        assert!(validate_qa_fields(&capture).is_err());
+    }
+
+    #[test]
+    fn permission_status_is_ungated_and_accepts_only_read_only_fields() {
+        let request =
+            serde_json::json!({"version":1,"requestId":"permission","command":"permission-status"});
+        assert!(matches!(
+            parse_voice_request(request.clone()).unwrap().command,
+            VoiceCommand::PermissionStatus
+        ));
+        for field in [
+            "path",
+            "script",
+            "prompt",
+            "requestAccess",
+            "recordingId",
+            "settings",
+            "history",
+            "text",
+        ] {
+            let mut invalid = request.clone();
+            invalid[field] = true.into();
+            assert!(parse_voice_request(invalid).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn permission_response_contains_only_bounded_metadata() {
+        let mut response = VoiceResponse::success("permission".into(), "permission-status");
+        response.permissions = Some(GuiPermissionStatus {
+            gui_pid: 123,
+            native: Some(NativePermissionValues {
+                microphone: 1,
+                accessibility: 0,
+                screen_recording: 1,
+            }),
+            main_bundle: Some(MainBundleIdentity {
+                bundle_id: Some("com.example.gui".into()),
+                bundle_path: Some("/Applications/GUI.app".into()),
+                executable_path: Some("/Applications/GUI.app/Contents/MacOS/GUI".into()),
+            }),
+            recording: false,
+            meeting: false,
+            transcription: false,
+        });
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["permissions"]["native"]["microphone"], 1);
+        assert_eq!(value["permissions"]["guiPid"], 123);
+        let keys: HashSet<&str> = value["permissions"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            HashSet::from([
+                "guiPid",
+                "native",
+                "mainBundle",
+                "recording",
+                "meeting",
+                "transcription"
+            ])
+        );
+        assert_eq!(value.as_object().unwrap().len(), 5);
+        let native_keys: HashSet<&str> = value["permissions"]["native"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            native_keys,
+            HashSet::from(["microphone", "accessibility", "screenRecording"])
+        );
+        let bundle_keys: HashSet<&str> = value["permissions"]["mainBundle"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            bundle_keys,
+            HashSet::from(["bundleId", "bundlePath", "executablePath"])
+        );
+        assert!(serde_json::to_vec(&value).unwrap().len() < MAX_FRAME_BYTES);
+        assert!(value.get("transcript").is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_identity_rejects_extra_or_unbounded_metadata() {
+        assert!(parse_main_bundle_identity(
+            r#"{"bundleId":null,"bundlePath":null,"executablePath":null}"#
+        )
+        .is_some());
+        assert!(parse_main_bundle_identity(r#"{"bundleId":null,"settings":"private"}"#).is_none());
+        assert!(parse_main_bundle_identity(
+            &serde_json::json!({"bundleId":"x".repeat(4097)}).to_string()
+        )
+        .is_none());
+        assert!(parse_main_bundle_identity(
+            &serde_json::json!({"bundlePath":"bad\npath"}).to_string()
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn lost_socket_is_detected_and_rebound_in_a_recreated_folder() {
+        let root = std::path::PathBuf::from(format!("/tmp/uvr-{}", &Uuid::new_v4().simple().to_string()[..8]));
+        let path = root.join("sub").join("voice-v1.sock");
+        let (listener, bound) = bind_socket(&path).await.expect("first bind");
+        assert!(!socket_was_lost(&path, bound));
+
+        // Another process deletes the whole folder.
+        drop(listener);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(socket_was_lost(&path, bound));
+
+        let (_listener, rebound) = bind_socket(&path).await.expect("re-bind after delete");
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("pid")).unwrap(),
+            std::process::id().to_string()
+        );
+        assert!(!socket_was_lost(&path, rebound));
+        assert!(UnixStream::connect(&path).await.is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn loss_note_names_missing_folder_and_times() {
+        let root = std::path::PathBuf::from(format!("/tmp/uvn-{}", &Uuid::new_v4().simple().to_string()[..8]));
+        let path = root.join("sub").join("voice-v1.sock");
+        let (listener, _) = bind_socket(&path).await.expect("bind");
+        drop(listener);
+        let seen = chrono::Local::now();
+        std::fs::remove_dir_all(root.join("sub")).unwrap();
+        let note = describe_loss(&path, seen, chrono::Local::now());
+        assert!(note.contains("socket folder missing"), "{note}");
+        assert!(note.contains(&seen.to_rfc3339()), "{note}");
+        assert!(note.contains("last modified"), "{note}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn replaced_socket_file_counts_as_lost() {
+        let root = std::path::PathBuf::from(format!("/tmp/uvp-{}", &Uuid::new_v4().simple().to_string()[..8]));
+        let path = root.join("voice-v1.sock");
+        let (_listener, bound) = bind_socket(&path).await.expect("bind");
+        std::fs::remove_file(&path).unwrap();
+        let _other = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(socket_was_lost(&path, bound));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn default_socket_path_uses_managed_directory() {
@@ -845,6 +1442,7 @@ mod tests {
         let response = VoiceResponse::success("request-2".to_string(), "ready");
         let value = serde_json::to_value(response).unwrap();
         assert_eq!(value["state"], "ready");
+        assert!(value.get("permissions").is_none());
         assert!(value.get("recordingId").is_none());
         assert!(value.get("transcript").is_none());
         assert!(value.get("audioLevel").is_none());

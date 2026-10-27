@@ -13,7 +13,6 @@
 import AppKit
 @preconcurrency import ApplicationServices
 import AVFoundation
-import Accelerate
 import Carbon
 import Cocoa
 import Darwin
@@ -564,994 +563,7 @@ private final class MeetingCaptureManager: NSObject, SCRecordingOutputDelegate, 
     }
 }
 
-import CoreAudio
-
-// MARK: - System output spectrum meter
-
-/// Frequency bins used by the UI, ordered low to high. Each value comes from
-/// the corresponding PCM frequency magnitude; no decorative bar curve is
-/// applied later in the frontend.
-internal enum SystemAudioSignal {
-    static let bandFrequencies: [Double] = [
-        63, 125, 250, 500, 1_000, 2_000, 3_500, 5_000, 7_500, 10_000, 14_000,
-    ]
-
-    static func normalizedLevel(rms: Double) -> Float {
-        guard rms.isFinite, rms > 0 else { return 0 }
-        let decibels = 20 * log10(rms)
-        return Float(min(1, max(0, (decibels + 60) / 60)))
-    }
-
-    /// Accumulates real Goertzel magnitudes for the fixed visual frequency
-    /// bins. This avoids an FFT allocation/setup on every ScreenCaptureKit
-    /// callback while preserving frequency-selective response.
-    static func accumulateSpectrum(
-        samples: UnsafePointer<Float>,
-        count: Int,
-        sampleRate: Double,
-        into spectrum: inout [Float]
-    ) {
-        guard count > 0, sampleRate.isFinite, sampleRate > 0,
-            spectrum.count == bandFrequencies.count
-        else { return }
-
-        for (bandIndex, frequency) in bandFrequencies.enumerated() {
-            guard frequency < sampleRate / 2 else { continue }
-            let coefficient = 2 * cos(2 * Double.pi * frequency / sampleRate)
-            var previous = 0.0
-            var previousPrevious = 0.0
-            for sampleIndex in 0..<count {
-                let current =
-                    Double(samples[sampleIndex]) + coefficient * previous - previousPrevious
-                previousPrevious = previous
-                previous = current
-            }
-            let power = max(
-                0,
-                previous * previous + previousPrevious * previousPrevious
-                    - coefficient * previous * previousPrevious
-            )
-            let amplitude = 2 * sqrt(power) / Double(count)
-            spectrum[bandIndex] = max(
-                spectrum[bandIndex],
-                normalizedLevel(rms: amplitude)
-            )
-        }
-    }
-}
-
-private final class SystemAudioLevelStore: @unchecked Sendable {
-    static let shared = SystemAudioLevelStore()
-
-    private let lock = NSLock()
-    private var storedLevel: Float = 0
-    private var storedSpectrum = [Float](
-        repeating: 0,
-        count: SystemAudioSignal.bandFrequencies.count
-    )
-
-    var level: Float {
-        lock.withLock { storedLevel }
-    }
-
-    var spectrum: [Float] {
-        lock.withLock { storedSpectrum }
-    }
-
-    func set(level: Float, spectrum: [Float]) {
-        lock.withLock {
-            storedLevel = min(1, max(0, level))
-            guard spectrum.count == storedSpectrum.count else { return }
-            for index in storedSpectrum.indices {
-                let target = min(1, max(0, spectrum[index]))
-                // Immediate attack, short release. Both values still derive
-                // exclusively from PCM; smoothing only prevents visual chatter.
-                storedSpectrum[index] =
-                    target >= storedSpectrum[index]
-                    ? target
-                    : storedSpectrum[index] * 0.68 + target * 0.32
-            }
-        }
-    }
-
-    func reset() {
-        lock.withLock {
-            storedLevel = 0
-            storedSpectrum = [Float](
-                repeating: 0,
-                count: SystemAudioSignal.bandFrequencies.count
-            )
-        }
-    }
-}
-
-@available(macOS 15.0, *)
-private final class SystemAudioLevelOutput: NSObject, SCStreamOutput, @unchecked Sendable {
-    func stream(
-        _ stream: SCStream,
-        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-        of outputType: SCStreamOutputType
-    ) {
-        guard outputType == .audio,
-            sampleBuffer.isValid,
-            let description = sampleBuffer.formatDescription
-        else { return }
-        let format = AVAudioFormat(cmAudioFormatDescription: description)
-
-        let frameCount = AVAudioFrameCount(sampleBuffer.numSamples)
-        guard frameCount > 0,
-            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
-        else { return }
-        buffer.frameLength = frameCount
-        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sampleBuffer,
-            at: 0,
-            frameCount: Int32(frameCount),
-            into: buffer.mutableAudioBufferList
-        ) == noErr,
-            let channels = buffer.floatChannelData
-        else { return }
-
-        let channelCount = Int(format.channelCount)
-        let sampleCount = Int(frameCount)
-        guard channelCount > 0, sampleCount > 0 else { return }
-        var meanSquareTotal: Float = 0
-        var spectrum = [Float](
-            repeating: 0,
-            count: SystemAudioSignal.bandFrequencies.count
-        )
-        for channelIndex in 0..<channelCount {
-            var channelMeanSquare: Float = 0
-            vDSP_measqv(
-                channels[channelIndex],
-                1,
-                &channelMeanSquare,
-                vDSP_Length(sampleCount)
-            )
-            meanSquareTotal += channelMeanSquare
-            SystemAudioSignal.accumulateSpectrum(
-                samples: channels[channelIndex],
-                count: sampleCount,
-                sampleRate: format.sampleRate,
-                into: &spectrum
-            )
-        }
-        let rms = sqrt(Double(meanSquareTotal) / Double(channelCount))
-        SystemAudioLevelStore.shared.set(
-            level: SystemAudioSignal.normalizedLevel(rms: rms),
-            spectrum: spectrum
-        )
-    }
-}
-
-@available(macOS 15.0, *)
-private actor SystemAudioLevelMeter {
-    static let shared = SystemAudioLevelMeter()
-
-    private let output = SystemAudioLevelOutput()
-    private let sampleQueue = DispatchQueue(
-        label: "studio.libertydesign.ultravox.system-audio-meter",
-        qos: .userInteractive
-    )
-    private var stream: SCStream?
-
-    func start() async throws {
-        guard stream == nil else { return }
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false,
-            onScreenWindowsOnly: true
-        )
-        guard let display = content.displays.first else {
-            throw MeetingCaptureError.noDisplay
-        }
-        let filter = SCContentFilter(display: display, excludingWindows: [])
-        let configuration = SCStreamConfiguration()
-        configuration.width = 16
-        configuration.height = 16
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-        configuration.queueDepth = 1
-        configuration.showsCursor = false
-        configuration.capturesAudio = true
-        configuration.excludesCurrentProcessAudio = true
-        configuration.captureMicrophone = false
-
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
-        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: sampleQueue)
-        self.stream = stream
-        do {
-            try await stream.startCapture()
-        } catch {
-            self.stream = nil
-            SystemAudioLevelStore.shared.reset()
-            throw error
-        }
-    }
-
-    func stop() async {
-        guard let stream else {
-            SystemAudioLevelStore.shared.reset()
-            return
-        }
-        self.stream = nil
-        try? await stream.stopCapture()
-        try? stream.removeStreamOutput(output, type: .audio)
-        SystemAudioLevelStore.shared.reset()
-    }
-}
-
-// MARK: - Media activity and system output controls
-
-/// One other application detected through public CoreAudio process state.
-internal struct MediaProcessSource: Equatable, Sendable {
-    let processID: pid_t
-    let appName: String?
-    let bundleIdentifier: String?
-}
-
-/// Capture-free detection of processes currently running audio output.
-///
-/// Uses only `kAudioHardwarePropertyProcessObjectList` and
-/// `kAudioProcessPropertyIsRunningOutput`; no PCM is read and no new
-/// permission is required. The caller's own process is excluded so UltraVox
-/// never reports itself as the media source (no hidden recording).
-internal enum MediaActivity {
-    private static func processIDs() -> [AudioObjectID] {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyProcessObjectList,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var size: UInt32 = 0
-        let systemObject = AudioObjectID(kAudioObjectSystemObject)
-        guard AudioObjectGetPropertyDataSize(systemObject, &address, 0, nil, &size) == noErr,
-            size > 0
-        else { return [] }
-        var ids = [AudioObjectID](
-            repeating: AudioObjectID(0), count: Int(size) / MemoryLayout<AudioObjectID>.stride)
-        guard AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &ids) == noErr else {
-            return []
-        }
-        return ids
-    }
-
-    private static func processPID(_ objectID: AudioObjectID) -> pid_t? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyPID,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var pid: pid_t = 0
-        var size = UInt32(MemoryLayout<pid_t>.size)
-        guard AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &pid) == noErr else {
-            return nil
-        }
-        return pid
-    }
-
-    private static func isRunningOutput(_ objectID: AudioObjectID) -> Bool {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyIsRunningOutput,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var running: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        return AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &running) == noErr
-            && running != 0
-    }
-
-    private static func parentProcessID(_ processID: pid_t) -> pid_t? {
-        var info = proc_bsdinfo()
-        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let actualSize = withUnsafeMutablePointer(to: &info) { pointer in
-            proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, pointer, expectedSize)
-        }
-        guard actualSize == expectedSize, info.pbi_ppid > 0 else { return nil }
-        return pid_t(info.pbi_ppid)
-    }
-
-    /// CoreAudio and MediaRemote can attribute browser playback to a sandboxed
-    /// helper with no usable app identity. Walk the bounded parent chain to
-    /// the regular host app so the UI can name Chrome/Safari/etc.
-    static func owningApplication(_ processID: pid_t) -> NSRunningApplication? {
-        var current = processID
-        var visited = Set<pid_t>()
-        var fallback: NSRunningApplication?
-        for _ in 0..<8 {
-            guard current > 0, visited.insert(current).inserted else { break }
-            if let app = NSRunningApplication(processIdentifier: current),
-                app.bundleIdentifier != nil
-            {
-                fallback = fallback ?? app
-                if app.activationPolicy == .regular { return app }
-            }
-            guard let parent = parentProcessID(current) else { break }
-            current = parent
-        }
-        return fallback
-    }
-
-    /// Prefer the exact now-playing client, then a known browser's helper
-    /// process, and only then fall back to the first active process.
-    static func activeSource(preferredProcessID: pid_t? = nil) -> MediaProcessSource? {
-        let selfPID = getpid()
-        let candidates = processIDs().compactMap { objectID -> MediaProcessSource? in
-            guard isRunningOutput(objectID), let pid = processPID(objectID),
-                pid != selfPID, pid != 0
-            else { return nil }
-            let app = owningApplication(pid)
-            return MediaProcessSource(
-                processID: pid,
-                appName: app?.localizedName,
-                bundleIdentifier: app?.bundleIdentifier)
-        }
-        guard !candidates.isEmpty else { return nil }
-        if let preferredProcessID,
-            let exact = candidates.first(where: { $0.processID == preferredProcessID })
-        {
-            return exact
-        }
-        if let preferredProcessID,
-            let preferredBundle = NSRunningApplication(processIdentifier: preferredProcessID)?
-                .bundleIdentifier,
-            let familyMatch = candidates.first(where: {
-                BundleFamily.matches($0.bundleIdentifier, preferredBundle)
-            })
-        {
-            return familyMatch
-        }
-        return candidates[0]
-    }
-}
-
-/// Conservative browser helper/main bundle matching. Arbitrary bundle ID
-/// prefixes are intentionally not treated as the same application.
-internal enum BundleFamily {
-    private static let browserBases = [
-        "com.google.Chrome",
-        "com.microsoft.edgemac",
-        "com.brave.Browser",
-        "company.thebrowser.Browser",
-        "org.mozilla.firefox",
-        "com.vivaldi.Vivaldi",
-        "com.operasoftware.Opera",
-    ]
-    private static let safariFamily = Set([
-        "com.apple.Safari",
-        "com.apple.WebKit.Networking",
-        "com.apple.WebKit.WebContent",
-        "com.apple.WebKit.GPU",
-    ])
-
-    static func matches(_ lhs: String?, _ rhs: String?) -> Bool {
-        guard let lhs, let rhs, !lhs.isEmpty, !rhs.isEmpty else { return false }
-        if lhs == rhs { return true }
-        guard let left = family(for: lhs), let right = family(for: rhs) else { return false }
-        return left == right
-    }
-
-    private static func family(for bundleIdentifier: String) -> String? {
-        if safariFamily.contains(bundleIdentifier) { return "com.apple.Safari" }
-        for base in browserBases where bundleIdentifier == base
-            || bundleIdentifier.hasPrefix("\(base).helper")
-                && (bundleIdentifier == "\(base).helper"
-                    || bundleIdentifier.hasPrefix("\(base).helper."))
-        {
-            return base
-        }
-        return nil
-    }
-}
-
-/// Default-output device volume and mute through public HAL properties.
-/// A device without a volume or mute control yields nil (unsupported state)
-/// rather than a fabricated value.
-internal enum SystemOutput {
-    static func defaultDevice() -> AudioObjectID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var device = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
-        guard status == noErr, device != kAudioObjectUnknown, device != 0 else { return nil }
-        return device
-    }
-
-    private static func volumeAddress(_ element: UInt32) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
-            mScope: kAudioObjectPropertyScopeOutput,
-            mElement: element)
-    }
-
-    /// Prefer the master control; otherwise use the available stereo channels.
-    static func volumeElements(in device: AudioObjectID) -> [UInt32] {
-        var master = volumeAddress(kAudioObjectPropertyElementMain)
-        if AudioObjectHasProperty(device, &master) {
-            return [kAudioObjectPropertyElementMain]
-        }
-        return [UInt32(1), 2].filter { element in
-            var address = volumeAddress(element)
-            return AudioObjectHasProperty(device, &address)
-        }
-    }
-
-    private static func scalarValue(_ device: AudioObjectID, _ element: UInt32) -> Double? {
-        var address = volumeAddress(element)
-        var scalar: Float32 = 0
-        var size = UInt32(MemoryLayout<Float32>.size)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &scalar) == noErr else {
-            return nil
-        }
-        return Double(scalar)
-    }
-
-    /// Mean volume across controlled elements, or nil when unsupported.
-    static func volume() -> Double? {
-        guard let device = defaultDevice() else { return nil }
-        let elements = volumeElements(in: device)
-        guard !elements.isEmpty else { return nil }
-        var total = 0.0
-        for element in elements {
-            guard let scalar = scalarValue(device, element) else { return nil }
-            total += scalar
-        }
-        return total / Double(elements.count)
-    }
-
-    /// Sets every settable volume element; returns false when nothing was written.
-    static func setVolume(_ newValue: Double) -> Bool {
-        let clamped = min(max(newValue, 0), 1)
-        guard let device = defaultDevice(), !volumeElements(in: device).isEmpty else { return false }
-        var wroteAny = false
-        for element in volumeElements(in: device) {
-            var address = volumeAddress(element)
-            var settable = DarwinBoolean(false)
-            guard AudioObjectIsPropertySettable(device, &address, &settable) == noErr,
-                settable.boolValue
-            else { continue }
-            var scalar = Float32(clamped)
-            let status = AudioObjectSetPropertyData(
-                device, &address, 0, nil, UInt32(MemoryLayout<Float32>.size), &scalar)
-            if status == noErr { wroteAny = true }
-        }
-        return wroteAny
-    }
-
-    private static func muteAddress() -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyMute,
-            mScope: kAudioObjectPropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain)
-    }
-
-    static func muted() -> Bool? {
-        guard let device = defaultDevice() else { return nil }
-        var address = muteAddress()
-        guard AudioObjectHasProperty(device, &address) else { return nil }
-        var muted: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &muted) == noErr else {
-            return nil
-        }
-        return muted != 0
-    }
-
-    static func setMuted(_ muted: Bool) -> Bool {
-        guard let device = defaultDevice() else { return false }
-        var address = muteAddress()
-        guard AudioObjectHasProperty(device, &address) else { return false }
-        var settable = DarwinBoolean(false)
-        guard AudioObjectIsPropertySettable(device, &address, &settable) == noErr,
-            settable.boolValue
-        else { return false }
-        var value: UInt32 = muted ? 1 : 0
-        return AudioObjectSetPropertyData(
-            device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value) == noErr
-    }
-}
-
-// MARK: - Optional MediaRemote access (runtime-only)
-
-/// Transport commands mapped to MediaRemote send-command codes.
-internal enum MediaTransportCommand: String {
-    case playPause = "play_pause"
-    case previous
-    case next
-
-    /// Zero-based `MRMediaRemoteCommand` values.
-    var sendCommandCode: UInt32 {
-        switch self {
-        case .playPause: return 2
-        case .next: return 4
-        case .previous: return 5
-        }
-    }
-}
-
-internal struct MediaTransportCapabilities: Equatable, Sendable {
-    let playPause: Bool
-    let previous: Bool
-    let next: Bool
-
-    static func resolve(
-        sendAvailable: Bool,
-        supported: Set<UInt32>?,
-        enabled: Set<UInt32>?
-    ) -> MediaTransportCapabilities {
-        guard let supported, let enabled else {
-            return MediaTransportCapabilities(
-                playPause: sendAvailable, previous: false, next: false)
-        }
-        return MediaTransportCapabilities(
-            playPause: sendAvailable,
-            previous: sendAvailable
-                && supported.contains(MediaTransportCommand.previous.sendCommandCode)
-                && enabled.contains(MediaTransportCommand.previous.sendCommandCode),
-            next: sendAvailable
-                && supported.contains(MediaTransportCommand.next.sendCommandCode)
-                && enabled.contains(MediaTransportCommand.next.sendCommandCode))
-    }
-}
-
-private enum NowPlayingKey {
-    static let title = "kMRMediaRemoteNowPlayingInfoTitle"
-    static let artist = "kMRMediaRemoteNowPlayingInfoArtist"
-    static let album = "kMRMediaRemoteNowPlayingInfoAlbum"
-    static let elapsedTime = "kMRMediaRemoteNowPlayingInfoElapsedTime"
-    static let duration = "kMRMediaRemoteNowPlayingInfoDuration"
-    static let playbackRate = "kMRMediaRemoteNowPlayingInfoPlaybackRate"
-    static let applicationIsPlaying = "kMRMediaRemoteNowPlayingApplicationIsPlaying"
-}
-
-internal struct NowPlayingSnapshot: Equatable, Sendable {
-    let processID: pid_t?
-    let appName: String?
-    let bundleIdentifier: String?
-    let title: String?
-    let artist: String?
-    let album: String?
-    let elapsedSeconds: Double?
-    let durationSeconds: Double?
-    let isPlaying: Bool?
-
-    /// Playback rate above zero means playing; falls back to the explicit
-    /// playing flag when the rate key is absent.
-    static func playingState(from info: [String: Any]) -> Bool? {
-        if let rate = info[NowPlayingKey.playbackRate] as? Double {
-            return rate > 0
-        }
-        if let rate = info[NowPlayingKey.playbackRate] as? NSNumber {
-            return rate.doubleValue > 0
-        }
-        if let playing = info[NowPlayingKey.applicationIsPlaying] as? Bool {
-            return playing
-        }
-        return nil
-    }
-
-    static func time(_ key: String, from info: [String: Any]) -> Double? {
-        let value: Double
-        if let number = info[key] as? Double {
-            value = number
-        } else if let number = info[key] as? NSNumber {
-            value = number.doubleValue
-        } else {
-            return nil
-        }
-        return value.isFinite && value >= 0 ? value : nil
-    }
-}
-
-/// Thread-safe handoff box for the async MediaRemote callback.
-private final class NowPlayingBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: NowPlayingSnapshot?
-
-    func set(_ newValue: NowPlayingSnapshot?) {
-        lock.lock()
-        value = newValue
-        lock.unlock()
-    }
-
-    func get() -> NowPlayingSnapshot? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
-
-/// Thread-safe handoff box for the async now-playing PID callback.
-private final class NowPlayingPIDBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: pid_t?
-
-    func set(_ newValue: pid_t) {
-        lock.lock()
-        value = newValue
-        lock.unlock()
-    }
-
-    func get() -> pid_t? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
-
-private final class SupportedCommandsBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Set<UInt32>?
-
-    func set(_ newValue: Set<UInt32>) {
-        lock.lock()
-        value = newValue
-        lock.unlock()
-    }
-
-    func get() -> Set<UInt32>? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
-
-/// Runtime-only access to the private MediaRemote framework via dlopen/dlsym.
-/// Nothing is statically linked; when the framework or symbols are absent the
-/// controller degrades to unavailable and callers must not fake results.
-internal final class MediaRemoteController: @unchecked Sendable {
-    static let shared = MediaRemoteController()
-
-    private typealias SendCommandFn = @convention(c) (UInt32, AnyObject?) -> UInt8
-    private typealias GetNowPlayingInfoFn = @convention(c) (
-        DispatchQueue, @escaping @convention(block) (AnyObject?) -> Void
-    ) -> Void
-    private typealias GetNowPlayingApplicationPIDFn = @convention(c) (
-        DispatchQueue, @escaping @convention(block) (pid_t) -> Void
-    ) -> Void
-    private typealias CopySupportedCommandsFn = @convention(c) (
-        DispatchQueue, @escaping @convention(block) (AnyObject?) -> Void
-    ) -> Void
-    private typealias CommandInfoGetCommandFn = @convention(c) (AnyObject) -> UInt32
-    private typealias CommandInfoGetEnabledFn = @convention(c) (AnyObject) -> UInt8
-    private typealias RegisterForNotificationsFn = @convention(c) (DispatchQueue) -> Void
-    private typealias SetWantsNotificationsFn = @convention(c) (UInt8) -> Void
-
-    private let sendCommand: SendCommandFn?
-    private let getNowPlayingInfo: GetNowPlayingInfoFn?
-    private let getNowPlayingApplicationPID: GetNowPlayingApplicationPIDFn?
-    private let copySupportedCommands: CopySupportedCommandsFn?
-    private let commandInfoGetCommand: CommandInfoGetCommandFn?
-    private let commandInfoGetEnabled: CommandInfoGetEnabledFn?
-
-    private init() {
-        guard let handle = dlopen(
-            "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY)
-        else {
-            sendCommand = nil
-            getNowPlayingInfo = nil
-            getNowPlayingApplicationPID = nil
-            copySupportedCommands = nil
-            commandInfoGetCommand = nil
-            commandInfoGetEnabled = nil
-            return
-        }
-        sendCommand = dlsym(handle, "MRMediaRemoteSendCommand").map {
-            unsafeBitCast($0, to: SendCommandFn.self)
-        }
-        getNowPlayingInfo = dlsym(handle, "MRMediaRemoteGetNowPlayingInfo").map {
-            unsafeBitCast($0, to: GetNowPlayingInfoFn.self)
-        }
-        getNowPlayingApplicationPID = dlsym(
-            handle, "MRMediaRemoteGetNowPlayingApplicationPID"
-        ).map {
-            unsafeBitCast($0, to: GetNowPlayingApplicationPIDFn.self)
-        }
-        copySupportedCommands = dlsym(handle, "MRMediaRemoteCopySupportedCommands").map {
-            unsafeBitCast($0, to: CopySupportedCommandsFn.self)
-        }
-        commandInfoGetCommand = dlsym(
-            handle, "MRMediaRemoteCommandInfoGetCommand"
-        ).map {
-            unsafeBitCast($0, to: CommandInfoGetCommandFn.self)
-        }
-        commandInfoGetEnabled = dlsym(
-            handle, "MRMediaRemoteCommandInfoGetEnabled"
-        ).map {
-            unsafeBitCast($0, to: CommandInfoGetEnabledFn.self)
-        }
-        if let symbol = dlsym(handle, "MRMediaRemoteRegisterForNowPlayingNotifications") {
-            let register = unsafeBitCast(symbol, to: RegisterForNotificationsFn.self)
-            register(DispatchQueue.main)
-        }
-        if let symbol = dlsym(handle, "MRMediaRemoteSetWantsNowPlayingNotifications") {
-            let setWants = unsafeBitCast(symbol, to: SetWantsNotificationsFn.self)
-            setWants(1)
-        }
-    }
-
-    /// Transport delivery is independent of metadata availability.
-    var available: Bool {
-        sendCommand != nil
-    }
-
-    /// Sends a transport command and reports MediaRemote's UInt8 Boolean result.
-    func send(_ command: MediaTransportCommand) -> Bool {
-        guard let send = sendCommand else { return false }
-        return send(command.sendCommandCode, nil) != 0
-    }
-
-    /// Reads enabled transport commands through MediaRemote's asynchronous
-    /// supported-command callback. Missing symbols or timeout safely disable
-    /// secondary controls.
-    private func enabledCommandCodes(timeout: TimeInterval = 0.5) -> Set<UInt32>? {
-        guard let copySupportedCommands,
-            let getCommand = commandInfoGetCommand,
-            let getEnabled = commandInfoGetEnabled
-        else { return nil }
-        let box = SupportedCommandsBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        copySupportedCommands(DispatchQueue.global(qos: .userInitiated)) { commands in
-            defer { semaphore.signal() }
-            guard let array = commands as? [AnyObject] else { return }
-            box.set(Set(array.compactMap { info in
-                getEnabled(info) != 0 ? getCommand(info) : nil
-            }))
-        }
-        guard semaphore.wait(timeout: .now() + timeout) == .success else { return nil }
-        return box.get()
-    }
-
-    func capabilities() -> MediaTransportCapabilities {
-        let enabled = enabledCommandCodes()
-        return MediaTransportCapabilities.resolve(
-            sendAvailable: sendCommand != nil,
-            supported: enabled,
-            enabled: enabled)
-    }
-
-    /// Fetches the now-playing client PID without requiring metadata.
-    func nowPlayingProcessID(timeout: TimeInterval = 0.25) -> pid_t? {
-        guard let getPID = getNowPlayingApplicationPID else { return nil }
-        let pidBox = NowPlayingPIDBox()
-        let group = DispatchGroup()
-        group.enter()
-        getPID(DispatchQueue.global(qos: .userInitiated)) {
-            pidBox.set($0)
-            group.leave()
-        }
-        guard group.wait(timeout: .now() + timeout) == .success else { return nil }
-        return pidBox.get().flatMap { $0 > 0 ? $0 : nil }
-    }
-
-    /// Fetches canonical now-playing metadata. The owning PID is best-effort:
-    /// some browser sessions expose metadata but withhold or delay the PID.
-    /// Metadata remains usable because MediaRemote itself is the system's
-    /// canonical now-playing session.
-    func nowPlayingSnapshot(timeout: TimeInterval = 0.75) -> NowPlayingSnapshot? {
-        guard let getInfo = getNowPlayingInfo else { return nil }
-        let infoBox = NowPlayingBox()
-        let pidBox = NowPlayingPIDBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        let queue = DispatchQueue.global(qos: .userInitiated)
-
-        getInfo(queue) { info in
-            defer { semaphore.signal() }
-            guard let dict = info as? [String: Any] else { return }
-            infoBox.set(NowPlayingSnapshot(
-                processID: nil,
-                appName: nil,
-                bundleIdentifier: nil,
-                title: dict[NowPlayingKey.title] as? String,
-                artist: dict[NowPlayingKey.artist] as? String,
-                album: dict[NowPlayingKey.album] as? String,
-                elapsedSeconds: NowPlayingSnapshot.time(NowPlayingKey.elapsedTime, from: dict),
-                durationSeconds: NowPlayingSnapshot.time(NowPlayingKey.duration, from: dict),
-                isPlaying: NowPlayingSnapshot.playingState(from: dict)))
-        }
-
-        getNowPlayingApplicationPID?(queue) { pid in
-            pidBox.set(pid)
-        }
-
-        guard semaphore.wait(timeout: .now() + timeout) == .success,
-            let info = infoBox.get()
-        else { return nil }
-        let processID = pidBox.get().flatMap { $0 > 0 ? $0 : nil }
-        let app = processID.flatMap(MediaActivity.owningApplication)
-        return NowPlayingSnapshot(
-            processID: processID,
-            appName: app?.localizedName,
-            bundleIdentifier: app?.bundleIdentifier,
-            title: info.title,
-            artist: info.artist,
-            album: info.album,
-            elapsedSeconds: info.elapsedSeconds,
-            durationSeconds: info.durationSeconds,
-            isPlaying: info.isPlaying)
-    }
-}
-
 // MARK: - Public C ABI
-
-// MARK: - Media activity, output controls, and optional transport
-
-/// Reports one other process currently running audio output through public
-/// CoreAudio process state. Returns 1 when a source was found and fills
-/// app_name / bundle_id (either may stay NULL when unknown), 0 when no other
-/// process is active. MediaRemote's client PID is preferred when available;
-/// known browser helper/main bundle families are the only fallback match.
-/// Never captures audio; caller frees strings.
-@_cdecl("ultravox_macos_bridge_active_audio_process")
-public func ultravox_macos_bridge_active_audio_process(
-    _ processIDOut: UnsafeMutablePointer<pid_t>?,
-    _ appNameOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    _ bundleIdOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-) -> Int32 {
-    let preferredPID = MediaRemoteController.shared.nowPlayingProcessID()
-    guard let source = MediaActivity.activeSource(preferredProcessID: preferredPID) else { return 0 }
-    processIDOut?.pointee = source.processID
-    appNameOut?.pointee = source.appName?.duplicateAsCChar()
-    bundleIdOut?.pointee = source.bundleIdentifier?.duplicateAsCChar()
-    return 1
-}
-
-/// Starts or stops a ScreenCaptureKit audio-only stream used exclusively for
-/// the reactive output meter. The stream excludes UltraVox and never captures
-/// the microphone. Returns 1 on success and fills `errorOut` on failure.
-@_cdecl("ultravox_macos_bridge_set_system_audio_meter_enabled")
-public func ultravox_macos_bridge_set_system_audio_meter_enabled(
-    _ enabled: Int32,
-    _ errorOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-) -> Int32 {
-    errorOut?.pointee = nil
-    guard #available(macOS 15.0, *) else {
-        errorOut?.pointee = "System audio metering requires macOS 15 or later.".duplicateAsCChar()
-        return 0
-    }
-    do {
-        if enabled != 0 {
-            try runAsyncAndBlock {
-                try await SystemAudioLevelMeter.shared.start()
-            }
-        } else {
-            try runAsyncAndBlock {
-                await SystemAudioLevelMeter.shared.stop()
-            }
-        }
-        return 1
-    } catch {
-        errorOut?.pointee = error.localizedDescription.duplicateAsCChar()
-        return 0
-    }
-}
-
-/// Current RMS-derived system-output level in [0, 1].
-@_cdecl("ultravox_macos_bridge_get_system_audio_level")
-public func ultravox_macos_bridge_get_system_audio_level() -> Double {
-    Double(SystemAudioLevelStore.shared.level)
-}
-
-/// Copies the latest low-to-high PCM frequency magnitudes into `bandsOut` and
-/// returns the number written. A missing/short buffer safely truncates output.
-@_cdecl("ultravox_macos_bridge_get_system_audio_spectrum")
-public func ultravox_macos_bridge_get_system_audio_spectrum(
-    _ bandsOut: UnsafeMutablePointer<Double>?,
-    _ capacity: Int32
-) -> Int32 {
-    guard let bandsOut, capacity > 0 else { return 0 }
-    let spectrum = SystemAudioLevelStore.shared.spectrum
-    let count = min(Int(capacity), spectrum.count)
-    for index in 0..<count {
-        bandsOut[index] = Double(spectrum[index])
-    }
-    return Int32(count)
-}
-
-/// Default-output volume in [0, 1]. Returns 1 on success, 0 when no default
-/// output device exists or it has no volume control (unsupported state).
-@_cdecl("ultravox_macos_bridge_get_output_volume")
-public func ultravox_macos_bridge_get_output_volume(
-    _ volumeOut: UnsafeMutablePointer<Double>?
-) -> Int32 {
-    guard let out = volumeOut, let volume = SystemOutput.volume(), volume.isFinite else {
-        return 0
-    }
-    out.pointee = min(max(volume, 0), 1)
-    return 1
-}
-
-/// Sets default-output volume (clamped to [0, 1]). Returns 1 on success,
-/// 0 when unsupported or nothing was written.
-@_cdecl("ultravox_macos_bridge_set_output_volume")
-public func ultravox_macos_bridge_set_output_volume(_ volume: Double) -> Int32 {
-    SystemOutput.setVolume(volume) ? 1 : 0
-}
-
-/// Default-output mute state. Returns 1 with *muted_out set, 0 when
-/// unsupported. Devices without a mute control report unsupported.
-@_cdecl("ultravox_macos_bridge_get_output_muted")
-public func ultravox_macos_bridge_get_output_muted(
-    _ mutedOut: UnsafeMutablePointer<Int32>?
-) -> Int32 {
-    guard let out = mutedOut, let muted = SystemOutput.muted() else { return 0 }
-    out.pointee = muted ? 1 : 0
-    return 1
-}
-
-/// Sets default-output mute. Returns 1 on success, 0 when unsupported.
-@_cdecl("ultravox_macos_bridge_set_output_muted")
-public func ultravox_macos_bridge_set_output_muted(_ muted: Int32) -> Int32 {
-    SystemOutput.setMuted(muted != 0) ? 1 : 0
-}
-
-/// Returns 1 when runtime MediaRemote access is available, 0 otherwise.
-@_cdecl("ultravox_macos_bridge_media_remote_available")
-public func ultravox_macos_bridge_media_remote_available() -> Int32 {
-    MediaRemoteController.shared.available ? 1 : 0
-}
-/// Returns transport capabilities from the optional MediaRemote command
-/// discovery API. Each output is 1 only when the command is supported and
-/// enabled; unsupported runtimes leave the output at 0.
-@_cdecl("ultravox_macos_bridge_media_transport_capabilities")
-public func ultravox_macos_bridge_media_transport_capabilities(
-    _ playPauseOut: UnsafeMutablePointer<Int32>?,
-    _ previousOut: UnsafeMutablePointer<Int32>?,
-    _ nextOut: UnsafeMutablePointer<Int32>?
-) -> Int32 {
-    let capabilities = MediaRemoteController.shared.capabilities()
-    playPauseOut?.pointee = capabilities.playPause ? 1 : 0
-    previousOut?.pointee = capabilities.previous ? 1 : 0
-    nextOut?.pointee = capabilities.next ? 1 : 0
-    return 1
-}
-
-/// Fetches now-playing metadata and owning process via runtime-only
-/// MediaRemote access. Returns 1 and fills process ID, app name / bundle ID,
-/// title / artist / album (NULL when absent), elapsed/duration seconds
-/// (-1 when unknown), plus *is_playing (1 playing, 0 not, -1 unknown); 0
-/// when MediaRemote is unavailable or the reply did not arrive in time.
-@_cdecl("ultravox_macos_bridge_now_playing")
-public func ultravox_macos_bridge_now_playing(
-    _ processIDOut: UnsafeMutablePointer<pid_t>?,
-    _ appNameOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    _ bundleIdOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    _ titleOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    _ artistOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    _ albumOut: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    _ elapsedSecondsOut: UnsafeMutablePointer<Double>?,
-    _ durationSecondsOut: UnsafeMutablePointer<Double>?,
-    _ isPlayingOut: UnsafeMutablePointer<Int32>?
-) -> Int32 {
-    guard let snapshot = MediaRemoteController.shared.nowPlayingSnapshot() else { return 0 }
-    processIDOut?.pointee = snapshot.processID ?? 0
-    appNameOut?.pointee = snapshot.appName?.duplicateAsCChar()
-    bundleIdOut?.pointee = snapshot.bundleIdentifier?.duplicateAsCChar()
-    titleOut?.pointee = snapshot.title?.duplicateAsCChar()
-    artistOut?.pointee = snapshot.artist?.duplicateAsCChar()
-    albumOut?.pointee = snapshot.album?.duplicateAsCChar()
-    elapsedSecondsOut?.pointee = snapshot.elapsedSeconds ?? -1
-    durationSecondsOut?.pointee = snapshot.durationSeconds ?? -1
-    if let out = isPlayingOut {
-        switch snapshot.isPlaying {
-        case .some(true): out.pointee = 1
-        case .some(false): out.pointee = 0
-        case .none: out.pointee = -1
-        }
-    }
-    return 1
-}
-
-/// Sends a transport command through runtime-only MediaRemote access.
-/// Returns 1 when sent, 0 when unavailable/failed, -1 for an unknown command.
-@_cdecl("ultravox_macos_bridge_media_transport")
-public func ultravox_macos_bridge_media_transport(
-    _ command: UnsafePointer<CChar>?
-) -> Int32 {
-    guard let command, let parsed = MediaTransportCommand(rawValue: String(cString: command))
-    else { return -1 }
-    return MediaRemoteController.shared.send(parsed) ? 1 : 0
-}
 
 /// Returns the bridge version string.
 @_cdecl("ultravox_macos_bridge_version")
@@ -1569,27 +581,14 @@ public func ultravox_macos_bridge_free_string(_ s: UnsafeMutablePointer<CChar>?)
 
 // MARK: - Microphone authorization
 
-private final class LockedBoolean: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
-
-    func store(_ newValue: Bool) {
-        lock.lock()
-        value = newValue
-        lock.unlock()
-    }
-
-    func load() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
-
 /// Returns 0 for not determined, 1 for authorized, 2 for denied, and 3 for restricted.
 @_cdecl("ultravox_macos_bridge_microphone_authorization_status")
 public func ultravox_macos_bridge_microphone_authorization_status() -> Int32 {
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    microphoneAuthorizationCode(AVCaptureDevice.authorizationStatus(for: .audio))
+}
+
+func microphoneAuthorizationCode(_ status: AVAuthorizationStatus) -> Int32 {
+    switch status {
     case .notDetermined:
         return 0
     case .authorized:
@@ -1603,27 +602,63 @@ public func ultravox_macos_bridge_microphone_authorization_status() -> Int32 {
     }
 }
 
-/// Requests microphone access when its status is not determined.
+/// Preserve the legacy boolean ABI; new callers use the detailed outcome API.
 @_cdecl("ultravox_macos_bridge_request_microphone_access")
 public func ultravox_macos_bridge_request_microphone_access() -> Int32 {
-    let status = AVCaptureDevice.authorizationStatus(for: .audio)
-    if status == .authorized {
-        return 1
-    }
-    guard status == .notDetermined else {
-        return 0
-    }
+    ultravox_macos_bridge_request_microphone_access_outcome() == 1 ? 1 : 0
+}
 
+/// A timeout or concurrent request is unresolved, never evidence of denial.
+func microphoneRequestOutcome(status: AVAuthorizationStatus, timedOut: Bool) -> Int32 {
+    let code = microphoneAuthorizationCode(status)
+    return code == 0 && timedOut ? 4 : code
+}
+
+final class MicrophoneRequestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requested = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !requested else { return false }
+        requested = true
+        return true
+    }
+}
+
+private let microphoneRequestGate = MicrophoneRequestGate()
+
+/// Explicit UI action only: 0 pending, 1 authorized, 2 denied, 3 restricted, 4 timeout.
+/// Keep the request claimed even after timeout so rechecks cannot repeat OS consent.
+@_cdecl("ultravox_macos_bridge_request_microphone_access_outcome")
+public func ultravox_macos_bridge_request_microphone_access_outcome() -> Int32 {
+    let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    guard status == .notDetermined else { return microphoneAuthorizationCode(status) }
+    guard microphoneRequestGate.claim() else {
+        return microphoneAuthorizationCode(AVCaptureDevice.authorizationStatus(for: .audio))
+    }
     let semaphore = DispatchSemaphore(value: 0)
-    let granted = LockedBoolean()
-    AVCaptureDevice.requestAccess(for: .audio) { allowed in
-        granted.store(allowed)
-        semaphore.signal()
-    }
-    guard semaphore.wait(timeout: .now() + 60) == .success else {
-        return 0
-    }
-    return granted.load() ? 1 : 0
+    AVCaptureDevice.requestAccess(for: .audio) { _ in semaphore.signal() }
+    let timedOut = semaphore.wait(timeout: .now() + 60) != .success
+    // Native status, not the callback boolean, remains the source of truth.
+    return microphoneRequestOutcome(
+        status: AVCaptureDevice.authorizationStatus(for: .audio), timedOut: timedOut
+    )
+}
+
+/// Main-process bundle metadata only; no settings, content, or inferred helper identity.
+@_cdecl("ultravox_macos_bridge_main_bundle_identity")
+public func ultravox_macos_bridge_main_bundle_identity() -> UnsafeMutablePointer<CChar>? {
+    let bundle = Bundle.main
+    let identity: [String: Any] = [
+        "bundleId": bundle.bundleIdentifier.map { $0 as Any } ?? NSNull(),
+        "bundlePath": bundle.bundleURL.path,
+        "executablePath": bundle.executableURL.map { $0.path as Any } ?? NSNull(),
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: identity),
+          let json = String(data: data, encoding: .utf8) else { return nil }
+    return json.duplicateAsCChar()
 }
 
 /// Uses Apple's runtime preflight rather than stale TCC database rows.
@@ -1903,6 +938,54 @@ public func ultravox_macos_bridge_hide_indicator() -> Int32 {
         IndicatorManager.shared.hide()
     }
     return 1
+}
+
+// MARK: - Latency-critical activity
+
+/// Holds ProcessInfo activities by token. While one is held, macOS does not
+/// App Nap UltraVox, so capture and transcription keep pace with the
+/// microphone when every UltraVox window is hidden.
+private final class LatencyActivityRegistry: @unchecked Sendable {
+    static let shared = LatencyActivityRegistry()
+    private let lock = NSLock()
+    private var nextToken: Int64 = 1
+    private var activities: [Int64: NSObjectProtocol] = [:]
+
+    func begin(reason: String) -> Int64 {
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: reason
+        )
+        lock.lock()
+        defer { lock.unlock() }
+        let token = nextToken
+        nextToken += 1
+        activities[token] = activity
+        return token
+    }
+
+    func end(token: Int64) -> Bool {
+        lock.lock()
+        let activity = activities.removeValue(forKey: token)
+        lock.unlock()
+        guard let activity else { return false }
+        ProcessInfo.processInfo.endActivity(activity)
+        return true
+    }
+}
+
+/// Begins a user-initiated, latency-critical activity. Returns a token for
+/// ultravox_macos_bridge_end_latency_activity.
+@_cdecl("ultravox_macos_bridge_begin_latency_activity")
+public func ultravox_macos_bridge_begin_latency_activity(_ reason: UnsafePointer<CChar>?) -> Int64 {
+    let text = reason.map { String(cString: $0) } ?? "UltraVox dictation"
+    return LatencyActivityRegistry.shared.begin(reason: text)
+}
+
+/// Ends the activity for token. Returns 1 when it was held, 0 otherwise.
+@_cdecl("ultravox_macos_bridge_end_latency_activity")
+public func ultravox_macos_bridge_end_latency_activity(_ token: Int64) -> Int32 {
+    LatencyActivityRegistry.shared.end(token: token) ? 1 : 0
 }
 
 // MARK: - FluidAudio / CoreML transcription
@@ -2915,11 +1998,33 @@ private final class IndicatorManager {
     }
 
     func update(state rawValue: String) {
-        guard let panel, let indicatorView, panel.isVisible else { return }
+        guard let panel, let indicatorView else { return }
         let next = IndicatorState(rawValue: rawValue)
-        guard next != indicatorView.state else { return }
-        indicatorView.state = next
-        layout(panel: panel, view: indicatorView)
+        switch next {
+        case .transcribing, .inserted:
+            // Success needs no message: the pill leaves as soon as dictation
+            // stops and the text simply appears (operator, 2026-09-25). A
+            // "Transcribing" flash over the focused app read as a glitch.
+            guard panel.isVisible else { return }
+            generation += 1
+            if reduceMotion {
+                panel.orderOut(nil)
+            } else {
+                fadeOut(panel, token: generation)
+            }
+        case .failed, .pasteFailed:
+            // Failures still speak up, at the same spot, even after the pill
+            // already left for the transcription.
+            generation += 1
+            indicatorView.state = next
+            layout(panel: panel, view: indicatorView)
+            panel.alphaValue = 1
+            if !panel.isVisible { panel.orderFrontRegardless() }
+        case .recording:
+            guard panel.isVisible, next != indicatorView.state else { return }
+            indicatorView.state = next
+            layout(panel: panel, view: indicatorView)
+        }
     }
 
     func hide() {

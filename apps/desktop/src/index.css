@@ -41,7 +41,7 @@
   --success-surface: rgba(80, 200, 120, 0.12);
   --success-border: rgba(80, 200, 120, 0.28);
   --overlay: rgba(0, 0, 0, 0.985);
-  --material-window: rgba(2, 3, 7, 0.62);
+  --material-window: #020307;
   --material-surface: rgba(16, 19, 27, 0.52);
   --material-panel: rgba(27, 31, 42, 0.52);
   --material-elevated: rgba(38, 44, 58, 0.62);
@@ -146,6 +146,7 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg);
   -webkit-app-region: drag;
+  position: relative;
   z-index: 10;
 }
 
@@ -184,6 +185,7 @@ body {
 }
 
 .brand-name {
+  white-space: nowrap;
   font-weight: 680;
   font-size: 13.5px;
   letter-spacing: -0.01em;
@@ -206,6 +208,111 @@ body {
   display: flex;
   gap: 8px;
   -webkit-app-region: no-drag;
+}
+
+/* Update: appears only when a newer UltraVox exists. Same height as the
+   icon buttons beside it; the accent gloss makes it the one call to action. */
+/* Static so the error bubble anchors to the header's right edge and always
+   stays inside the window, whatever the button's position. */
+.update-control {
+  display: inline-flex;
+}
+
+.update-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--space-8);
+  /* One width for Update / Updating / Retry so the pill never shifts. */
+  min-width: 96px;
+  justify-content: center;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--record-border);
+  border-radius: 999px;
+  /* The record orb's own gradient and ink, so it reads as part of the app. */
+  background:
+    linear-gradient(180deg, var(--sheen), transparent 70%),
+    var(--accent-gradient);
+  box-shadow: inset 0 1px 0 var(--material-highlight), 0 0 14px var(--accent-muted);
+  color: var(--on-record);
+  font: 650 12.5px/1 var(--font);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+
+.update-button:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, var(--sheen), transparent 70%),
+    var(--accent-gradient-hover);
+  transform: translateY(-1px);
+}
+
+.update-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.update-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-muted), 0 0 0 4px var(--bg);
+}
+
+.update-button.updating {
+  cursor: progress;
+  opacity: 0.85;
+}
+
+.update-button.failed {
+  border-color: var(--danger-border);
+  background:
+    linear-gradient(180deg, var(--sheen), transparent 70%),
+    var(--danger-surface);
+  box-shadow: inset 0 1px 0 var(--material-highlight);
+  color: var(--danger-hover);
+}
+
+.update-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: update-spin 0.8s linear infinite;
+}
+
+@keyframes update-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-spinner { animation-duration: 2.4s; }
+}
+
+/* Floats under the button: an error never pushes the window's content. */
+.update-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 12px;
+  z-index: 30;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 24px));
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--danger-hover);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* Default-width windows: the wordmark's attribution yields to the Update
+   button so the header keeps one line and its height. */
+@media (max-width: 559px) {
+  .header:has(.update-control) .brand-by { display: none; }
 }
 
 .icon-button {
@@ -291,6 +398,65 @@ body {
   width: 100%;
   max-width: 640px;
   margin: 0 auto;
+}
+
+/* The latest message lives in a fixed-height slot so the recording panel
+   (flex: 1 above it) keeps one size through start, recording, stop,
+   transcribing, errors and empty history. */
+.latest-slot {
+  --latest-slot-height: 188px;
+  display: flex;
+  flex-direction: column;
+  height: var(--latest-slot-height);
+  min-height: var(--latest-slot-height);
+  max-height: var(--latest-slot-height);
+}
+
+.latest-slot > .empty-state,
+.latest-slot > .inline-error {
+  flex: 1;
+  min-height: 0;
+}
+
+.latest-slot > .empty-state {
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.latest-slot > .empty-state p {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.recording-card.latest {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.recording-card.latest .recording-header {
+  min-height: 26px;
+  align-items: center;
+}
+
+.recording-card.latest .recording-preview {
+  flex: 1;
+  min-height: 0;
+}
+
+.recording-card.latest .recording-actions {
+  flex-wrap: nowrap;
+}
+
+/* The in-progress bar rides the card's bottom edge instead of adding a row. */
+.recording-card.latest .recording-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 0;
 }
 
 .history-heading {
@@ -436,6 +602,8 @@ body {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  /* Mode buttons and the capture note share one row height. */
+  min-height: 30px;
 }
 .capture-note {
   display: inline-flex;
@@ -834,6 +1002,25 @@ body {
   margin: var(--space-3) 0 0;
   color: var(--danger-hover);
   font-size: 12px;
+}
+
+/* Errors overlay the panel's lower edge so the record button never shifts.
+   Outranks the per-theme `:root[data-theme] .hero > *` stacking rules. */
+.app .hero > .activity-error[role="alert"] {
+  position: absolute;
+  left: var(--space-5);
+  right: var(--space-5);
+  bottom: var(--space-3);
+  margin: 0;
+  line-height: 1.35;
+}
+
+/* Short windows have no free band under the mode buttons, so the error takes
+   that row's place (kept in layout, only hidden) instead of covering it. */
+@media (max-height: 600px) {
+  .hero:has(> .activity-error) > .secondary-actions {
+    visibility: hidden;
+  }
 }
 
 .search-input {
@@ -2145,7 +2332,6 @@ body {
   align-self: start;
   color: var(--warning);
   font-size: 12px;
-  text-transform: capitalize;
 }
 
 .permission-granted {
@@ -2303,7 +2489,7 @@ body {
   --record-glow-hover: rgba(0, 230, 0, 0.32);
   --scrim: rgba(4, 4, 10, 0.62);
   --scrim-strong: rgba(4, 4, 10, 0.76);
-  --material-window: rgba(20, 22, 37, 0.94);
+  --material-window: #141625;
   --material-surface: rgba(36, 38, 63, 0.75);
   --material-panel: rgba(36, 38, 63, 0.75);
   --material-elevated: rgba(46, 48, 78, 0.85);
@@ -2347,7 +2533,7 @@ body {
   --record-glow-hover: rgba(255, 179, 71, 0.36);
   --scrim: rgba(8, 11, 22, 0.62);
   --scrim-strong: rgba(8, 11, 22, 0.78);
-  --material-window: rgba(16, 21, 40, 0.94);
+  --material-window: #101528;
   --material-surface: rgba(24, 31, 56, 0.8);
   --material-panel: rgba(30, 38, 66, 0.82);
   --material-elevated: rgba(40, 50, 84, 0.88);
@@ -2391,7 +2577,7 @@ body {
   --record-glow-hover: rgba(255, 140, 26, 0.34);
   --scrim: rgba(12, 12, 15, 0.62);
   --scrim-strong: rgba(12, 12, 15, 0.78);
-  --material-window: rgba(24, 25, 29, 0.95);
+  --material-window: #18191d;
   --material-surface: rgba(36, 38, 43, 0.85);
   --material-panel: rgba(45, 47, 53, 0.88);
   --material-elevated: rgba(56, 58, 64, 0.92);
@@ -2435,7 +2621,7 @@ body {
   --record-glow-hover: rgba(255, 176, 0, 0.34);
   --scrim: rgba(9, 9, 11, 0.62);
   --scrim-strong: rgba(9, 9, 11, 0.78);
-  --material-window: rgba(14, 14, 17, 0.95);
+  --material-window: #0e0e11;
   --material-surface: rgba(26, 27, 31, 0.85);
   --material-panel: rgba(32, 33, 38, 0.88);
   --material-elevated: rgba(42, 43, 49, 0.92);
@@ -2479,7 +2665,7 @@ body {
   --record-glow-hover: rgba(38, 118, 255, 0.58);
   --scrim: rgba(1, 6, 12, 0.78);
   --scrim-strong: rgba(1, 6, 12, 0.9);
-  --material-window: rgba(2, 8, 15, 0.95);
+  --material-window: #02080f;
   --material-surface: rgba(5, 16, 27, 0.9);
   --material-panel: rgba(7, 22, 36, 0.92);
   --material-elevated: rgba(10, 29, 46, 0.95);
@@ -2523,7 +2709,7 @@ body {
   --record-glow-hover: rgba(163, 184, 107, 0.28);
   --scrim: rgba(12, 13, 9, 0.6);
   --scrim-strong: rgba(12, 13, 9, 0.74);
-  --material-window: rgba(22, 23, 17, 0.93);
+  --material-window: #161711;
   --material-surface: rgba(29, 31, 23, 0.74);
   --material-panel: rgba(36, 38, 29, 0.74);
   --material-elevated: rgba(45, 47, 37, 0.8);
@@ -2615,7 +2801,7 @@ body {
   --record-glow-hover: rgba(255, 158, 122, 0.38);
   --scrim: rgba(14, 8, 10, 0.6);
   --scrim-strong: rgba(14, 8, 10, 0.74);
-  --material-window: rgba(24, 14, 16, 0.6);
+  --material-window: #180e10;
   --material-surface: rgba(34, 20, 22, 0.5);
   --material-panel: rgba(43, 26, 28, 0.5);
   --material-elevated: rgba(54, 33, 35, 0.6);
@@ -2655,7 +2841,7 @@ body {
   --record-glow-hover: rgba(185, 103, 255, 0.42);
   --scrim: rgba(10, 6, 22, 0.62);
   --scrim-strong: rgba(10, 6, 22, 0.76);
-  --material-window: rgba(16, 10, 32, 0.92);
+  --material-window: #100a20;
   --material-surface: rgba(26, 16, 48, 0.86);
   --material-panel: rgba(35, 22, 62, 0.88);
   --material-elevated: rgba(46, 30, 80, 0.92);
@@ -2951,19 +3137,9 @@ body {
     0 0 14px rgba(255, 32, 32, 0.6);
 }
 
-/* Spectrum rows are gone: a fake analyzer violates the functional-decoration
-   rule. The hero keeps its black LCD well + crawl line; the REAL signal lives
-   in the recessed mic meter below. */
+/* The hero keeps its black LCD well and crawl line. */
 :root[data-theme="winamp"] .hero {
   background: #04040a;
-}
-
-/* Instrument Console VU answers real audio: it sways gently at idle and
-   tracks the live peak while media plays. */
-:root[data-theme="winamp-mmd3"][data-media-reactive] .hero::after {
-  animation: none;
-  transform: rotate(calc(var(--media-audio-peak, 0) * 62deg - 31deg));
-  transition: transform 90ms linear;
 }
 
 /* Tabs: engraved dark buttons; active tab gets the green lamp. */
@@ -3401,6 +3577,15 @@ body {
 :root[data-theme="frutiger-dark"] .record-button:not(.recording):hover {
   transform: translateY(-2px) scale(1.14);
 }
+/* The orb keeps its size when recording starts or stops; only colour changes. */
+:root[data-theme="frutiger-aero"] .record-button.recording,
+:root[data-theme="frutiger-dark"] .record-button.recording {
+  transform: scale(1.14);
+}
+:root[data-theme="frutiger-aero"] .record-button.recording:hover,
+:root[data-theme="frutiger-dark"] .record-button.recording:hover {
+  transform: translateY(-2px) scale(1.14);
+}
 :root[data-theme="frutiger-aero"] {
   --text-tertiary: #40566a;
 }
@@ -3540,345 +3725,7 @@ body {
   background: rgba(255, 255, 255, 0.82);
 }
 
-/* ---------------------------------------------------------------------------
- * Media panel — now-playing module below the latest recording.
- * One structural component (display, progress, transport, volume); each
- * data-theme re-stages the same DOM with its own material and geometry.
- * Decorative motifs are pointer-events-none pseudo-elements. Equalizer height
- * comes only from the live 11-band system-output spectrum.
- * ------------------------------------------------------------------------- */
-
-.media-panel {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--text);
-  animation: media-panel-enter 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
-}
-
-@keyframes media-panel-enter {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.media-panel::before,
-.media-panel::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-}
-
-/* Display region: metadata lines plus the system-output equalizer. */
-.media-display {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.media-preview {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.media-artwork {
-  display: grid;
-  width: 46px;
-  height: 46px;
-  flex: 0 0 46px;
-  overflow: hidden;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background:
-    radial-gradient(circle at 34% 28%, var(--accent-muted), transparent 42%),
-    var(--surface);
-  box-shadow: inset 0 1px 0 var(--material-highlight);
-}
-
-.media-artwork img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.media-artwork-fallback {
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 18px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.media-atmosphere {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.media-atmosphere > span {
-  position: absolute;
-  display: block;
-  transition:
-    opacity 100ms linear,
-    transform 100ms linear,
-    box-shadow 100ms linear,
-    background 100ms linear;
-}
-
-.media-meta {
-  display: flex;
-  position: relative;
-  z-index: 1;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.media-source {
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.media-title {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.media-title.is-unknown {
-  color: var(--text-tertiary);
-  font-weight: 500;
-}
-
-.media-artist {
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.media-album {
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* System-output equalizer. Eleven bars map one-to-one onto the live low-to-high
- * spectrum bands; mirrored banks (console themes) read the same bands in
- * reverse. No keyframes: only the sampled spectrum moves a bar. */
-.media-eq {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  flex: 0 0 auto;
-  height: 26px;
-}
-
-.media-eq-mirror {
-  display: none;
-}
-
-.media-eq-bar {
-  display: block;
-  width: 3px;
-  height: 100%;
-  border-radius: 1px;
-  background: linear-gradient(180deg, var(--accent-cyan), var(--accent) 55%, var(--accent-violet));
-  transform: scaleY(var(--meter-level, 0));
-  transition: transform 80ms linear;
-  transform-origin: bottom;
-}
-
-
-/* Progress region: honest elapsed/duration readouts around a track. */
-.media-progress {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.media-time {
-  flex: 0 0 auto;
-  min-width: 30px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.media-time-end {
-  text-align: right;
-}
-
-.media-progress-track {
-  position: relative;
-  flex: 1;
-  height: 4px;
-  min-width: 40px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--border-subtle);
-}
-
-.media-progress-track.is-indeterminate {
-  background: repeating-linear-gradient(
-    90deg,
-    var(--border-subtle) 0 6px,
-    transparent 6px 12px
-  );
-}
-
-.media-progress-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: inherit;
-  background: var(--accent-gradient);
-  transition: width 300ms linear;
-}
-
-/* Controls region: transport keys, optional dial chrome, system volume. */
-.media-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  min-width: 0;
-}
-
-.media-transport {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: 0 0 auto;
-}
-
-.media-button svg {
-  display: block;
-}
-
-.media-button:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
-
-.media-play {
-  background: var(--accent-muted);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* Decorative rotary dial: hidden unless a theme reveals it. */
-.media-dial {
-  display: none;
-  flex: 0 0 auto;
-}
-
-.media-volume {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1;
-  min-width: 0;
-}
-
-.media-volume-label {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-
-.media-volume-value {
-  min-width: 34px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.media-volume-slider {
-  appearance: none;
-  -webkit-appearance: none;
-  flex: 1;
-  min-width: 44px;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--border);
-  cursor: pointer;
-}
-
-.media-volume-slider::-webkit-slider-thumb {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--panel);
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 1px var(--border);
-  cursor: pointer;
-}
-
-.media-volume-slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--panel);
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 1px var(--border);
-  cursor: pointer;
-}
-
-.media-volume-slider:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-.media-volume-slider:focus-visible,
-.media-button:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--accent-muted), 0 0 0 4px var(--bg);
-}
-
-/* Midnight — restrained: one spectral hairline under the module. */
+/* Midnight — restrained, dark window surfaces. */
 :root[data-theme="midnight"] .app,
 :root[data-theme="midnight"] .studio,
 :root[data-theme="midnight"] .settings {
@@ -3896,1315 +3743,17 @@ body {
 :root[data-theme="midnight"] .main {
   background: #020307;
 }
-:root[data-theme="midnight"] .media-panel {
-  border-color: rgba(142, 183, 255, 0.12);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 42%),
-    rgba(3, 5, 10, 0.92);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    0 8px 24px rgba(0, 0, 0, 0.24);
-}
-:root[data-theme="midnight"] .media-display {
-  border: 1px solid rgba(142, 183, 255, 0.08);
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.48);
-}
-:root[data-theme="midnight"] .media-panel::after {
-  inset: auto 0 0 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--accent-cyan),
-    var(--accent),
-    var(--accent-violet),
-    transparent
-  );
-  opacity: 0.7;
-}
-
-/* Frutiger Aero — candy-glass display well, gloss buttons, jelly EQ bars. */
-:root[data-theme="frutiger-aero"] .media-panel {
-  border-color: rgba(70, 120, 160, 0.38);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(214, 236, 248, 0.35) 60%, rgba(255, 255, 255, 0.4)),
-    var(--panel);
-}
-:root[data-theme="frutiger-aero"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid rgba(70, 120, 160, 0.3);
-  border-radius: var(--radius-sm);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.35));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    inset 0 8px 14px rgba(255, 255, 255, 0.28);
-}
-:root[data-theme="frutiger-aero"] .media-eq-bar {
-  width: 4px;
-  border-radius: 2px;
-}
-:root[data-theme="frutiger-aero"] .media-progress-track {
-  height: 6px;
-  background: rgba(255, 255, 255, 0.7);
-  box-shadow: inset 0 1px 2px rgba(70, 120, 160, 0.25);
-}
-:root[data-theme="frutiger-aero"] .media-play {
-  background: linear-gradient(180deg, #3ba2ff, #0f6fd6);
-  border-color: rgba(15, 111, 214, 0.6);
-  color: #f4fbff;
-}
-:root[data-theme="frutiger-aero"] .media-panel::after {
-  inset: 0;
-  background: linear-gradient(115deg, transparent 42%, rgba(53, 208, 255, 0.14) 52%, transparent 62%);
-}
-
-/* Frutiger Dark — OLED glass well with glowing aurora EQ. */
-:root[data-theme="frutiger-dark"] .media-panel {
-  border-color: rgba(140, 220, 255, 0.24);
-  background:
-    linear-gradient(180deg, rgba(158, 231, 255, 0.08), transparent 40%),
-    var(--panel);
-}
-:root[data-theme="frutiger-dark"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid rgba(140, 220, 255, 0.2);
-  border-radius: var(--radius-sm);
-  background:
-    linear-gradient(180deg, rgba(158, 231, 255, 0.09), rgba(10, 24, 36, 0.35));
-  box-shadow:
-    inset 0 1px 0 rgba(200, 240, 255, 0.16),
-    inset 0 0 18px rgba(53, 208, 255, 0.08);
-}
-:root[data-theme="frutiger-dark"] .media-eq-bar {
-  box-shadow: 0 0 6px rgba(53, 208, 255, 0.5);
-}
-:root[data-theme="frutiger-dark"] .media-progress-fill {
-  box-shadow: 0 0 8px rgba(53, 208, 255, 0.5);
-}
-:root[data-theme="frutiger-dark"] .media-panel::before {
-  inset: auto -10% -18px -10%;
-  height: 36px;
-  background:
-    radial-gradient(ellipse 46% 100% at 26% 100%, rgba(53, 208, 255, 0.22), transparent 70%),
-    radial-gradient(ellipse 46% 100% at 74% 100%, rgba(110, 232, 122, 0.16), transparent 70%);
-}
-
-/* Winamp Classic — graphite face, black LCD well, segmented phosphor meters. */
-:root[data-theme="winamp"] .media-panel {
-  background: linear-gradient(180deg, #2a2c44 0%, #1c1e30 100%);
-  border: 1px solid #05050a;
-  border-top-color: rgba(232, 236, 244, 0.3);
-  box-shadow:
-    inset 0 1px 0 rgba(232, 236, 244, 0.14),
-    0 2px 6px rgba(0, 0, 0, 0.5);
-}
-:root[data-theme="winamp"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid #05050a;
-  border-radius: 1px;
-  background:
-    repeating-linear-gradient(0deg, rgba(0, 230, 0, 0.05) 0 1px, transparent 1px 3px),
-    #04040a;
-  box-shadow:
-    inset 0 2px 6px rgba(0, 0, 0, 0.9),
-    0 1px 0 rgba(184, 188, 200, 0.16);
-}
-:root[data-theme="winamp"] .media-title {
-  color: #00e600;
-  text-shadow: 0 0 6px rgba(0, 230, 0, 0.55);
-}
-:root[data-theme="winamp"] .media-title.is-unknown {
-  color: #4f8a6f;
-}
-:root[data-theme="winamp"] .media-source,
-:root[data-theme="winamp"] .media-artist {
-  color: #7fbf7f;
-}
-:root[data-theme="winamp"] .media-album,
-:root[data-theme="winamp"] .media-time {
-  color: #6fb56f;
-}
-/* Green → yellow → red segmented meter bars. */
-:root[data-theme="winamp"] .media-eq-bar {
-  width: 4px;
-  border-radius: 0;
-  background: linear-gradient(180deg, #ff2020 0%, #ff9f2e 26%, #cccc00 46%, #00e600 76%);
-  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-}
-:root[data-theme="winamp"] .media-progress-track {
-  height: 6px;
-  border: 1px solid #30344a;
-  border-radius: 1px;
-  background: #10121e;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9);
-}
-:root[data-theme="winamp"] .media-progress-fill {
-  background: #00e600;
-  mask-image: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
-  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
-}
-:root[data-theme="winamp"] .media-volume-slider {
-  background: #10121e;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9);
-}
-:root[data-theme="winamp"] .media-volume-slider::-webkit-slider-thumb {
-  border-color: #b8bcc8;
-  background: #00e600;
-}
-:root[data-theme="winamp"] .media-play {
-  border-color: #00e600;
-  color: #66ff33;
-  background: transparent;
-}
-:root[data-theme="winamp"] .media-panel::after {
-  inset: auto 12px 6px 12px;
-  height: 2px;
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(0, 230, 0, 0.55) 0 2px,
-    rgba(204, 204, 0, 0.4) 2px 4px,
-    transparent 4px 9px
-  );
-}
 :root[data-theme="winamp"] .empty-state {
   border-color: #4a6558;
 }
 
 
-/* Winamp Console — silver faceplate, navy LCD well, central dial, fader caps. */
-:root[data-theme="winamp-mmd3"] .media-panel {
-  padding: var(--space-2) var(--space-3);
-  background:
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 4px),
-    linear-gradient(180deg, #d6dae2 0%, #b4bac6 100%);
-  border: 1px solid #05070f;
-  border-top-color: #f4f6fa;
-  color: #1a2340;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    0 8px 20px rgba(0, 0, 0, 0.45);
-}
-:root[data-theme="winamp-mmd3"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid #05070f;
-  border-radius: 2px;
-  background: #10172e;
-  box-shadow:
-    inset 0 2px 7px rgba(0, 0, 0, 0.8),
-    0 1px 0 rgba(255, 255, 255, 0.35);
-}
-:root[data-theme="winamp-mmd3"] .media-eq-mirror {
-  display: flex;
-  transform: scaleX(-1);
-}
-
-:root[data-theme="winamp-mmd3"] .media-title {
-  color: #f2f5fb;
-}
-:root[data-theme="winamp-mmd3"] .media-title.is-unknown {
-  color: #8f9ab2;
-}
-:root[data-theme="winamp-mmd3"] .media-source {
-  color: #ffb347;
-}
-:root[data-theme="winamp-mmd3"] .media-artist {
-  color: #b9c2d4;
-}
-:root[data-theme="winamp-mmd3"] .media-album {
-  color: #aeb8cc;
-}
-/* Mirrored silver-blue meter banks flanking the readout. */
-:root[data-theme="winamp-mmd3"] .media-eq-bar {
-  width: 3px;
-  border-radius: 1px 1px 0 0;
-  background: linear-gradient(180deg, #9fc4ff, #c8ccd4 60%, #7f89a0);
-}
-:root[data-theme="winamp-mmd3"] .media-progress-track {
-  height: 5px;
-  border-radius: 2px;
-  background: #10172e;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
-}
-:root[data-theme="winamp-mmd3"] .media-progress-fill {
-  background: linear-gradient(90deg, #9fc4ff, #ffb347);
-}
-:root[data-theme="winamp-mmd3"] .media-time {
-  color: #566585;
-}
-/* Navy console keys. */
-:root[data-theme="winamp-mmd3"] .media-button {
-  background: linear-gradient(180deg, #25325c 0%, #1a2340 100%);
-  color: #e8ecf4;
-  border: 1px solid #05070f;
-  border-top-color: rgba(255, 255, 255, 0.18);
-  border-radius: 2px;
-}
-:root[data-theme="winamp-mmd3"] .media-button:hover:not(:disabled) {
-  background: linear-gradient(180deg, #2e3d6e 0%, #222c4e 100%);
-  color: #ffffff;
-}
-:root[data-theme="winamp-mmd3"] .media-play {
-  color: #ffb347;
-  background: linear-gradient(180deg, #25325c 0%, #141b33 100%);
-  border-color: #05070f;
-}
-/* Central rotary dial between transport and fader. */
-:root[data-theme="winamp-mmd3"] .media-dial {
-  position: relative;
-  display: block;
-  width: 30px;
-  height: 30px;
-  border: 1px solid #05070f;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.8), transparent 44%),
-    conic-gradient(from 210deg, #8f96a4, #dde1e8, #8f96a4, #dde1e8, #8f96a4);
-  box-shadow:
-    0 2px 5px rgba(0, 0, 0, 0.45),
-    inset 0 1px 1px rgba(255, 255, 255, 0.6);
-}
-:root[data-theme="winamp-mmd3"] .media-dial::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 50%;
-  width: 2px;
-  height: 9px;
-  margin-left: -1px;
-  border-radius: 1px;
-  background: #1a2340;
-}
-/* Slot fader with a machined cap thumb. */
-:root[data-theme="winamp-mmd3"] .media-volume-label,
-:root[data-theme="winamp-mmd3"] .media-volume-value {
-  color: #3a4666;
-}
-:root[data-theme="winamp-mmd3"] .media-volume-slider {
-  height: 8px;
-  border-radius: 2px;
-  background: #10172e;
-  box-shadow:
-    inset 0 1px 3px rgba(0, 0, 0, 0.8),
-    0 1px 0 rgba(255, 255, 255, 0.3);
-}
-:root[data-theme="winamp-mmd3"] .media-volume-slider::-webkit-slider-thumb {
-  width: 12px;
-  height: 18px;
-  border: 1px solid #05070f;
-  border-radius: 2px;
-  background:
-    linear-gradient(180deg, transparent 44%, #1a2340 44% 56%, transparent 56%),
-    linear-gradient(180deg, #eef1f6 0%, #b9bec9 100%);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-}
-:root[data-theme="winamp-mmd3"] .media-volume-slider::-moz-range-thumb {
-  width: 10px;
-  height: 16px;
-  border: 1px solid #05070f;
-  border-radius: 2px;
-  background:
-    linear-gradient(180deg, transparent 44%, #1a2340 44% 56%, transparent 56%),
-    linear-gradient(180deg, #eef1f6 0%, #b9bec9 100%);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-}
-
-/* Winamp Bento — stacked graphite modules with a title rail and chunky keys. */
-:root[data-theme="winamp-bento"] .media-panel {
-  gap: 6px;
-  padding: 0;
-  overflow: visible;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-}
-:root[data-theme="winamp-bento"] .media-display,
-:root[data-theme="winamp-bento"] .media-progress,
-:root[data-theme="winamp-bento"] .media-controls {
-  border: 1px solid #1c1e22;
-  border-radius: 8px;
-  background: #2f3136;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 6px 16px rgba(0, 0, 0, 0.3);
-}
-:root[data-theme="winamp-bento"] .media-display {
-  align-items: stretch;
-  padding: 0;
-}
-:root[data-theme="winamp-bento"] .media-meta {
-  gap: 0;
-}
-/* Full-bleed title rail crowns the display module. */
-:root[data-theme="winamp-bento"] .media-source {
-  padding: 4px 10px;
-  border-bottom: 1px solid #1c1e22;
-  border-radius: 8px 0 0 0;
-  background: #17181c;
-  color: #ff8c1a;
-}
-:root[data-theme="winamp-bento"] .media-title {
-  padding: 6px 10px 0;
-  font-size: 14px;
-}
-:root[data-theme="winamp-bento"] .media-artist {
-  padding: 0 10px;
-}
-:root[data-theme="winamp-bento"] .media-album {
-  padding: 0 10px 8px;
-}
-:root[data-theme="winamp-bento"] .media-display .media-meta > :last-child {
-  padding-bottom: 8px;
-}
-:root[data-theme="winamp-bento"] .media-eq {
-  align-self: center;
-  margin-right: 10px;
-}
-:root[data-theme="winamp-bento"] .media-eq-bar {
-  width: 4px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, #ff8c1a, #6a6e76 70%);
-}
-:root[data-theme="winamp-bento"] .media-progress,
-:root[data-theme="winamp-bento"] .media-controls {
-  padding: 8px 10px;
-}
-:root[data-theme="winamp-bento"] .media-progress-track {
-  height: 8px;
-  border-radius: 4px;
-  background: #17181c;
-}
-:root[data-theme="winamp-bento"] .media-time {
-  color: #9a9ea8;
-}
-/* Chunky rectangular keys; the play key carries the orange accent. */
-:root[data-theme="winamp-bento"] .media-button {
-  width: 40px;
-  height: 30px;
-  border: 1px solid #1c1e22;
-  border-radius: 5px;
-  background: #3a3d43;
-  color: #f2f3f5;
-}
-:root[data-theme="winamp-bento"] .media-button:hover:not(:disabled) {
-  background: #46494f;
-  color: #ffffff;
-}
-:root[data-theme="winamp-bento"] .media-play {
-  background: #ff8c1a;
-  border-color: #d96f00;
-  color: #241100;
-}
-:root[data-theme="winamp-bento"] .media-play:hover:not(:disabled) {
-  background: #ffa245;
-  color: #241100;
-}
-:root[data-theme="winamp-bento"] .media-volume-label,
-:root[data-theme="winamp-bento"] .media-volume-value {
-  color: #9a9ea8;
-}
-:root[data-theme="winamp-bento"] .media-volume-slider {
-  height: 6px;
-  border-radius: 3px;
-  background: #17181c;
-}
-:root[data-theme="winamp-bento"] .media-volume-slider::-webkit-slider-thumb {
-  width: 12px;
-  height: 16px;
-  border: 1px solid #1c1e22;
-  border-radius: 3px;
-  background: #f2f3f5;
-}
-:root[data-theme="winamp-bento"] .media-volume-slider::-moz-range-thumb {
-  width: 10px;
-  height: 14px;
-  border: 1px solid #1c1e22;
-  border-radius: 3px;
-  background: #f2f3f5;
-}
-
-/* Winamp Hi-Fi — brushed-silver faceplate, corner screws, black glass, LEDs. */
-:root[data-theme="winamp-hifi"] .media-panel {
-  padding: 10px 12px;
-  background:
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 3px),
-    linear-gradient(180deg, #c9cdd4 0%, #9ea3ac 100%);
-  border: 1px solid #0a0a0d;
-  border-top-color: rgba(255, 255, 255, 0.5);
-  color: #15161a;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.35),
-    0 10px 24px rgba(0, 0, 0, 0.5);
-}
-/* Recessed hex screws at all four faceplate corners. */
-:root[data-theme="winamp-hifi"] .media-panel::before {
-  inset: 0;
-  background:
-    radial-gradient(circle 2.5px at 8px 8px, #787c86 35%, #2c2e34 60%, transparent 62%),
-    radial-gradient(circle 2.5px at calc(100% - 8px) 8px, #787c86 35%, #2c2e34 60%, transparent 62%),
-    radial-gradient(circle 2.5px at 8px calc(100% - 8px), #787c86 35%, #2c2e34 60%, transparent 62%),
-    radial-gradient(circle 2.5px at calc(100% - 8px) calc(100% - 8px), #787c86 35%, #2c2e34 60%, transparent 62%);
-}
-/* Power LED: red at rest, green while playback is confirmed. */
-:root[data-theme="winamp-hifi"] .media-panel::after {
-  top: 7px;
-  right: 16px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ff5f57;
-  box-shadow:
-    0 0 6px rgba(255, 95, 87, 0.9),
-    inset 0 1px 1px rgba(255, 255, 255, 0.4);
-}
-:root[data-theme="winamp-hifi"] .media-panel[data-playback="playing"]::after {
-  background: #7ef0a0;
-  box-shadow:
-    0 0 7px rgba(126, 240, 160, 0.9),
-    inset 0 1px 1px rgba(255, 255, 255, 0.4);
-}
-:root[data-theme="winamp-hifi"] .media-display {
-  margin: 0 4px;
-  padding: 5px 10px;
-  border: 1px solid #000000;
-  border-radius: 3px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 32%),
-    #050507;
-  box-shadow:
-    inset 0 2px 8px rgba(0, 0, 0, 0.9),
-    0 1px 0 rgba(255, 255, 255, 0.3);
-}
-:root[data-theme="winamp-hifi"] .media-title {
-  color: #f2f4f7;
-}
-:root[data-theme="winamp-hifi"] .media-title.is-unknown {
-  color: #6c757f;
-}
-:root[data-theme="winamp-hifi"] .media-source {
-  color: #7ef0a0;
-}
-:root[data-theme="winamp-hifi"] .media-artist {
-  color: #9aa4ae;
-}
-:root[data-theme="winamp-hifi"] .media-album {
-  color: #87919b;
-}
-/* VU-meter bars behind the glass. */
-:root[data-theme="winamp-hifi"] .media-eq-bar {
-  width: 3px;
-  border-radius: 0;
-  background: linear-gradient(180deg, #ff5f57 0%, #ffb000 38%, #7ef0a0 72%);
-  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-}
-:root[data-theme="winamp-hifi"] .media-progress-track {
-  height: 5px;
-  border-radius: 2px;
-  background: #050507;
-  box-shadow:
-    inset 0 1px 3px rgba(0, 0, 0, 0.9),
-    0 1px 0 rgba(255, 255, 255, 0.28);
-}
-:root[data-theme="winamp-hifi"] .media-progress-fill {
-  background: linear-gradient(90deg, #7ef0a0, #ffb000);
-}
-:root[data-theme="winamp-hifi"] .media-time,
-:root[data-theme="winamp-hifi"] .media-volume-label,
-:root[data-theme="winamp-hifi"] .media-volume-value {
-  color: #555b65;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
-}
-/* Small dark-metal rack keys. */
-:root[data-theme="winamp-hifi"] .media-button {
-  background: linear-gradient(180deg, #4a4d55 0%, #33353c 100%);
-  color: #eceff3;
-  border: 1px solid #0a0a0d;
-  border-top-color: rgba(255, 255, 255, 0.24);
-  border-radius: 3px;
-}
-:root[data-theme="winamp-hifi"] .media-button:hover:not(:disabled) {
-  background: linear-gradient(180deg, #55585f 0%, #3c3e46 100%);
-  color: #ffffff;
-}
-:root[data-theme="winamp-hifi"] .media-play {
-  color: #ffb000;
-  border-color: #0a0a0d;
-  background: linear-gradient(180deg, #33353c 0%, #232529 100%);
-}
-/* Large knurled volume-style dial beside the slider. */
-:root[data-theme="winamp-hifi"] .media-dial {
-  position: relative;
-  display: block;
-  width: 38px;
-  height: 38px;
-  border: 1px solid #0a0a0d;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.7), transparent 42%),
-    repeating-conic-gradient(#33353c 0deg 6deg, #4a4d55 6deg 12deg);
-  box-shadow:
-    0 3px 7px rgba(0, 0, 0, 0.5),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35),
-    inset 0 -2px 3px rgba(0, 0, 0, 0.4);
-}
-:root[data-theme="winamp-hifi"] .media-dial::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 50%;
-  width: 2px;
-  height: 11px;
-  margin-left: -1px;
-  border-radius: 1px;
-  background: #ffb000;
-  box-shadow: 0 0 4px rgba(255, 176, 0, 0.8);
-}
-:root[data-theme="winamp-hifi"] .media-volume-slider {
-  height: 3px;
-  background: #050507;
-  box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.9),
-    0 1px 0 rgba(255, 255, 255, 0.28);
-}
-:root[data-theme="winamp-hifi"] .media-volume-slider::-webkit-slider-thumb {
-  width: 12px;
-  height: 12px;
-  border: 1px solid #0a0a0d;
-  background:
-    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.7), transparent 46%),
-    #4a4d55;
-}
-:root[data-theme="winamp-hifi"] .media-volume-slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
-  border: 1px solid #0a0a0d;
-  background:
-    radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.7), transparent 46%),
-    #4a4d55;
-}
-
-/* Pioneer — blue OEL head-unit display, cool LEDs, chrome multi-control dial. */
-:root[data-theme="pioneer"] .media-panel {
-  padding: 9px 11px;
-  border: 1px solid #01050a;
-  border-top-color: #497084;
-  border-radius: 7px;
-  background:
-    repeating-linear-gradient(0deg, rgba(143, 247, 255, 0.025) 0 1px, transparent 1px 4px),
-    linear-gradient(180deg, #182633 0%, #050a10 18%, #080e14 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(143, 247, 255, 0.16),
-    inset 0 -1px 0 #000,
-    0 10px 26px rgba(0, 0, 0, 0.58);
-}
-:root[data-theme="pioneer"] .media-panel::before {
-  inset: 6px;
-  border: 1px solid rgba(94, 207, 255, 0.12);
-  border-radius: 4px;
-}
-:root[data-theme="pioneer"] .media-panel::after {
-  top: 8px;
-  right: 10px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #ff405b;
-  box-shadow: 0 0 7px rgba(255, 64, 91, 0.9);
-}
-:root[data-theme="pioneer"] .media-panel[data-playback="playing"]::after {
-  background: #57ffb0;
-  box-shadow: 0 0 8px rgba(87, 255, 176, 0.9);
-}
-:root[data-theme="pioneer"] .media-display {
-  margin: 0 3px;
-  padding: 6px 10px;
-  border: 1px solid #004b75;
-  border-radius: 3px;
-  background:
-    linear-gradient(180deg, rgba(0, 168, 255, 0.16), transparent 42%),
-    #00101d;
-  box-shadow:
-    inset 0 0 16px rgba(0, 168, 255, 0.24),
-    0 0 9px rgba(0, 168, 255, 0.18);
-}
-:root[data-theme="pioneer"] .media-source {
-  color: #8ff7ff;
-  letter-spacing: 0.16em;
-  text-shadow: 0 0 7px rgba(143, 247, 255, 0.72);
-}
-:root[data-theme="pioneer"] .media-title {
-  color: #d8fbff;
-  text-shadow: 0 0 6px rgba(0, 168, 255, 0.66);
-}
-:root[data-theme="pioneer"] .media-artist,
-:root[data-theme="pioneer"] .media-album,
-:root[data-theme="pioneer"] .media-time,
-:root[data-theme="pioneer"] .media-volume-label,
-:root[data-theme="pioneer"] .media-volume-value {
-  color: #6ecbe8;
-}
-:root[data-theme="pioneer"] .media-eq-bar {
-  width: 3px;
-  border-radius: 1px 1px 0 0;
-  background: linear-gradient(180deg, #f4ffff 0%, #8ff7ff 24%, #00a8ff 64%, #2676ff);
-  box-shadow: 0 0 6px rgba(0, 168, 255, 0.7);
-}
-:root[data-theme="pioneer"] .media-progress-track,
-:root[data-theme="pioneer"] .media-volume-slider {
-  border: 1px solid #003758;
-  border-radius: 2px;
-  background: #000812;
-  box-shadow: inset 0 0 5px rgba(0, 168, 255, 0.22);
-}
-:root[data-theme="pioneer"] .media-progress-fill {
-  background: linear-gradient(90deg, #2676ff, #00a8ff 58%, #8ff7ff);
-  box-shadow: 0 0 8px rgba(0, 168, 255, 0.8);
-}
-:root[data-theme="pioneer"] .media-button {
-  border: 1px solid #083b5c;
-  border-radius: 3px;
-  background: linear-gradient(180deg, #183650, #06131f);
-  color: #9ceeff;
-  box-shadow:
-    inset 0 1px 0 rgba(143, 247, 255, 0.18),
-    0 0 5px rgba(0, 168, 255, 0.2);
-}
-:root[data-theme="pioneer"] .media-play {
-  border-color: #00a8ff;
-  color: #e9ffff;
-  box-shadow:
-    inset 0 0 9px rgba(0, 168, 255, 0.4),
-    0 0 9px rgba(0, 168, 255, 0.42);
-}
-:root[data-theme="pioneer"] .media-dial {
-  position: relative;
-  display: block;
-  width: 36px;
-  height: 36px;
-  border: 2px solid #63727c;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.68), transparent 28%),
-    repeating-conic-gradient(#7b8b96 0deg 7deg, #283842 7deg 14deg);
-  box-shadow:
-    0 0 0 2px #01050a,
-    0 0 12px rgba(0, 168, 255, 0.56),
-    inset 0 0 6px rgba(143, 247, 255, 0.18);
-}
-:root[data-theme="pioneer"] .media-dial::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 50%;
-  width: 2px;
-  height: 10px;
-  margin-left: -1px;
-  border-radius: 1px;
-  background: #8ff7ff;
-  box-shadow: 0 0 5px #00a8ff;
-}
-:root[data-theme="pioneer"] .media-volume-slider::-webkit-slider-thumb {
-  border-color: #00101d;
-  background: #8ff7ff;
-  box-shadow: 0 0 7px rgba(0, 168, 255, 0.85);
-}
-
-/* Olive — flat ruled strip; hairlines only, square meters, zero glow. */
-:root[data-theme="olive"] .media-panel {
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-}
-:root[data-theme="olive"] .media-display {
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
-}
-:root[data-theme="olive"] .media-eq-bar {
-  width: 2px;
-  border-radius: 0;
-  background: var(--accent);
-}
-:root[data-theme="olive"] .media-progress-track {
-  height: 2px;
-  border-radius: 0;
-}
-:root[data-theme="olive"] .media-progress-fill {
-  background: var(--accent);
-}
-:root[data-theme="olive"] .media-play {
-  border-radius: var(--radius-sm);
-}
-
-/* Nord Frost — frosted display band, soft pill progress, icy meters. */
-:root[data-theme="nord-frost"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid rgba(94, 129, 172, 0.18);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.42);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-}
-:root[data-theme="nord-frost"] .media-eq-bar {
-  width: 4px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, #88c0d0, #5e81ac);
-}
-:root[data-theme="nord-frost"] .media-progress-track {
-  height: 6px;
-  background: rgba(94, 129, 172, 0.18);
-  box-shadow: inset 0 1px 2px rgba(76, 106, 146, 0.2);
-}
-
-/* Solar Dusk — raise panel regions above the horizon glow (positioned
-   pseudo-elements otherwise paint over in-flow siblings). */
-:root[data-theme="solar-dusk"] .media-display,
-:root[data-theme="solar-dusk"] .media-progress,
-:root[data-theme="solar-dusk"] .media-controls {
-  position: relative;
-  z-index: 1;
-}
-
-/* Solar Dusk — ember horizon under the display, sunset progress ramp. */
-:root[data-theme="solar-dusk"] .media-panel::after {
-  inset: auto -12% -14px -12%;
-  height: 20px;
-  background: radial-gradient(
-    ellipse 60% 100% at 50% 100%,
-    rgba(255, 158, 122, 0.2),
-    rgba(240, 113, 154, 0.08) 55%,
-    transparent 75%
-  );
-}
-:root[data-theme="solar-dusk"] .media-eq-bar {
-  background: linear-gradient(180deg, #f0719a, #ff9e7a 55%, #ffd29b);
-  box-shadow: 0 0 5px rgba(255, 158, 122, 0.35);
-}
-:root[data-theme="solar-dusk"] .media-progress-fill {
-  background: linear-gradient(90deg, #ffd29b, #ff9e7a 55%, #f0719a);
-  box-shadow: 0 0 8px rgba(255, 158, 122, 0.45);
-}
 :root[data-theme="solar-dusk"] .secondary-action {
   border-color: rgba(255, 184, 107, 0.34);
   background: rgba(255, 184, 107, 0.06);
   color: #e2c8bb;
 }
 
-
-/* Vapor — neon meter towers, gradient progress, grid horizon. */
-:root[data-theme="vapor"] .media-panel {
-  border-color: rgba(1, 205, 254, 0.35);
-}
-:root[data-theme="vapor"] .media-panel::before {
-  inset: auto 0 0 0;
-  height: 26%;
-  background:
-    repeating-linear-gradient(90deg, rgba(1, 205, 254, 0.07) 0 1px, transparent 1px 16px),
-    repeating-linear-gradient(0deg, rgba(255, 113, 206, 0.05) 0 1px, transparent 1px 10px);
-  transform: perspective(60px) rotateX(20deg) scale(1.08);
-  transform-origin: bottom;
-}
-:root[data-theme="vapor"] .media-panel::after {
-  inset: auto 0 0 0;
-  height: 2px;
-  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
-  opacity: 0.65;
-}
-:root[data-theme="vapor"] .media-eq-bar {
-  background: linear-gradient(180deg, var(--accent-violet), var(--accent-cyan));
-  box-shadow: 0 0 6px rgba(1, 205, 254, 0.45);
-}
-:root[data-theme="vapor"] .media-progress-fill {
-  box-shadow: 0 0 8px rgba(255, 113, 206, 0.5);
-}
-:root[data-theme="vapor"] .media-play {
-  box-shadow:
-    0 0 10px rgba(1, 205, 254, 0.3),
-    inset 0 0 6px rgba(255, 113, 206, 0.12);
-}
-
-/* ---------------------------------------------------------------------------
- * Spectrum-reactive layer. MediaPanel publishes --audio-low, --audio-mid,
- * --audio-high, and --audio-peak (each 0..1) only on
- * .media-panel[data-reactive]. Disabled panels never match these selectors,
- * preserving the exact static theme. No keyframes: values change only when
- * the sampled 11-band spectrum changes.
- * ------------------------------------------------------------------------- */
-
-/* Midnight — smoked OLED restraint: a faint border lift, a dimmer-breathing
- * hairline, and a whisper of light on the title. Low luminance always; the
- * window itself never brightens. */
-:root[data-theme="midnight"] .media-panel[data-reactive] {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    inset 0 0 0 1px rgba(142, 183, 255, calc(var(--audio-peak, 0) * 0.12)),
-    0 8px 24px rgba(0, 0, 0, 0.24);
-  transition: box-shadow 120ms linear;
-}
-:root[data-theme="midnight"] .media-panel[data-reactive]::after {
-  opacity: calc(0.55 + var(--audio-peak, 0) * 0.25);
-  transition: opacity 120ms linear;
-}
-:root[data-theme="midnight"] .media-panel[data-reactive] .media-title {
-  text-shadow: 0 0 8px rgba(142, 183, 255, calc(var(--audio-peak, 0) * 0.22));
-}
-
-/* Frutiger Aero — glass light and refraction: the diagonal sheen answers the
- * highs while the display well's inner gloss deepens with mids and bass. */
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive]::after {
-  opacity: calc(0.45 + var(--audio-high, 0) * 0.55);
-  transition: opacity 100ms linear;
-}
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-display {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    inset 0 8px 14px rgba(255, 255, 255, calc(0.28 + var(--audio-mid, 0) * 0.2)),
-    inset 0 0 18px rgba(53, 208, 255, calc(var(--audio-low, 0) * 0.12));
-  transition: box-shadow 100ms linear;
-}
-
-/* Frutiger Dark — the aurora bloom under the panel follows the bass while the
- * OLED display well glows with the mids. */
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive]::before {
-  opacity: calc(0.4 + var(--audio-low, 0) * 0.6);
-  transition: opacity 100ms linear;
-}
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-display {
-  box-shadow:
-    inset 0 1px 0 rgba(200, 240, 255, 0.16),
-    inset 0 0 18px rgba(53, 208, 255, calc(0.08 + var(--audio-mid, 0) * 0.16));
-  transition: box-shadow 100ms linear;
-}
-
-/* Phosphor Classic — LCD intensity: the black well backlights with bass, the
- * meter scanline row strengthens with mids, and the phosphor title burns
- * brighter on peaks. */
-:root[data-theme="winamp"] .media-panel[data-reactive] .media-display {
-  box-shadow:
-    inset 0 2px 6px rgba(0, 0, 0, 0.9),
-    0 1px 0 rgba(184, 188, 200, 0.16),
-    inset 0 0 14px rgba(0, 230, 0, calc(var(--audio-low, 0) * 0.14));
-  transition: box-shadow 100ms linear;
-}
-:root[data-theme="winamp"] .media-panel[data-reactive] .media-title {
-  text-shadow: 0 0 6px rgba(0, 230, 0, calc(0.55 + var(--audio-peak, 0) * 0.45));
-}
-:root[data-theme="winamp"] .media-panel[data-reactive]::after {
-  opacity: calc(0.5 + var(--audio-mid, 0) * 0.5);
-  transition: opacity 100ms linear;
-}
-
-/* Instrument Console — the navy well's amber backlight glows with the mid
- * band and the source lamp flares on peaks. */
-:root[data-theme="winamp-mmd3"] .media-panel[data-reactive] .media-display {
-  box-shadow:
-    inset 0 2px 7px rgba(0, 0, 0, 0.8),
-    0 1px 0 rgba(255, 255, 255, 0.35),
-    inset 0 0 16px rgba(255, 179, 71, calc(var(--audio-mid, 0) * 0.18));
-  transition: box-shadow 100ms linear;
-}
-:root[data-theme="winamp-mmd3"] .media-panel[data-reactive] .media-source {
-  text-shadow: 0 0 7px rgba(255, 179, 71, calc(var(--audio-peak, 0) * 0.65));
-}
-
-/* Graphite Stack — the display module lifts with bass; the orange play key
- * glows on peaks. */
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-display {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 6px 16px rgba(0, 0, 0, 0.3),
-    0 0 16px rgba(255, 140, 26, calc(var(--audio-low, 0) * 0.22));
-  transition: box-shadow 100ms linear;
-}
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-play {
-  box-shadow: 0 0 12px rgba(255, 140, 26, calc(var(--audio-peak, 0) * 0.55));
-  transition: box-shadow 100ms linear;
-}
-
-/* Silver Rack — the dial needle sweeps like a VU with peaks (resting left at
- * silence), and the progress lamp warms with the mids. */
-:root[data-theme="winamp-hifi"] .media-panel[data-reactive] .media-dial::after {
-  transform: rotate(calc(var(--audio-peak, 0) * 84deg - 42deg));
-  transform-origin: 1px 16px;
-  transition: transform 90ms linear;
-}
-:root[data-theme="winamp-hifi"] .media-panel[data-reactive] .media-progress-fill {
-  box-shadow: 0 0 7px rgba(255, 176, 0, calc(var(--audio-mid, 0) * 0.55));
-  transition: width 300ms linear, box-shadow 100ms linear;
-}
-
-/* OEL Drive — the blue display blooms with highs and peaks, the way a real
- * OEL panel flares when driven harder. */
-:root[data-theme="pioneer"] .media-panel[data-reactive] .media-display {
-  box-shadow:
-    inset 0 0 16px rgba(0, 168, 255, calc(0.24 + var(--audio-high, 0) * 0.22)),
-    0 0 9px rgba(0, 168, 255, calc(0.18 + var(--audio-peak, 0) * 0.3));
-  transition: box-shadow 100ms linear;
-}
-:root[data-theme="pioneer"] .media-panel[data-reactive] .media-title {
-  text-shadow: 0 0 6px rgba(0, 168, 255, calc(0.66 + var(--audio-peak, 0) * 0.34));
-}
-
-/* Olive — flat and quiet: only the ruled hairline under the display deepens
- * toward the accent on peaks. No glow, no shadow, ever. */
-:root[data-theme="olive"] .media-panel[data-reactive] .media-display {
-  border-bottom-color: rgba(163, 184, 107, calc(0.22 + var(--audio-peak, 0) * 0.5));
-  transition: border-color 100ms linear;
-}
-
-/* Nord Frost — the frosted band brightens gently with highs and casts a soft
- * icy light with mids. */
-:root[data-theme="nord-frost"] .media-panel[data-reactive] .media-display {
-  background: rgba(255, 255, 255, calc(0.42 + var(--audio-high, 0) * 0.16));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    0 4px 16px rgba(136, 192, 208, calc(var(--audio-mid, 0) * 0.3));
-  transition: background 100ms linear, box-shadow 100ms linear;
-}
-
-/* Solar Dusk — the ember horizon swells with bass and the meters saturate
- * with the mids, like a sunset deepening. */
-:root[data-theme="solar-dusk"] .media-panel[data-reactive]::after {
-  opacity: calc(0.45 + var(--audio-low, 0) * 0.55);
-  transition: opacity 100ms linear;
-}
-:root[data-theme="solar-dusk"] .media-panel[data-reactive] .media-eq {
-  filter: saturate(calc(1 + var(--audio-mid, 0) * 0.35));
-}
-
-/* Vapor — the grid horizon charges with mids and the neon baseline and play
- * key flare with peaks and highs. */
-:root[data-theme="vapor"] .media-panel[data-reactive]::before {
-  opacity: calc(0.55 + var(--audio-mid, 0) * 0.45);
-  transition: opacity 100ms linear;
-}
-:root[data-theme="vapor"] .media-panel[data-reactive]::after {
-  opacity: calc(0.4 + var(--audio-peak, 0) * 0.6);
-  box-shadow: 0 0 10px rgba(1, 205, 254, calc(var(--audio-peak, 0) * 0.55));
-  transition: opacity 100ms linear, box-shadow 100ms linear;
-}
-:root[data-theme="vapor"] .media-panel[data-reactive] .media-play {
-  box-shadow:
-    0 0 10px rgba(1, 205, 254, calc(0.3 + var(--audio-peak, 0) * 0.3)),
-    inset 0 0 6px rgba(255, 113, 206, calc(0.12 + var(--audio-high, 0) * 0.16));
-  transition: box-shadow 100ms linear;
-}
-
-/* Lightweight atmospheric spectrum scenes. Four composited spans reuse the
- * existing band variables; no timers, canvas, filters, or keyframes. */
-:root[data-theme="midnight"] .media-panel[data-reactive] .media-atmosphere-low {
-  right: 8%;
-  bottom: 7px;
-  left: 8%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #6b83b8, transparent);
-  opacity: calc(0.12 + var(--audio-low, 0) * 0.28);
-  transform: scaleX(calc(0.24 + var(--audio-low, 0) * 0.76));
-}
-:root[data-theme="midnight"] .media-panel[data-reactive] .media-atmosphere-mid {
-  inset: 12% 18%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(103, 127, 184, 0.12), transparent 70%);
-  opacity: calc(var(--audio-mid, 0) * 0.45);
-  transform: scale(calc(0.72 + var(--audio-mid, 0) * 0.28));
-}
-:root[data-theme="midnight"] .media-panel[data-reactive] .media-atmosphere-high {
-  top: 9px;
-  right: 16%;
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: #a8c8ff;
-  box-shadow: -28px 8px 0 rgba(168, 200, 255, 0.6), 19px 14px 0 rgba(124, 234, 255, 0.5);
-  opacity: calc(var(--audio-high, 0) * 0.7);
-}
-
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-atmosphere-low,
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-atmosphere-mid,
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-atmosphere-high {
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  border-radius: 50%;
-  background: radial-gradient(circle at 32% 25%, rgba(255, 255, 255, 0.8), rgba(53, 208, 255, 0.18) 48%, transparent 72%);
-}
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-atmosphere-low {
-  right: 9%;
-  bottom: -17px;
-  width: 54px;
-  height: 54px;
-  opacity: calc(0.1 + var(--audio-low, 0) * 0.34);
-  transform: scale(calc(0.72 + var(--audio-low, 0) * 0.34));
-}
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-atmosphere-mid {
-  top: -11px;
-  right: 27%;
-  width: 30px;
-  height: 30px;
-  opacity: calc(var(--audio-mid, 0) * 0.35);
-  transform: translateY(calc(var(--audio-mid, 0) * 7px));
-}
-:root[data-theme="frutiger-aero"] .media-panel[data-reactive] .media-atmosphere-high {
-  top: 7px;
-  left: 12%;
-  width: 16px;
-  height: 16px;
-  opacity: calc(var(--audio-high, 0) * 0.5);
-}
-
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-atmosphere-low,
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-atmosphere-mid,
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-atmosphere-high {
-  right: -8%;
-  bottom: -24px;
-  left: -8%;
-  height: 52px;
-  border-radius: 50%;
-}
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-atmosphere-low {
-  background: radial-gradient(ellipse, rgba(110, 232, 122, 0.2), transparent 68%);
-  opacity: calc(var(--audio-low, 0) * 0.7);
-  transform: translateX(-12%) scaleY(calc(0.6 + var(--audio-low, 0) * 0.5));
-}
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-atmosphere-mid {
-  background: radial-gradient(ellipse, rgba(53, 208, 255, 0.24), transparent 68%);
-  opacity: calc(var(--audio-mid, 0) * 0.72);
-  transform: translateX(15%) scaleY(calc(0.55 + var(--audio-mid, 0) * 0.55));
-}
-:root[data-theme="frutiger-dark"] .media-panel[data-reactive] .media-atmosphere-high {
-  bottom: -31px;
-  background: radial-gradient(ellipse, rgba(47, 155, 255, 0.22), transparent 66%);
-  opacity: calc(var(--audio-high, 0) * 0.76);
-}
-
-:root[data-theme="winamp"] .media-panel[data-reactive] .media-atmosphere-mid {
-  right: 7%;
-  bottom: 8px;
-  left: 7%;
-  height: 6px;
-  background: repeating-linear-gradient(90deg, #00e600 0 3px, transparent 3px 8px);
-  opacity: calc(0.12 + var(--audio-mid, 0) * 0.38);
-  transform: scaleY(calc(0.35 + var(--audio-mid, 0) * 1.4));
-  transform-origin: bottom;
-}
-:root[data-theme="winamp"] .media-panel[data-reactive] .media-atmosphere-high {
-  top: 6px;
-  right: 10%;
-  width: 34%;
-  height: 1px;
-  background: #7fbf7f;
-  opacity: calc(var(--audio-high, 0) * 0.45);
-  box-shadow: 0 4px 0 rgba(0, 230, 0, 0.35), 0 8px 0 rgba(0, 230, 0, 0.2);
-}
-
-:root[data-theme="winamp-mmd3"] .media-panel[data-reactive] .media-atmosphere-low,
-:root[data-theme="winamp-mmd3"] .media-panel[data-reactive] .media-atmosphere-high {
-  top: 8px;
-  width: 7px;
-  height: 7px;
-  border: 1px solid #26385d;
-  border-radius: 50%;
-  background: #ffb347;
-}
-:root[data-theme="winamp-mmd3"] .media-panel[data-reactive] .media-atmosphere-low {
-  left: 9px;
-  opacity: calc(0.16 + var(--audio-low, 0) * 0.84);
-  box-shadow: 0 0 9px rgba(255, 179, 71, calc(var(--audio-low, 0) * 0.75));
-}
-:root[data-theme="winamp-mmd3"] .media-panel[data-reactive] .media-atmosphere-high {
-  right: 9px;
-  background: #9fc4ff;
-  opacity: calc(0.14 + var(--audio-high, 0) * 0.86);
-  box-shadow: 0 0 9px rgba(159, 196, 255, calc(var(--audio-high, 0) * 0.72));
-}
-
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-atmosphere-low,
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-atmosphere-mid,
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-atmosphere-high {
-  right: 9px;
-  width: 24px;
-  border: 1px solid rgba(255, 140, 26, 0.26);
-  border-radius: 2px;
-  background: rgba(255, 140, 26, 0.12);
-  transform-origin: right;
-  /* Silent at idle: the bars only exist while audio drives them. */
-  opacity: calc(
-    0.08 +
-    (var(--audio-low, 0) + var(--audio-mid, 0) + var(--audio-high, 0)) * 0.3
-  );
-}
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-atmosphere-low {
-  bottom: 7px;
-  height: 6px;
-  transform: scaleX(calc(0.3 + var(--audio-low, 0) * 0.7));
-}
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-atmosphere-mid {
-  bottom: 17px;
-  height: 5px;
-  transform: scaleX(calc(0.24 + var(--audio-mid, 0) * 0.76));
-}
-:root[data-theme="winamp-bento"] .media-panel[data-reactive] .media-atmosphere-high {
-  bottom: 26px;
-  height: 4px;
-  transform: scaleX(calc(0.18 + var(--audio-high, 0) * 0.82));
-}
-
-:root[data-theme="winamp-hifi"] .media-panel[data-reactive] .media-atmosphere-low,
-:root[data-theme="winamp-hifi"] .media-panel[data-reactive] .media-atmosphere-mid {
-  bottom: -26px;
-  width: 60px;
-  height: 60px;
-  border: 1px solid rgba(255, 176, 0, 0.35);
-  border-radius: 50%;
-  opacity: calc(0.12 + var(--audio-mid, 0) * 0.4);
-  transform: rotate(calc(-18deg + var(--audio-peak, 0) * 36deg));
-}
-:root[data-theme="winamp-hifi"] .media-panel[data-reactive] .media-atmosphere-low {
-  left: 8%;
-}
-:root[data-theme="winamp-hifi"] .media-panel[data-reactive] .media-atmosphere-mid {
-  right: 8%;
-}
-
-:root[data-theme="pioneer"] .media-panel[data-reactive] .media-atmosphere-low {
-  right: 5%;
-  bottom: 3px;
-  left: 5%;
-  height: 22px;
-  background:
-    repeating-linear-gradient(90deg, transparent 0 12px, rgba(0, 168, 255, 0.28) 12px 13px),
-    linear-gradient(155deg, transparent 49%, rgba(143, 247, 255, 0.34) 50%, transparent 51%),
-    linear-gradient(25deg, transparent 49%, rgba(38, 118, 255, 0.34) 50%, transparent 51%);
-  opacity: calc(0.12 + var(--audio-low, 0) * 0.54);
-  transform: perspective(40px) rotateX(42deg) scaleX(calc(0.66 + var(--audio-low, 0) * 0.34));
-  transform-origin: bottom;
-}
-:root[data-theme="pioneer"] .media-panel[data-reactive] .media-atmosphere-high {
-  top: 6px;
-  right: 10%;
-  left: 10%;
-  height: 2px;
-  background: repeating-linear-gradient(90deg, #8ff7ff 0 2px, transparent 2px 8px);
-  opacity: calc(var(--audio-high, 0) * 0.72);
-}
-
-:root[data-theme="olive"] .media-panel[data-reactive] .media-atmosphere-mid {
-  right: 7%;
-  bottom: 6px;
-  left: 7%;
-  height: 8px;
-  background: repeating-linear-gradient(90deg, rgba(163, 184, 107, 0.44) 0 1px, transparent 1px 9px);
-  opacity: calc(0.12 + var(--audio-mid, 0) * 0.42);
-  transform: scaleX(calc(0.5 + var(--audio-peak, 0) * 0.5));
-}
-
-:root[data-theme="nord-frost"] .media-panel[data-reactive] .media-atmosphere-high {
-  inset: 4px 7%;
-  background:
-    linear-gradient(60deg, transparent 48%, rgba(216, 244, 248, 0.5) 49% 51%, transparent 52%),
-    linear-gradient(120deg, transparent 48%, rgba(136, 192, 208, 0.38) 49% 51%, transparent 52%);
-  opacity: calc(0.08 + var(--audio-high, 0) * 0.38);
-  transform: scale(calc(0.82 + var(--audio-high, 0) * 0.18));
-}
-
-:root[data-theme="solar-dusk"] .media-panel[data-reactive] .media-atmosphere-low {
-  right: 12%;
-  bottom: -25px;
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  background: radial-gradient(circle, #ffd29b, #ff9e7a 42%, rgba(240, 113, 154, 0.2) 66%, transparent 70%);
-  opacity: calc(0.03 + var(--audio-low, 0) * 0.49);
-  transform: translateY(calc((1 - var(--audio-low, 0)) * 8px)) scale(calc(0.74 + var(--audio-low, 0) * 0.28));
-}
-:root[data-theme="solar-dusk"] .media-panel[data-reactive] .media-atmosphere-mid {
-  right: 5%;
-  bottom: 8px;
-  left: 5%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #ff9e7a, transparent);
-  opacity: calc(var(--audio-mid, 0) * 0.62);
-}
-
-:root[data-theme="vapor"] .media-panel[data-reactive] .media-atmosphere-low {
-  right: 3%;
-  bottom: -4px;
-  left: 3%;
-  height: 28px;
-  background:
-    repeating-linear-gradient(90deg, transparent 0 13px, rgba(1, 205, 254, 0.2) 13px 14px),
-    repeating-linear-gradient(0deg, transparent 0 7px, rgba(255, 113, 206, 0.18) 7px 8px);
-  opacity: calc(0.14 + var(--audio-mid, 0) * 0.5);
-  transform: perspective(40px) rotateX(45deg) scaleX(calc(0.72 + var(--audio-low, 0) * 0.28));
-  transform-origin: bottom;
-}
-:root[data-theme="vapor"] .media-panel[data-reactive] .media-atmosphere-peak {
-  right: 12%;
-  bottom: 7px;
-  left: 12%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #01cdfe, #ff71ce, transparent);
-  opacity: calc(0.2 + var(--audio-peak, 0) * 0.72);
-  box-shadow: 0 0 8px rgba(1, 205, 254, calc(var(--audio-peak, 0) * 0.5));
-}
-
-/* The containing Ready surface answers playback too, so wide windows retain
- * atmosphere without adding another renderer or animation loop. */
-:root[data-theme="midnight"][data-media-reactive] .hero {
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), inset 0 0 24px rgba(142,183,255,calc(var(--media-audio-peak,0) * 0.045));
-}
-:root[data-theme="frutiger-aero"][data-media-reactive] .hero {
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 12px 34px rgba(53,208,255,calc(var(--media-audio-high,0) * 0.16));
-}
-:root[data-theme="frutiger-dark"][data-media-reactive] .hero {
-  box-shadow: inset 0 0 34px rgba(53,208,255,calc(var(--media-audio-mid,0) * 0.12)), 0 16px 38px rgba(47,155,255,calc(var(--media-audio-low,0) * 0.12));
-}
-:root[data-theme="winamp"][data-media-reactive] .hero {
-  border-bottom-color: rgba(0,230,0,calc(0.28 + var(--media-audio-mid,0) * 0.52));
-  box-shadow: inset 0 -18px 24px rgba(0,230,0,calc(var(--media-audio-low,0) * 0.07)), inset 0 1px 0 rgba(255,255,255,0.08);
-}
-:root[data-theme="winamp-mmd3"][data-media-reactive] .hero {
-  box-shadow: inset -20px 0 28px rgba(159,196,255,calc(var(--media-audio-high,0) * 0.09)), inset 20px 0 28px rgba(255,179,71,calc(var(--media-audio-low,0) * 0.09));
-}
-:root[data-theme="winamp-bento"][data-media-reactive] .hero {
-  border-color: rgba(255,140,26,calc(0.18 + var(--media-audio-peak,0) * 0.38));
-  box-shadow:
-    inset 0 -38px 52px rgba(255,140,26,calc(var(--media-audio-low,0) * 0.18)),
-    inset 0 0 34px rgba(255,140,26,calc(var(--media-audio-peak,0) * 0.11)),
-    0 10px 32px rgba(0,0,0,0.3);
-}
-:root[data-theme="winamp-hifi"][data-media-reactive] .hero {
-  box-shadow: inset 0 -12px 24px rgba(255,176,0,calc(var(--media-audio-mid,0) * 0.08)), inset 0 1px 0 rgba(255,255,255,0.28);
-}
-:root[data-theme="pioneer"][data-media-reactive] .hero {
-  box-shadow: inset 0 -20px 30px rgba(0,168,255,calc(var(--media-audio-low,0) * 0.11)), inset 0 0 0 1px rgba(143,247,255,calc(var(--media-audio-high,0) * 0.16));
-}
-:root[data-theme="olive"][data-media-reactive] .hero {
-  border-bottom-color: rgba(163,184,107,calc(0.24 + var(--media-audio-peak,0) * 0.4));
-}
-:root[data-theme="nord-frost"][data-media-reactive] .hero {
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.72), 0 12px 30px rgba(136,192,208,calc(var(--media-audio-high,0) * 0.13));
-}
-:root[data-theme="solar-dusk"][data-media-reactive] .hero {
-  box-shadow: inset 0 -28px 40px rgba(255,158,122,calc(var(--media-audio-low,0) * 0.12)), 0 14px 34px rgba(240,113,154,calc(var(--media-audio-mid,0) * 0.09));
-}
-:root[data-theme="vapor"][data-media-reactive] .hero {
-  border-color: rgba(1,205,254,calc(0.22 + var(--media-audio-high,0) * 0.34));
-  box-shadow: inset 0 -22px 36px rgba(255,113,206,calc(var(--media-audio-mid,0) * 0.08)), 0 0 26px rgba(1,205,254,calc(var(--media-audio-peak,0) * 0.09));
-}
-
-/* Artwork adopts each theme's physical display language. */
-:root[data-theme="midnight"] .media-artwork { border-radius: 5px; background: #010204; }
-:root[data-theme="frutiger-aero"] .media-artwork { border-color: rgba(70, 120, 160, 0.32); border-radius: 14px; box-shadow: inset 0 1px 0 #fff, 0 3px 10px rgba(53, 208, 255, 0.2); }
-:root[data-theme="frutiger-dark"] .media-artwork { border-color: rgba(53, 208, 255, 0.28); background: #02070d; box-shadow: 0 0 9px rgba(53, 208, 255, 0.18); }
-:root[data-theme="winamp"] .media-artwork { border-radius: 0; border-color: #05050a; background: #04040a; image-rendering: pixelated; }
-:root[data-theme="winamp-mmd3"] .media-artwork { border-radius: 2px; border-color: #05070f; box-shadow: 0 1px 0 #fff, inset 0 0 7px rgba(0, 0, 0, 0.75); }
-:root[data-theme="winamp-bento"] .media-artwork { border-radius: 3px; border-color: #30323a; background: #101116; }
-:root[data-theme="winamp-hifi"] .media-artwork { border-radius: 50%; border-color: #737782; box-shadow: inset 0 0 0 3px #17181c; }
-:root[data-theme="pioneer"] .media-artwork { border-color: #003758; border-radius: 3px; background: #000812; box-shadow: 0 0 8px rgba(0, 168, 255, 0.3); }
-:root[data-theme="olive"] .media-artwork { border-radius: 2px; border-color: #59613f; background: #171a12; }
-:root[data-theme="nord-frost"] .media-artwork { border-color: rgba(94, 129, 172, 0.28); background: rgba(255, 255, 255, 0.5); }
-:root[data-theme="solar-dusk"] .media-artwork { border-color: rgba(255, 158, 122, 0.32); background: #271a22; box-shadow: 0 3px 10px rgba(240, 113, 154, 0.12); }
-:root[data-theme="vapor"] .media-artwork { border-color: #01cdfe; border-radius: 3px; background: #100b20; box-shadow: 0 0 8px rgba(1, 205, 254, 0.26); }
 
 /* Theme-matched drag-and-drop states. */
 :root[data-theme="midnight"] .drop-overlay {
@@ -5340,145 +3889,7 @@ body {
   box-shadow: 0 0 16px rgba(1, 205, 254, 0.4), 0 0 32px rgba(255, 113, 206, 0.26);
 }
 
-/* Live microphone meter — driven by the recorder's normalized RMS level. */
-.recording-meter {
-  position: absolute;
-  right: var(--space-4);
-  bottom: var(--space-3);
-  left: var(--space-4);
-  z-index: 1;
-  display: flex;
-  height: 22px;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 3px;
-  pointer-events: none;
-}
-
-.recording-meter-bar {
-  width: 5px;
-  height: 100%;
-  border-radius: 2px 2px 0 0;
-  background: linear-gradient(180deg, var(--accent-cyan), var(--accent), var(--accent-violet));
-  transform: scaleY(var(--meter-scale));
-  transform-origin: bottom;
-  transition: transform 80ms linear;
-}
-
-:root[data-theme="frutiger-aero"] .recording-meter-bar {
-  border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff, #35d0ff 46%, #6ee87a);
-  box-shadow: 0 0 5px rgba(53, 208, 255, 0.42);
-}
-:root[data-theme="frutiger-dark"] .recording-meter-bar {
-  background: linear-gradient(180deg, #6ee87a, #35d0ff 58%, #2f9bff);
-  box-shadow: 0 0 7px rgba(53, 208, 255, 0.62);
-}
-:root[data-theme="winamp"] .recording-meter-bar {
-  width: 6px;
-  border-radius: 0;
-  background: linear-gradient(180deg, #ff2020, #ff9f2e 28%, #cccc00 48%, #00e600 78%);
-  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-}
-:root[data-theme="winamp-mmd3"] .recording-meter-bar {
-  width: 4px;
-  border-radius: 1px;
-  background: linear-gradient(180deg, #ffffff, #9fc4ff 52%, #62769e);
-  box-shadow: 0 0 4px rgba(159, 196, 255, 0.45);
-}
-:root[data-theme="winamp-bento"] .recording-meter-bar {
-  width: 7px;
-  border-radius: 1px;
-  background: linear-gradient(180deg, #ffb45d, #ff8c1a 58%, #6a3b08);
-}
-:root[data-theme="winamp-hifi"] .recording-meter-bar {
-  width: 5px;
-  border-radius: 0;
-  background: linear-gradient(180deg, #ff5f57, #ffb000 38%, #7ef0a0 72%);
-  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-}
-/* The live meter sits in its own recessed LCD well so it never collides
-   with the painted spectrum strip along the hero's foot. */
-:root[data-theme="winamp"] .recording-meter {
-  height: 25px;
-  padding: 3px 8px;
-  border: 1px solid #30344a;
-  border-radius: 1px;
-  background: #04040a;
-  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.9);
-}
-:root[data-theme="winamp"] .recording-meter-bar {
-  width: 6px;
-  border-radius: 0;
-  background: linear-gradient(180deg, #ff2020, #ff9f2e 28%, #cccc00 48%, #00e600 78%);
-  mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-  -webkit-mask-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 2px 4px);
-}
-:root[data-theme="pioneer"] .recording-meter {
-  height: 25px;
-  padding: 3px 8px;
-  border: 1px solid rgba(0, 168, 255, 0.28);
-  border-radius: 3px;
-  background: #00101d;
-  box-shadow: inset 0 0 10px rgba(0, 168, 255, 0.18);
-}
-:root[data-theme="pioneer"] .recording-meter-bar {
-  width: 5px;
-  border-radius: 1px 1px 0 0;
-  background: linear-gradient(180deg, #f4ffff, #8ff7ff 22%, #00a8ff 62%, #2676ff);
-  box-shadow: 0 0 7px rgba(0, 168, 255, 0.76);
-}
-:root[data-theme="olive"] .recording-meter-bar {
-  width: 3px;
-  border-radius: 0;
-  background: #a3b86b;
-}
-:root[data-theme="nord-frost"] .recording-meter-bar {
-  width: 4px;
-  border-radius: 3px;
-  background: linear-gradient(180deg, #d8f4f8, #88c0d0 46%, #5e81ac);
-}
-:root[data-theme="solar-dusk"] .recording-meter-bar {
-  background: linear-gradient(180deg, #ffd29b, #ff9e7a 52%, #f0719a);
-  box-shadow: 0 0 5px rgba(255, 158, 122, 0.48);
-}
-:root[data-theme="vapor"] .recording-meter-bar {
-  background: linear-gradient(180deg, #ff71ce, #b967ff 52%, #01cdfe);
-  box-shadow: 0 0 7px rgba(1, 205, 254, 0.7);
-}
-
-@media (max-width: 420px) {
-  .media-controls {
-    column-gap: var(--space-2);
-  }
-
-  .media-display,
-  .media-preview {
-    gap: var(--space-2);
-  }
-
-  .media-artwork {
-    width: 40px;
-    height: 40px;
-    flex-basis: 40px;
-  }
-
-  .media-volume-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-}
-
-/* Minimum-height utility window: keep the full player above the fold. */
+/* Minimum-height utility window: keep recording controls compact. */
 @media (max-height: 520px) {
   .main {
     gap: var(--space-2);
@@ -5507,14 +3918,6 @@ body {
     padding: var(--space-2);
   }
 
-  .media-panel {
-    gap: 6px;
-    padding: 6px var(--space-2);
-  }
-
-  :root[data-theme="winamp-bento"] .media-panel {
-    padding: 0;
-  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -5545,7 +3948,7 @@ body {
   --record-glow-hover: rgba(189, 141, 255, 0.44);
   --scrim: rgba(5, 3, 9, 0.66);
   --scrim-strong: rgba(5, 3, 9, 0.8);
-  --material-window: rgba(5, 3, 9, 0.96);
+  --material-window: #050309;
   --material-surface: rgba(13, 8, 23, 0.94);
   --material-panel: rgba(18, 11, 32, 0.95);
   --material-elevated: rgba(26, 16, 48, 0.96);
@@ -5748,102 +4151,7 @@ body {
   );
   animation: rite-pulse 5.5s ease-in-out infinite;
 }
-/* Obsidian Rite media module — the same hull-plating liturgy as the window. */
-:root[data-theme="obsidian-rite"] .media-panel {
-  border-color: rgba(160, 107, 255, 0.3);
-  border-radius: 0;
-  clip-path: polygon(
-    12px 0,
-    100% 0,
-    100% calc(100% - 12px),
-    calc(100% - 12px) 100%,
-    0 100%,
-    0 12px
-  );
-  background:
-    linear-gradient(180deg, rgba(26, 16, 48, 0.9), rgba(13, 8, 23, 0.97)),
-    var(--panel);
-  box-shadow:
-    inset 0 1px 0 rgba(189, 141, 255, 0.14),
-    inset 0 0 28px rgba(90, 40, 180, 0.1);
-}
-:root[data-theme="obsidian-rite"] .media-panel::after {
-  inset: auto 0 0 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--accent-cyan),
-    var(--accent),
-    var(--accent-violet),
-    transparent
-  );
-  opacity: 0.55;
-}
-:root[data-theme="obsidian-rite"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid rgba(160, 107, 255, 0.22);
-  border-radius: 0;
-  clip-path: polygon(
-    8px 0,
-    100% 0,
-    100% calc(100% - 8px),
-    calc(100% - 8px) 100%,
-    0 100%,
-    0 8px
-  );
-  background: linear-gradient(180deg, rgba(59, 36, 112, 0.32), rgba(5, 3, 9, 0.72));
-  box-shadow: inset 0 0 14px rgba(160, 107, 255, 0.13);
-}
-:root[data-theme="obsidian-rite"] .media-source {
-  color: #bd8dff;
-  letter-spacing: 0.14em;
-}
-:root[data-theme="obsidian-rite"] .media-title {
-  color: #efe8ff;
-  text-shadow: 0 0 8px rgba(160, 107, 255, 0.38);
-}
-:root[data-theme="obsidian-rite"] .media-artist {
-  color: #cbb8ee;
-}
-:root[data-theme="obsidian-rite"] .media-album,
-:root[data-theme="obsidian-rite"] .media-time,
-:root[data-theme="obsidian-rite"] .media-volume-label,
-:root[data-theme="obsidian-rite"] .media-volume-value {
-  color: #a893cf;
-}
-:root[data-theme="obsidian-rite"] .media-eq-bar {
-  width: 3px;
-  border-radius: 0;
-  background: linear-gradient(180deg, var(--accent-cyan), var(--accent) 55%, var(--accent-violet));
-}
-:root[data-theme="obsidian-rite"] .media-progress-track,
-:root[data-theme="obsidian-rite"] .media-volume-slider {
-  height: 4px;
-  border-radius: 0;
-  background: rgba(5, 3, 9, 0.82);
-  box-shadow: inset 0 0 0 1px rgba(160, 107, 255, 0.18);
-}
-:root[data-theme="obsidian-rite"] .media-progress-fill {
-  border-radius: 0;
-  background: linear-gradient(90deg, var(--accent-cyan), var(--accent) 55%, var(--accent-violet));
-}
-:root[data-theme="obsidian-rite"] .media-button {
-  border-radius: 3px;
-  border-color: rgba(160, 107, 255, 0.34);
-  background: linear-gradient(180deg, #241642, #120b20);
-  color: #e4d8ff;
-}
-:root[data-theme="obsidian-rite"] .media-play {
-  border-color: rgba(189, 141, 255, 0.55);
-}
-:root[data-theme="obsidian-rite"] .media-artwork {
-  border-color: rgba(160, 107, 255, 0.3);
-  border-radius: 0;
-  background: #120b20;
-}
-
-/* Drop overlay and microphone meter carry the rite into transient states. */
+/* Drop overlay carries the rite into transient states. */
 :root[data-theme="obsidian-rite"] .drop-overlay {
   background:
     repeating-linear-gradient(63deg, rgba(160, 107, 255, 0.03) 0 1px, transparent 1px 46px),
@@ -5866,48 +4174,6 @@ body {
   box-shadow:
     0 0 30px rgba(160, 107, 255, 0.28),
     inset 0 1px 0 rgba(189, 141, 255, 0.2);
-}
-:root[data-theme="obsidian-rite"] .recording-meter-bar {
-  width: 4px;
-  border-radius: 1px 1px 0 0;
-  background: linear-gradient(180deg, var(--accent-violet), var(--accent) 52%, var(--accent-cyan));
-}
-
-/* The Ready surface hums with the rite when playback is live. */
-:root[data-theme="obsidian-rite"][data-media-reactive] .hero {
-  box-shadow:
-    inset 0 0 34px rgba(160, 107, 255, calc(var(--media-audio-low, 0) * 0.09)),
-    inset 0 0 0 1px rgba(189, 141, 255, calc(var(--media-audio-high, 0) * 0.14));
-}
-:root[data-theme="obsidian-rite"] .media-panel[data-reactive]::after {
-  opacity: calc(0.45 + var(--audio-peak, 0) * 0.45);
-  transition: opacity 120ms linear;
-}
-:root[data-theme="obsidian-rite"] .media-panel[data-reactive] .media-atmosphere-low {
-  right: 8%;
-  bottom: 7px;
-  left: 8%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #bd8dff, transparent);
-  opacity: calc(0.12 + var(--audio-low, 0) * 0.3);
-  transform: scaleX(calc(0.26 + var(--audio-low, 0) * 0.74));
-}
-:root[data-theme="obsidian-rite"] .media-panel[data-reactive] .media-atmosphere-mid {
-  inset: 12% 18%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(160, 107, 255, 0.12), transparent 70%);
-  opacity: calc(var(--audio-mid, 0) * 0.45);
-  transform: scale(calc(0.72 + var(--audio-mid, 0) * 0.28));
-}
-:root[data-theme="obsidian-rite"] .media-panel[data-reactive] .media-atmosphere-high {
-  top: 9px;
-  right: 16%;
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: #8fe8ff;
-  box-shadow: -26px 7px 0 rgba(143, 232, 255, 0.55), 18px 12px 0 rgba(255, 95, 208, 0.45);
-  opacity: calc(var(--audio-high, 0) * 0.65);
 }
 
 /* ---------------------------------------------------------------------------
@@ -6362,18 +4628,6 @@ body {
   }
 }
 
-/* Reduced motion: no entrance, no meter motion anywhere in the panel. */
-@media (prefers-reduced-motion: reduce) {
-  .media-panel,
-  .media-panel *,
-  .media-panel::before,
-  .media-panel::after,
-  .recording-meter * {
-    animation: none !important;
-    transition: none !important;
-  }
-}
-
 /* ---------------------------------------------------------------------------
  * Crystal — maximal glass clarity over warm '70s electronics.
  * Pale translucent panels, chrome hairlines, one amber glow. Native vibrancy
@@ -6544,61 +4798,6 @@ body {
     inset 0 -6px 14px rgba(168, 106, 21, 0.35);
 }
 
-/* Media module: same glass, amber progress, silver meters. */
-:root[data-theme="crystal"] .media-panel {
-  border-color: rgba(255, 255, 255, 0.9);
-  outline: 1px solid rgba(120, 134, 150, 0.3);
-  outline-offset: -1px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(240, 244, 248, 0.16)),
-    var(--panel);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    0 10px 30px rgba(70, 80, 94, 0.12);
-}
-:root[data-theme="crystal"] .media-display {
-  padding: 5px 10px;
-  border: 1px solid rgba(120, 134, 150, 0.2);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.34);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
-}
-:root[data-theme="crystal"] .media-source {
-  color: #8a6a35;
-}
-:root[data-theme="crystal"] .media-title {
-  color: #26221c;
-}
-:root[data-theme="crystal"] .media-artist {
-  color: #4d463c;
-}
-:root[data-theme="crystal"] .media-album,
-:root[data-theme="crystal"] .media-time,
-:root[data-theme="crystal"] .media-volume-label,
-:root[data-theme="crystal"] .media-volume-value {
-  color: #7a7264;
-}
-:root[data-theme="crystal"] .media-eq-bar {
-  width: 3px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, #d8932f, #b08d57 58%, #8fa3b8);
-}
-:root[data-theme="crystal"] .media-progress-track,
-:root[data-theme="crystal"] .media-volume-slider {
-  background: rgba(120, 134, 150, 0.22);
-}
-:root[data-theme="crystal"] .media-progress-fill {
-  background: linear-gradient(90deg, #8fa3b8, #d8932f);
-}
-:root[data-theme="crystal"] .media-play {
-  border-color: rgba(196, 127, 31, 0.5);
-  color: #a86a15;
-  background: rgba(255, 255, 255, 0.4);
-}
-:root[data-theme="crystal"] .media-artwork {
-  border-color: rgba(120, 134, 150, 0.3);
-  background: rgba(255, 255, 255, 0.4);
-}
 :root[data-theme="crystal"] .drop-overlay {
   background: rgba(238, 242, 246, 0.82);
 }
@@ -6609,11 +4808,6 @@ body {
     rgba(255, 255, 255, 0.5);
   color: #26221c;
   box-shadow: 0 14px 34px rgba(70, 80, 94, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.95);
-}
-:root[data-theme="crystal"] .recording-meter-bar {
-  width: 4px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #e8ecf1, #d8932f 52%, #b08d57);
 }
 
 
@@ -6748,75 +4942,6 @@ body {
   flex: 0 0 auto;
   margin-top: 2px;
   color: var(--success);
-}
-
-/* ---------------------------------------------------------------------------
- * Media card bespoke layout per theme family.
- * Shared skeleton: display (atmosphere + EQ + preview) -> timeline ->
- * transport -> volume. Order/emphasis varies so each card feels native to
- * its theme without changing the accessible structure.
- * ------------------------------------------------------------------------- */
-.media-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Rack readouts put the timeline on top, like hardware counters. */
-:root[data-theme="winamp-hifi"] .media-progress,
-:root[data-theme="olive"] .media-progress,
-:root[data-theme="winamp-bento"] .media-progress {
-  order: -1;
-  margin: 0 2px 10px;
-}
-
-/* Consoles emphasize the top LCD strip and hide the trailing EQ. */
-:root[data-theme="winamp"] .media-display > .media-eq:not(.media-eq-mirror),
-:root[data-theme="winamp-mmd3"] .media-display > .media-eq:not(.media-eq-mirror),
-:root[data-theme="pioneer"] .media-display > .media-eq:not(.media-eq-mirror),
-:root[data-theme="winamp-bento"] .media-display > .media-eq:not(.media-eq-mirror),
-:root[data-theme="solar-dusk"] .media-display > .media-eq:not(.media-eq-mirror) {
-  display: none;
-}
-:root[data-theme="winamp"] .media-display > .media-eq-mirror .media-eq-bar,
-:root[data-theme="winamp-mmd3"] .media-display > .media-eq-mirror .media-eq-bar,
-:root[data-theme="pioneer"] .media-display > .media-eq-mirror .media-eq-bar {
-  height: 22px;
-}
-
-/* Glass themes: calm single low strip under the meta, no top strip. */
-:root[data-theme="crystal"] .media-display > .media-eq-mirror,
-:root[data-theme="frutiger-aero"] .media-display > .media-eq-mirror,
-:root[data-theme="nord-frost"] .media-display > .media-eq-mirror,
-:root[data-theme="frutiger-dark"] .media-display > .media-eq-mirror {
-  display: none;
-}
-:root[data-theme="crystal"] .media-display > .media-eq:not(.media-eq-mirror) .media-eq-bar,
-:root[data-theme="nord-frost"] .media-display > .media-eq:not(.media-eq-mirror) .media-eq-bar {
-  height: 14px;
-}
-:root[data-theme="crystal"] .media-progress,
-:root[data-theme="nord-frost"] .media-progress {
-  margin-top: 10px;
-}
-
-/* Midnight + Vapor: full-width horizon strips frame the card. */
-:root[data-theme="midnight"] .media-display > .media-eq-mirror .media-eq-bar {
-  height: 24px;
-}
-:root[data-theme="vapor"] .media-display > .media-eq:not(.media-eq-mirror),
-:root[data-theme="midnight"] .media-display > .media-eq:not(.media-eq-mirror) {
-  display: none;
-}
-:root[data-theme="vapor"] .media-display > .media-eq-mirror .media-eq-bar {
-  height: 30px;
-}
-
-/* Obsidian rite: the bottom liturgy strip carries the spectrum. */
-:root[data-theme="obsidian-rite"] .media-display > .media-eq-mirror {
-  display: none;
-}
-:root[data-theme="obsidian-rite"] .media-display > .media-eq:not(.media-eq-mirror) .media-eq-bar {
-  height: 26px;
 }
 
 /* ---------------------------------------------------------------------------

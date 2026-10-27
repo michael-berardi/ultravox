@@ -6,11 +6,13 @@
 //! traits, and audio recording abstractions.
 
 pub mod audio;
+pub mod audio_input;
 pub mod config;
 pub mod dictionary;
 pub mod download;
 pub mod history;
 pub mod model_catalog;
+pub mod phonon;
 pub mod shortcuts;
 pub mod transcription;
 #[cfg(feature = "voice-studio")]
@@ -20,6 +22,7 @@ pub use audio::{
     decode_media_file_to_wav, AudioBackend, AudioDeviceInfo, AudioError, AudioInputConfig,
     AudioRecording, CpalAudioBackend, StubAudioBackend, IMPORT_MAX_BYTES, IMPORT_SAMPLE_RATE,
 };
+pub use audio_input::{prepare_transcription_audio, TranscriptionAudio};
 pub use config::{AppConfig, ConfigError, ConfigManager, Engine, Language};
 pub use dictionary::{
     CustomDictionary, DictionaryEntry, DictionaryError, MAX_ALIASES_PER_ENTRY,

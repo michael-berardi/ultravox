@@ -174,7 +174,8 @@ BUILTIN_EXCLUDED = [
     "release",
 ]
 
-NEEDLE_ADMIN = "software.implosecybernetics.com/api/" + "admin"
+NEEDLE_ADMIN = "software.paretocybernetics.com/api/" + "admin"
+NEEDLE_ADMIN_LEGACY = "software.implosecybernetics.com/api/" + "admin"  # pareto-legacy: remove after 2027-08-23
 NEEDLE_ADMIN_FLAG = "DISTRIBUTION_" + "ADMIN"
 NEEDLE_KEY_PREFIX = "imp_" + "live_"
 NEEDLE_DEV_VARS = "." + "dev" + ".vars"
@@ -214,7 +215,7 @@ for path in iter_files():
         text = open(path, encoding="utf-8", errors="replace").read()
     except OSError:
         continue
-    if NEEDLE_ADMIN in text:
+    if NEEDLE_ADMIN in text or NEEDLE_ADMIN_LEGACY in text:
         errors.append("%s: private admin endpoint" % rel)
     if NEEDLE_ADMIN_FLAG in text:
         errors.append("%s: distribution admin flag" % rel)

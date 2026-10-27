@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PRODUCT_NAME="UltraVox"
-BUNDLE_ID="com.imploselabs.ultravox"
+BUNDLE_ID="com.paretocybernetics.ultravox"
 TEAM_ID="T63VT9UAY2"
 EXPECTED_VERSION="${EXPECTED_VERSION:-}"
 APP_PATH="${1:-}"
@@ -20,6 +20,15 @@ INFO_PLIST="$APP_PATH/Contents/Info.plist"
 EXECUTABLE="$APP_PATH/Contents/MacOS/ultravox"
 [[ -f "$INFO_PLIST" ]] || { echo "Missing Info.plist" >&2; exit 1; }
 [[ -x "$EXECUTABLE" ]] || { echo "Missing executable: $EXECUTABLE" >&2; exit 1; }
+# Fail closed for stale bundles reused by SKIP_BUILD; no music helper is shipped.
+for retired_path in \
+  "$APP_PATH/Contents/Resources/mediaremote" \
+  "$APP_PATH/Contents/Frameworks/MediaRemoteAdapter.framework"; do
+  if [[ -e "$retired_path" || -L "$retired_path" ]]; then
+    echo "Retired music helper must not be bundled: $retired_path" >&2
+    exit 1
+  fi
+done
 SCREEN_CAPTURE_USAGE="$(/usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "$INFO_PLIST" 2>/dev/null || true)"
 [[ "$SCREEN_CAPTURE_USAGE" == *"UltraVox"* ]] || {
   echo "Screen Recording usage description must identify UltraVox." >&2

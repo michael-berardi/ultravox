@@ -1,7 +1,7 @@
 {
   "name": "ultravox-desktop",
   "private": true,
-  "version": "0.11.0",
+  "version": "0.13.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -21,7 +21,7 @@
     "@tauri-apps/plugin-shell": "^2.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "thinking-orbs": "^0.1.1"
+    "voice-glow": "0.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.7",

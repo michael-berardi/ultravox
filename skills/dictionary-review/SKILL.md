@@ -9,9 +9,9 @@ description: >
   finishing.
 category: engineering
 version: 1.0.0
-author: Implose Cybernetics
+author: Pareto Cybernetics
 tags: [ultravox, dictionary, transcription, vocabulary, local]
-trigger_keywords: [ultravox dictionary, dictionary review, transcription vocabulary, custom dictionary update, fix transcription names]
+trigger_keywords: [ultravox dictionary, update my ultravox dictionary, ultravox keeps mishearing, fix my dictation, dictionary review, transcription vocabulary, custom dictionary update, fix transcription names]
 ---
 
 # UltraVox dictionary review
@@ -134,7 +134,8 @@ Canonical-only term
 
 - Structural: parse `settings.toml` with a TOML parser; confirm the entry,
   alias, and byte limits hold.
-- Behavioral (preferred): locate `ultravox-control` (PATH, an
+- Behavioral (preferred): locate `ultravox-control` (installed app first:
+  `/Applications/UltraVox.app/Contents/MacOS/ultravox-control`, then PATH, an
   `UltraVox-macos-*.zip` payload's `bin/` directory, or a repository
   `target/release/` build), then for each new alias run:
 

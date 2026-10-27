@@ -1,8 +1,8 @@
 [package]
 name = "ultravox"
-version = "0.11.0"
+version = "0.13.3"
 description = "UltraVox — real-time audio transcription with on-device models"
-authors = ["Implose Cybernetics"]
+authors = ["Pareto Cybernetics"]
 license = "MIT"
 repository = "https://github.com/michael-berardi/ultravox"
 edition = "2021"
@@ -41,14 +41,13 @@ libc = "0.2"
 tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
-# Implose distribution: revocable device licenses and signed requests.
+# Pareto distribution: revocable device licenses and signed requests.
 base64 = "0.22"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ultravox-macos-bridge = { path = "../../../crates/ultravox-macos-bridge" }
-ultra-media-remote = { git = "https://github.com/michael-berardi/ultra-media-remote", rev = "a3bd35d83a9c117616840dd74efbff754c276753" }
 window-vibrancy = "0.6"
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 
@@ -69,4 +68,6 @@ tempfile = "3"
 default = ["custom-protocol"]
 cli = []
 mirror-debug = []
+# Private installed-candidate diagnostics; excluded from public consumer builds.
+local-qa = []
 custom-protocol = ["tauri/custom-protocol"]

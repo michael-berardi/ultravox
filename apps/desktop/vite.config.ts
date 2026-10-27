@@ -1,6 +1,9 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { readFileSync } from "node:fs";
+
+const appVersion = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf8")).version as string;
 
 // The Pro module is closed source: `@pro` points at `src/pro-stub` by default and at
 // the open-source stand-in when ULTRAVOX_OPEN_SOURCE=1 (the export script
@@ -17,6 +20,7 @@ export default defineConfig(async ({ mode }) => ({
     resolveId(id: string) { if (/(?:^|\/)nativeMirror(?:\.ts)?$/.test(id)) return '\0consumer-native-adapter'; },
     load(id: string) { if (id === '\0consumer-native-adapter') return 'export const installNativeMirror = () => {}; export const nativeMirrorRequested = () => false; export const wrapIpcForMirror = (transport) => transport; export const MIRROR_PRO_EVENT = "";'; },
   }])],
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   clearScreen: false,
   server: {
     port: 1420,

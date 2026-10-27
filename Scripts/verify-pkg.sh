@@ -4,7 +4,7 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="UltraVox"
-BUNDLE_ID="com.imploselabs.ultravox"
+BUNDLE_ID="com.paretocybernetics.ultravox"
 TEAM_ID="T63VT9UAY2"
 PKG_PATH="${1:-}"
 INSTALL_MODE="${2:-}"
@@ -51,12 +51,33 @@ INSTALL_LOCATION="$(/usr/bin/xmllint --xpath 'string(/pkg-info/@install-location
   echo "Package install location mismatch: ${INSTALL_LOCATION:-<missing>}" >&2
   exit 1
 }
+# Top-level relocatable=false alone is insufficient: a <relocate><bundle>
+# entry still allows Installer to find/update a same-ID stray application.
+RELOCATE_COUNT="$(/usr/bin/xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$PACKAGE_INFO")"
+RELOCATABLE="$(/usr/bin/xmllint --xpath 'string(/pkg-info/@relocatable)' "$PACKAGE_INFO")"
+[[ "$RELOCATE_COUNT" == "0" && "$RELOCATABLE" == "false" ]] || {
+  echo 'Package permits bundle relocation; canonical /Applications install is required.' >&2
+  exit 1
+}
 if [[ -n "$EXPECTED_VERSION" && "$PKG_VERSION" != "$EXPECTED_VERSION" ]]; then
   echo "Package version mismatch: $PKG_VERSION (expected $EXPECTED_VERSION)." >&2
   exit 1
 fi
 
 pkgutil --payload-files "$PKG_PATH" > "$PAYLOAD_LIST"
+# ._ payload entries are how a pkg carries extended attributes (com.apple.provenance cannot be
+# removed); Installer restores them as attributes, not files. Modes are what users need.
+BOM_FILE="$(find "$TMP_DIR/expanded" -maxdepth 2 -name Bom | head -1)"
+if [[ -z "$BOM_FILE" ]]; then
+  echo "Package has no Bom to check file modes." >&2
+  exit 1
+fi
+UNREADABLE="$(lsbom -p Mf "$BOM_FILE" | awk '$2 ~ /^\.\/UltraVox\.app/ && ($1 ~ /^d/ && substr($1,8,3) != "r-x" || $1 ~ /^-/ && substr($1,8,1) != "r")' | head -5)"
+if [[ -n "$UNREADABLE" ]]; then
+  echo "Package payload is not readable by every user (folders must be 0755, files 0644/0755):" >&2
+  echo "$UNREADABLE" >&2
+  exit 1
+fi
 grep -Eq '^\./UltraVox\.app/Contents/MacOS/ultravox$' "$PAYLOAD_LIST" || {
   echo "Package payload does not contain /Applications/UltraVox.app." >&2
   exit 1

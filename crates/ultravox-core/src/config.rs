@@ -45,7 +45,7 @@ impl Default for Language {
     }
 }
 
-const CURRENT_CONFIG_VERSION: u32 = 5;
+const CURRENT_CONFIG_VERSION: u32 = 6;
 
 /// Top-level application settings persisted across launches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,10 +105,6 @@ pub struct AppConfig {
     pub model_language: String,
     #[serde(default = "default_theme")]
     pub theme: String,
-    #[serde(default = "default_media_panel_enabled")]
-    pub media_panel_enabled: bool,
-    #[serde(default = "default_reactive_visuals_enabled")]
-    pub reactive_visuals_enabled: bool,
     /// Show the Meeting mode secondary action (Pro feature surface).
     #[serde(default = "default_show_meeting_mode")]
     pub show_meeting_mode: bool,
@@ -133,13 +129,6 @@ fn default_meeting_key_combination() -> String {
 }
 fn default_meeting_detection_enabled() -> bool {
     true
-}
-
-fn default_media_panel_enabled() -> bool {
-    false
-}
-fn default_reactive_visuals_enabled() -> bool {
-    false
 }
 
 fn default_show_meeting_mode() -> bool {
@@ -191,8 +180,6 @@ impl Default for AppConfig {
             onboarding_completed: false,
             model_language: default_model_language(),
             theme: default_theme(),
-            media_panel_enabled: default_media_panel_enabled(),
-            reactive_visuals_enabled: default_reactive_visuals_enabled(),
             show_meeting_mode: default_show_meeting_mode(),
             show_lecture_mode: default_show_lecture_mode(),
             show_transcribe_url: default_show_transcribe_url(),
@@ -224,11 +211,9 @@ impl ConfigManager {
         };
         let previous_version = config.config_version;
         let migrated = existed && previous_version < CURRENT_CONFIG_VERSION;
-        if existed && previous_version < 2 {
-            // Media and capture-backed reactive visuals became opt-in in v2.
-            config.media_panel_enabled = false;
-            config.reactive_visuals_enabled = false;
-        }
+        // v6 removes the retired player/equalizer preferences. Serde ignores
+        // those legacy keys; migration saves only supported settings, without
+        // changing shortcuts, model selection or granted v5 Retex permissions.
         if existed && previous_version < 5 {
             // v5 moves Retex vault grants behind a native backend chooser. Old
             // renderer-authored paths are deliberately not grandfathered in.
@@ -331,8 +316,6 @@ mod tests {
         assert!(cfg.meeting_detection_enabled);
         assert!(!cfg.onboarding_completed);
         assert_eq!(cfg.model_language, "english");
-        assert!(!cfg.media_panel_enabled);
-        assert!(!cfg.reactive_visuals_enabled);
     }
 
     #[test]
@@ -373,8 +356,6 @@ mod tests {
             onboarding_completed: true,
             model_language: "multilingual".to_string(),
             theme: "winamp".to_string(),
-            media_panel_enabled: false,
-            reactive_visuals_enabled: false,
             show_meeting_mode: false,
             show_lecture_mode: false,
             show_transcribe_url: true,
@@ -417,12 +398,10 @@ model_language = "english"
         .unwrap();
         assert!(parsed.meeting_detection_enabled);
         assert_eq!(parsed.config_version, 0);
-        assert!(!parsed.media_panel_enabled);
-        assert!(!parsed.reactive_visuals_enabled);
     }
 
     #[test]
-    fn pre_opt_in_settings_are_migrated_and_persisted_disabled() {
+    fn retired_player_settings_are_removed_during_migration() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -439,13 +418,11 @@ model_language = "english"
         .unwrap();
 
         let manager = ConfigManager::new(&directory).unwrap();
-        assert!(!manager.get().media_panel_enabled);
-        assert!(!manager.get().reactive_visuals_enabled);
         assert_eq!(manager.get().config_version, CURRENT_CONFIG_VERSION);
         let persisted = std::fs::read_to_string(directory.join(ConfigManager::FILE_NAME)).unwrap();
-        assert!(persisted.contains("config_version = 5"));
-        assert!(persisted.contains("media_panel_enabled = false"));
-        assert!(persisted.contains("reactive_visuals_enabled = false"));
+        assert!(persisted.contains("config_version = 6"));
+        assert!(!persisted.contains("media_panel_enabled"));
+        assert!(!persisted.contains("reactive_visuals_enabled"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -495,10 +472,34 @@ model_language = "english"
         assert_eq!(manager.get().config_version, CURRENT_CONFIG_VERSION);
         assert_eq!(manager.get().meeting_key_combination, "Option+M");
         assert!(!manager.get().meeting_detection_enabled);
-        assert!(manager.get().media_panel_enabled);
-        assert!(manager.get().reactive_visuals_enabled);
         assert!(!manager.get().show_meeting_mode);
         assert!(manager.get().show_lecture_mode);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v5_player_retirement_preserves_recording_and_dictionary_preferences() {
+        let directory =
+            std::env::temp_dir().join(format!("ultravox-config-v6-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(ConfigManager::FILE_NAME),
+            "config_version = 5\nkey_combination = \"Control+J\"\nhold_to_record = true\ntheme = \"crystal\"\nmodel_language = \"multilingual\"\ncustom_dictionary = \"UltraVox = Ultra Box\"\nretex_vault_paths = [\"/granted/vault\"]\nretex_vault_identities = [\"1:2\"]\nretex_dictionary = \"Retex\"\nretex_auto_refresh = true\nmedia_panel_enabled = true\nreactive_visuals_enabled = true\n"
+        ).unwrap();
+        let manager = ConfigManager::new(&directory).unwrap();
+        let cfg = manager.get();
+        assert_eq!(cfg.config_version, 6);
+        assert_eq!(cfg.key_combination, "Control+J");
+        assert!(cfg.hold_to_record);
+        assert_eq!(cfg.theme, "crystal");
+        assert_eq!(cfg.model_language, "multilingual");
+        assert_eq!(cfg.custom_dictionary, "UltraVox = Ultra Box");
+        assert_eq!(cfg.retex_vault_paths, vec![PathBuf::from("/granted/vault")]);
+        assert_eq!(cfg.retex_vault_identities, vec!["1:2".to_string()]);
+        assert_eq!(cfg.retex_dictionary, "Retex");
+        assert!(cfg.retex_auto_refresh);
+        let saved = std::fs::read_to_string(directory.join(ConfigManager::FILE_NAME)).unwrap();
+        assert!(!saved.contains("media_panel_enabled"));
+        assert!(!saved.contains("reactive_visuals_enabled"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

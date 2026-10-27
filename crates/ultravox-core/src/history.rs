@@ -270,6 +270,27 @@ impl RecordingHistory {
         Ok(())
     }
 
+    /// Rewrite stored source-file paths that live under `old_root` so they
+    /// live under `new_root` (the data directory moved). Paths outside
+    /// `old_root` are untouched and the rewrite is idempotent. Returns the
+    /// number of rows changed.
+    pub fn rebase_source_paths(
+        &mut self,
+        old_root: &str,
+        new_root: &str,
+    ) -> Result<usize, HistoryError> {
+        let old_root = old_root.trim_end_matches('/');
+        let new_root = new_root.trim_end_matches('/');
+        let changed = self.conn.execute(
+            "UPDATE recordings
+             SET source_file_url = ?2 || substr(source_file_url, length(?1) + 1)
+             WHERE source_file_url IS NOT NULL
+               AND (source_file_url = ?1 OR substr(source_file_url, 1, length(?1) + 1) = ?1 || '/')",
+            (old_root, new_root),
+        )?;
+        Ok(changed)
+    }
+
     /// Fetch a recording by id.
     pub fn get(&self, id: Uuid) -> Result<Option<RecordingRow>, HistoryError> {
         let mut stmt = self.conn.prepare(
@@ -466,6 +487,46 @@ mod tests {
         let fetched = history.get(row.id).unwrap().unwrap();
         assert_eq!(fetched.file_name, row.file_name);
         assert_eq!(fetched.transcription, row.transcription);
+    }
+
+    #[test]
+    fn rebase_source_paths_moves_only_rows_under_the_old_root() {
+        let mut history = in_memory_history();
+        let mut inside = sample_row();
+        inside.source_file_url = Some("/data/old/recordings/a.wav".to_string());
+        let mut sibling = sample_row();
+        sibling.source_file_url = Some("/data/old-other/recordings/b.wav".to_string());
+        let mut outside = sample_row();
+        outside.source_file_url = Some("/Users/me/Downloads/c.wav".to_string());
+        let none = sample_row();
+        for row in [&inside, &sibling, &outside, &none] {
+            history.insert(row).unwrap();
+        }
+
+        assert_eq!(
+            history
+                .rebase_source_paths("/data/old/", "/data/new")
+                .unwrap(),
+            1
+        );
+        let source = |row: &RecordingRow| history.get(row.id).unwrap().unwrap().source_file_url;
+        assert_eq!(
+            source(&inside).as_deref(),
+            Some("/data/new/recordings/a.wav")
+        );
+        assert_eq!(
+            source(&sibling).as_deref(),
+            Some("/data/old-other/recordings/b.wav")
+        );
+        assert_eq!(source(&outside).as_deref(), Some("/Users/me/Downloads/c.wav"));
+        assert_eq!(source(&none), None);
+        // Re-running after the move is a no-op.
+        assert_eq!(
+            history
+                .rebase_source_paths("/data/old", "/data/new")
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

@@ -1,0 +1,94 @@
+/* The voice light sits behind the recording controls: the shared VoiceBeam
+   rises from the panel's bottom edge across its full width, and a soft halo
+   behind the button follows the same smoothed level. No frame, no inner box. */
+:root .hero { isolation: isolate; overflow: hidden; }
+
+/* One voice effect replaces the old capture/idle pulses, including Crystal's
+   prism. Theme materials, borders and controls otherwise remain unchanged. */
+:root .hero::before,
+:root .hero::after,
+:root .hero .record-button::before,
+:root .hero .record-button::after {
+  content: none !important;
+  animation: none !important;
+}
+:root .hero .record-button { animation: none !important; }
+:root .hero > :not(.recording-surround) { position: relative; z-index: 2; }
+
+:root .hero > .recording-surround {
+  --voice-level: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 420ms ease;
+  contain: layout paint;
+}
+:root .hero > .recording-surround[data-running],
+:root .hero > .recording-surround[data-reduced] {
+  opacity: 1;
+}
+
+/* The beam wraps a transparent surface the size of the whole panel, so the
+   library's light is clipped only by the panel's own rounded corners. */
+.recording-surround > .recording-surround-beam {
+  position: absolute !important;
+  inset: 0;
+}
+.recording-surround-surface {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+
+/* Ambient light behind the controls. It is a gradient, so it has no edge; its
+   strength and size follow the voice level written by the beam driver. Silent
+   it rests dim and small; speech opens it to full strength (never above the
+   gradient's own colors, so no white). */
+.recording-surround-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(125%, 600px);
+  aspect-ratio: 1.15;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--voice-core) 42%, transparent) 0%,
+    color-mix(in srgb, var(--voice-halo) 20%, transparent) 46%,
+    transparent 100%
+  );
+  opacity: calc(0.14 + var(--voice-level) * 0.86);
+  transform: translate(-50%, -50%) scale(calc(0.66 + var(--voice-level) * 0.5));
+  transition: opacity 90ms linear, transform 90ms linear;
+  will-change: opacity, transform;
+}
+:root[data-theme="frutiger-aero"] .recording-surround-halo,
+:root[data-theme="nord-frost"] .recording-surround-halo,
+:root[data-theme="crystal"] .recording-surround-halo {
+  opacity: calc(0.1 + var(--voice-level) * 0.75);
+}
+
+/* Processing: the beam gathers into one travelling light and the halo
+   breathes slowly; no microphone level is invented. */
+.recording-surround[data-phase="processing"] .recording-surround-halo {
+  animation: voice-halo-processing 2.8s ease-in-out infinite;
+}
+@keyframes voice-halo-processing {
+  0%, 100% { opacity: 0.26; transform: translate(-50%, -50%) scale(0.8); }
+  50% { opacity: 0.5; transform: translate(-50%, -50%) scale(0.9); }
+}
+
+/* Reduced motion: a still, soft light while active; nothing moves. */
+@media (prefers-reduced-motion: reduce) {
+  .recording-surround-halo,
+  .recording-surround[data-phase="processing"] .recording-surround-halo {
+    animation: none;
+    transition: none;
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(0.85);
+  }
+}
