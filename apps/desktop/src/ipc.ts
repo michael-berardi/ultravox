@@ -373,9 +373,6 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 export async function installUpdate(info: UpdateInfo): Promise<void> {
   return await invoke("install_update", { info });
 }
-}
-
-}
 
 
 export async function getSettings(): Promise<AppConfig> {

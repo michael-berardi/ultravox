@@ -121,6 +121,7 @@ The sandbox is created at `std::env::temp_dir()/ultravox-mirror-<UUID>` with mod
 
 The debug helper requires an isolated `ULTRAVOX_DATA_DIR` and rejects production overlap. The native debug guard applies to every renderer in that helper. Do not copy production databases, credentials, transcripts or recordings into its sandbox. Approved QA may import a bounded read-only projection of non-sensitive UI preferences; label fabricated meter/history states as synthetic. This is not an OS-level sandbox.
 
+The frontend seeds storage from the isolated helper's primary snapshot, then replaces both mirror `localStorage` and `sessionStorage` with an in-memory map. Distribution access is simulated; theme-material calls are suppressed. Other calls go through the native allowlist. A mirror-only content security policy restricts network/resource access, navigation is confined to the primary origin with exactly `native-mirror=1`, and `window.open` is disabled. The normal app component still renders; the DEV-gated theme and settings harnesses are separate.
 
 ## Consumer-build exclusion
 

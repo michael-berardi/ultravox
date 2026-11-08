@@ -44,40 +44,6 @@ const PERMISSIONS: Array<{ kind: PermissionKind; label: string; copy: string }> 
   { kind: "accessibility", label: "Accessibility (optional)", copy: "Place the transcription in the focused text field." },
   { kind: "screen_recording", label: "Screen Recording (optional)", copy: "Capture meeting system audio with ScreenCaptureKit." },
 ];
-  onDecision,
-}: {
-  onDecision: (enabled: boolean) => Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const decide = async (enabled: boolean) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onDecision(enabled);
-    } catch {
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="compact-modal-backdrop" role="presentation">
-        <span className="eyebrow">Privacy choice</span>
-        <p className="compact-modal-copy">
-          app-install ID, app version, platform, architecture, UTC day, and daily counts
-          of recordings, transcriptions, and model downloads. It never sends transcripts,
-          audio, prompts, recordings, URLs, paths, errors, or hardware identifiers.
-          Identifier rows expire within 34 UTC days; ID-free daily totals within 360 days.
-        </p>
-        <p className="permission-footnote">You can change this later in Settings → Privacy. Declining creates no app-install ID.</p>
-        {error && <p className="settings-error" role="alert">{error}</p>}
-        <div className="compact-modal-actions">
-          <button className="btn" type="button" disabled={busy} onClick={() => void decide(false)}>No thanks</button>
-        </div>
-      </section>
-    </div>
-  );
-}
 function PermissionPanel({
   status,
   busy,
@@ -261,6 +227,7 @@ export default function App() {
     let cancelled = false;
 
     async function load() {
+      const [appStatusResult, settingsResult, migrationResult] = await Promise.allSettled([
         getAppStatus(),
         getSettings(),
         getLegacyMigrationNotice(),
@@ -281,8 +248,6 @@ export default function App() {
         setSettingsConfig(settingsResult.value);
       } else {
         console.error("Failed to preload settings:", settingsResult.reason);
-      }
-      } else {
       }
       if (migrationResult.status === "fulfilled") {
         setMigrationNotice(migrationResult.value);
@@ -389,14 +354,13 @@ export default function App() {
   // "loading" (no status or error yet) must not show the panel.
   const needsPermission = dictationAccess(permissionStatus, permissionError) === "blocked";
   const permissionPanelVisible = needsPermission && !showSettings;
-  }, []);
 
-  const studioActive = mode === "studio" && !showSettings && !needsConsent && !needsPermission;
+  const studioActive = mode === "studio" && !showSettings && !needsPermission;
   useEffect(() => {
     if (isReminderWindow) return;
     const keydown = (event: KeyboardEvent) => {
       // Do not intercept shortcut capture in Settings or any open modal.
-      if (!pro.available || showSettings || needsConsent || needsPermission || studioBlocked || document.querySelector('[role="dialog"]') || event.repeat || event.isComposing) return;
+      if (!pro.available || showSettings || needsPermission || studioBlocked || document.querySelector('[role="dialog"]') || event.repeat || event.isComposing) return;
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.code === "KeyV") {
         event.preventDefault(); event.stopImmediatePropagation();
         if (!pro.unlocked) { void openSettings("pro"); return; }
@@ -405,19 +369,19 @@ export default function App() {
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
-  }, [isReminderWindow, pro, openSettings, showSettings, needsConsent, needsPermission, studioBlocked, mode, closeStudio, openStudio]);
+  }, [isReminderWindow, pro, openSettings, showSettings, needsPermission, studioBlocked, mode, closeStudio, openStudio]);
 
   return (
     <div className="app-shell">
       {!isReminderWindow && (
         <>
-          {permissionError && !needsConsent && !permissionPanelVisible && (
+          {permissionError && !permissionPanelVisible && (
             <div className="settings-error" role="alert">
               {permissionError}{" "}
               <button className="btn" type="button" disabled={permissionBusy} onClick={() => void recheckPermissions()}>Recheck permissions</button>
             </div>
           )}
-          <div className="view-layer" ref={(node) => node?.toggleAttribute("inert", mode === "studio" || showSettings || needsConsent || needsPermission)} hidden={mode === "studio" || showSettings || needsConsent || needsPermission} aria-hidden={mode === "studio" || showSettings || needsConsent || needsPermission}>
+          <div className="view-layer" ref={(node) => node?.toggleAttribute("inert", mode === "studio" || showSettings || needsPermission)} hidden={mode === "studio" || showSettings || needsPermission} aria-hidden={mode === "studio" || showSettings || needsPermission}>
             <MainWindow
               status={status}
               initialRecording={initialRecording}
@@ -434,7 +398,7 @@ export default function App() {
             </div>
           )}
           {settingsConfig && (
-            <div className="view-layer" hidden={!showSettings || needsConsent} aria-hidden={!showSettings || needsConsent}>
+            <div className="view-layer" hidden={!showSettings} aria-hidden={!showSettings}>
               <SettingsPage
                 initialConfig={settingsConfig}
                 initialTab={settingsTab}
@@ -447,9 +411,7 @@ export default function App() {
           )}
         </>
       )}
-      {!isReminderWindow && needsConsent && (
-      )}
-      {!isReminderWindow && !needsConsent && permissionPanelVisible && (
+      {!isReminderWindow && permissionPanelVisible && (
         <PermissionPanel
           status={permissionStatus}
           busy={permissionBusy}

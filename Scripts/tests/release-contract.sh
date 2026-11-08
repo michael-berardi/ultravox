@@ -105,7 +105,7 @@ assert_contains "$PUBLISH_RELEASE" 'Only v0.13.3 bridge activation may be latest
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/lib.rs" 'bridge_guard::intercept'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/bridge_guard.rs" 'Install final'
 assert_not_contains "$ROOT_DIR/README.md" '/releases/latest'
-assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.4'
+assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.5'
 assert_contains "$PUBLISH_RELEASE" 'macos-arm64-recovery'
 assert_contains "$PUBLISH_RELEASE" 'Keep that endpoint pinned to v0.13.3'
 assert_contains "$PUBLISH_RELEASE" 'shasum -a 256 -c'

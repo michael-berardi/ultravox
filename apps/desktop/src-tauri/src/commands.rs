@@ -398,27 +398,6 @@ pub async fn install_update(app: AppHandle, info: UpdateInfo) -> Result<(), Stri
     update::install(app, info).await
 }
 #[tauri::command]
-    state: State<'_, AppState>,
-}
-
-#[tauri::command]
-    state: State<'_, AppState>,
-    enabled: bool,
-    if enabled {
-        let app = state.app.clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-        });
-    }
-    Ok(status)
-}
-
-#[tauri::command]
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-}
-
-#[tauri::command]
 pub fn get_app_info() -> AppInfo {
     AppInfo {
         name: APP_NAME.to_string(),
@@ -842,13 +821,7 @@ pub async fn prepare_model(state: State<'_, AppState>, model_id: String) -> Resu
 
     if model.family == ultravox_core::ModelFamily::Phonon {
         let models_dir = state.models_dir()?;
-        let was_downloaded = ultravox_core::phonon::is_installed(&models_dir);
         let installed = ultravox_core::phonon::install(models_dir.clone()).await;
-        if !was_downloaded {
-                model_downloads_completed: u64::from(installed.is_ok()),
-                model_downloads_failed: u64::from(installed.is_err()),
-            });
-        }
         installed.map_err(|e| e.to_string())?;
         // Phonon-2 is in: load it, and only once it runs drop the English models it replaces.
         tokio::task::spawn_blocking(move || {
@@ -882,13 +855,7 @@ pub async fn prepare_model(state: State<'_, AppState>, model_id: String) -> Resu
             .get()
             .models_directory
             .clone();
-        let was_downloaded = bridge::is_model_downloaded(version, directory.as_deref());
         let prepared = bridge::prepare_model(version, directory.as_deref());
-        if !was_downloaded {
-                model_downloads_completed: u64::from(prepared),
-                model_downloads_failed: u64::from(!prepared),
-            });
-        }
         return Ok(prepared);
     }
 

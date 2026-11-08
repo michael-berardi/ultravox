@@ -2,6 +2,7 @@
 
 Create an empty, private sandbox directory before launching, then launch the mirror-debug executable with `ULTRAVOX_DATA_DIR=/tmp/ultravox-ui-sandbox`. The directory must already exist; the application fails closed if missing or if its canonical path overlaps the production app-data root. Non-mirror builds also honor the override, preserving the CLI convention. Default config/history stores are initialized empty; Voice Studio initializes its empty store on demand. No recordings are copied.
 
+Settings, history, recordings, model defaults, update preferences and Voice Studio all resolve under that root. Use a fresh directory, not copied production settings or symlinked contents. Mirror builds skip single-instance registration, hotkeys, voice IPC, transcription warmup, Retex refresh and tray setup. All renderer invokes use the mirror allowlist, denying capture, media control/polling and update checks even from the main renderer.
 
 The mirror control socket is `<ULTRAVOX_DATA_DIR>/mirror-control/mirror.sock`, NOT `~/.ultravox/mirror.sock`; clients must connect to the sandbox endpoint. Normal exit removes only the endpoint this instance successfully bound. Mirror close does not delete the app's data root.
 

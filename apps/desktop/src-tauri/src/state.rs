@@ -405,6 +405,13 @@ pub(crate) fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(override_dir.unwrap_or(production))
 }
 
+fn cleanup_old_state(dir: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join("app-telemetry.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 impl AppState {
     /// Why replacing the app right now would lose the user's work, if it would.
     /// Updates wait for `None`: a relaunch mid-recording drops the audio.
@@ -427,6 +434,9 @@ impl AppState {
     /// Initialize the state from the Tauri app handle.
     pub fn new(app: AppHandle) -> Result<Self, String> {
         let app_dir = data_dir(&app)?;
+        if let Err(error) = cleanup_old_state(&app_dir) {
+            eprintln!("Could not remove obsolete local state file: {error}");
+        }
         let config = ConfigManager::new(&app_dir).map_err(|e| e.to_string())?;
         let history = RecordingHistory::new(app_dir.clone()).map_err(|e| e.to_string())?;
         let models_dir = config
@@ -450,11 +460,6 @@ impl AppState {
             audio: AsyncMutex::new(CpalAudioBackend::new()),
             retex_scan_cancel: Mutex::new(None),
         })
-    }
-        let app = self.app.clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-        });
     }
 
     /// Path to the configured directory for cached model files.
@@ -964,8 +969,6 @@ impl AppState {
         self.clear_pending_meeting_detection().await;
         crate::close_meeting_reminder(&self.app);
         self.emit_recording_started(&recording)?;
-            recordings_started: 1,
-        });
         Ok(id.to_string())
     }
 
@@ -999,8 +1002,7 @@ impl AppState {
                     .map_err(|emit_error| {
                         format!("{error}; failed to notify recording stop: {emit_error}")
                     })?;
-                    recordings_failed: 1,
-                });
+
                 return Err(error.to_string());
             }
         };
@@ -1037,8 +1039,6 @@ impl AppState {
             self.emit_recording_added(&row)?;
             self.emit_recording_stopped(&recording)?;
         }
-            recordings_completed: 1,
-        });
 
         let app = self.app.clone();
         let recording_for_task = recording.clone();
@@ -1709,8 +1709,6 @@ impl AppState {
                             row.transcription.clone(),
                             Some(language.clone()),
                         )?;
-                            transcriptions_failed: 1,
-                        });
                         return Err(row.transcription);
                     }
                 }
@@ -1720,8 +1718,6 @@ impl AppState {
                     final_text.clone(),
                     Some(language.clone()),
                 )?;
-                    transcriptions_completed: 1,
-                });
 
                 // Auto-copy to the system clipboard if enabled.
                 if auto_copy {
@@ -1797,8 +1793,6 @@ impl AppState {
                     failure_text.clone(),
                     Some(language.clone()),
                 )?;
-                    transcriptions_failed: 1,
-                });
                 #[cfg(target_os = "macos")]
                 {
                     bridge::set_indicator_state("failed");
@@ -1980,5 +1974,18 @@ mod tests {
             result.unwrap_err().is_cancelled(),
             "expected the task to be cancelled, not panic"
         );
+    }
+}
+
+#[cfg(test)]
+mod old_state_cleanup_tests {
+    #[test]
+    fn removes_old_state_and_accepts_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(concat!("app-", "telemetry.json"));
+        std::fs::write(&path, b"old state").unwrap();
+        super::cleanup_old_state(dir.path()).unwrap();
+        assert!(!path.exists());
+        super::cleanup_old_state(dir.path()).unwrap();
     }
 }

@@ -20,7 +20,6 @@ export const nativeMirrorRequested = () => import.meta.env.VITE_MIRROR_DEBUG ===
 // non-configurable, so IPC interception happens at the app's own ipc.ts
 // choke point via wrapIpcForMirror, not by patching native internals.
 const SIMULATED_LICENSE = { active: true, configured: true, plan: 'SIMULATION', label: 'SIMULATION', licenseState: 'active', offline: true };
-// consent flow is simulated as permanently declined instead of blocking the UI.
 // Mirror sessions must never touch real TCC permission state; the app UI is
 // exercised with granted permissions instead.
 const SIMULATED_PERMISSIONS = { microphone: 'granted', accessibility: 'granted', screen_recording: 'granted' };
@@ -33,6 +32,7 @@ const SIMULATED: Record<string, unknown> = {
   get_legacy_migration_notice: null,
   request_permission: SIMULATED_PERMISSIONS,
 };
+const SUPPRESSED = new Set(['set_theme_material']);
 let mirrorRoute: ((cmd: string, args: any, transport: InvokeFn) => Promise<any>) | null = null;
 
 export function wrapIpcForMirror(transport: InvokeFn): InvokeFn {

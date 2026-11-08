@@ -990,36 +990,11 @@ function UpdateSettings() {
 }
 
 function PrivacySettings({ config, onChange }: SettingsSectionProps) {
-  const [privacyMessage, setPrivacyMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-      })
-      .catch((error) => {
-      });
-    return () => { cancelled = true; };
-  }, []);
-    try {
-    } catch (error) {
-      const prefix = enabled
-      setPrivacyMessage(`${prefix}: ${String(error)}`);
-    }
-  };
-
-
   return (
     <div className="settings-group" role="tabpanel" id="panel-privacy" aria-labelledby="tab-privacy">
       <div className="settings-card">
         <h3>Privacy</h3>
-        <p className="description">
-          app-install ID, coarse platform details, and daily feature counts—never transcripts,
-          audio, prompts, URLs, paths, errors, or hardware identifiers. Identifier rows expire
-          within 34 UTC days; ID-free daily totals within 360 days.
-        </p>
-        <ToggleRow
-          description="You can disable this at any time; disabling clears the install identifier and queued events."
-        />
-        {privacyMessage && <p className="settings-error" role="alert">{privacyMessage}</p>}
+        <p className="description">UltraVox sends no telemetry or usage data.</p>
       </div>
       <div className="settings-card">
         <h3>Meeting detection</h3>

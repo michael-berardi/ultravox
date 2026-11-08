@@ -78,7 +78,7 @@ bulk transcript text into your report.
 2. Check each candidate against these recurring error classes:
    - brand casing (`overseer` → `OverSeer`)
    - split compounds (`open router` → `OpenRouter`, `Ultra Term` → `UltraTerm`)
-   - name spelling variants (`Katharina`/`Katerina` → `Dana`)
+   - name spelling variants (`Jon`/`Jonn` → `John`)
    - phonetic garbles (`retext` → `Retex`, `steak pie` → `Speak Pi`,
      `deep sea carnets` → `DeepSeek Harness`)
    - spoken-form model numbers (`GLM53`, `GLM five point three` → `GLM 5.3`)

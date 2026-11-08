@@ -51,11 +51,13 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 pub use commands::{
     bridge_version, check_for_update, copy_to_clipboard, delete_recording, dictionary_skill_info,
     export_recording, forward_voice_trigger, frontmost_app, get_app_info, get_app_status,
+    get_audio_devices, get_audio_input_config, get_caret_position,
     get_download_progress, get_downloads, get_input_level, get_model_catalog,
     get_permission_status, get_recording, get_settings, get_shortcut_settings,
     get_update_preferences, hide_indicator, import_file, import_url, install_update,
     is_model_downloaded, list_recordings, open_permission_settings, paste_text, prepare_model,
-    set_retex_auto_refresh, set_settings, set_shortcut_settings, set_update_preferences,
+    report_frontend_error, request_permission, retry_transcription,
+    reveal_dictionary_skill, revoke_retex_vault, search_recordings, set_retex_auto_refresh, set_settings, set_shortcut_settings, set_update_preferences,
     show_indicator, start_download, start_key_combination_hotkey, start_modifier_hotkey,
     start_recording, stop_key_combination_hotkey, stop_modifier_hotkey, stop_recording,
     transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion, CaretPosition,
@@ -551,13 +553,6 @@ pub fn run() {
             mirror::start(app.handle().clone()).map_err(std::io::Error::other)?;
             #[cfg(not(feature = "mirror-debug"))]
             {
-                tauri::async_runtime::spawn(async move {
-                    {
-                    }
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
-                    }
-                });
                 app.state::<AppState>().warm_transcription_model();
                 pro_api::retex::start_retex_auto_refresh(app.handle().clone());
                 pro_api::start_entitlement_refresh(app.handle().clone());
