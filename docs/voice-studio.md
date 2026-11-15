@@ -68,7 +68,7 @@ Compare the printed transcription with the sentence; use `v3` for multilingual t
 
 ## Local data and privacy
 
-The desktop uses its app data directory (normally `~/Library/Application Support/com.paretocybernetics.ultravox/` on macOS), honoring `ULTRAVOX_DATA_DIR`. The CLI override and distinct default are described above.
+The desktop uses the data directory for its application identifier, honoring `ULTRAVOX_DATA_DIR`. The CLI override and distinct default are described above.
 
 ```text
 <data-dir>/voice-studio/
@@ -91,24 +91,6 @@ Cloning and synthesis run on-device; their audio, text, and embeddings are not u
 - **Too-short/silent audio.** `reference audio must contain at least one second of usable audio` means the prepared reference is below the minimum after quiet-edge trimming. Choose a longer, clearly spoken recording; adding silence does not help. Missing or malformed recordings may be omitted from the candidate list.
 - **Model download/load failure.** Read the displayed error, check network access to the model host and available disk space, then retry. Do not delete production voice data to fix a model cache problem. A permanently false `models_ready` flag alone is not a failure. The progress display gives elapsed time, not a completion estimate.
 
-## Implementation cross-checks
+## Source availability
 
-These references cover the guide, README feature copy, and bundled/operator skills; advice about consent, backups, and quality is operator guidance, not a claim of enforcement.
-
-| Claims | Source (repository-relative, line numbers at review) |
-|---|---|
-| Pro/macOS guard; ten-second cap; accepted languages | `apps/desktop/src-tauri/src/voice_studio.rs:20`, `:37–65` |
-| UI entry; tabs, fields, defaults, actions, local session results | `apps/desktop/src/pages/MainWindow.tsx:733`; `apps/desktop/src/pages/VoiceStudioPage.tsx:11–41`, `:93–133` |
-| CLI defaults, syntax, plain-text output, INT8, copy/overwrite, source exclusivity | `apps/desktop/src-tauri/src/bin/ultravox-control.rs:23–27`, `:872–943` |
-| Roundtrip transcription v2/v3 | `apps/desktop/src-tauri/src/bin/ultravox-control.rs:782–805`; `crates/ultravox-macos-bridge/src/lib.rs:382–389` |
-| Desktop data override/default | `apps/desktop/src-tauri/src/state.rs:324–339`; app identifier in `apps/desktop/src-tauri/tauri.conf.json:4` |
-| Local metadata, embeddings, atomic persistence, process-local locks | `crates/ultravox-core/src/voice_studio.rs:13–25`, `:51–75`, `:109–147`; `apps/desktop/src-tauri/src/voice_studio.rs:22–23` |
-| Create/reference paths, local inference, failure cleanup, deletion boundaries | `apps/desktop/src-tauri/src/voice_studio.rs:77–80`, `:114–123`, `:133–221`; `crates/ultravox-core/src/voice_studio.rs:109–124` |
-| Outputs and newest-50 disk retention; unknown readiness | `apps/desktop/src-tauri/src/voice_studio.rs:125–132`, `:223–290` |
-| WAV formats/extensible; candidate selection; trimming, resampling, minimum | `crates/ultravox-core/src/voice_studio.rs:173–268`, `:320–437` |
-| FluidAudio local clone/synthesis, separate encoder, downloads, errors | `crates/ultravox-macos-bridge/native/UltraVoxMacOSBridge/Sources/UltraVoxMacOSBridge/UltraVoxMacOSBridge.swift:2940–3003` |
-| 24 kHz mono/10 seconds | `crates/ultravox-macos-bridge/src/lib.rs:1256`; upstream `Documentation/TTS/PocketTTS.md:135`, `:180` |
-| Approximate model size, model source, English-trained prompts, license context | upstream `Documentation/TTS/PocketTTS.md:50–83`, `:339–343`, `:399–402` |
-| Mirror controller socket override/fallback | `Scripts/mirror-control:121–122` |
-
-Here “upstream” refers to the inspected FluidAudio checkout under `crates/ultravox-macos-bridge/native/UltraVoxMacOSBridge/.build/checkouts/FluidAudio/`; it is a build dependency, not a tracked UltraVox document. Size figures are approximate upstream planning information, not a measured download guarantee.
+The public repository does not contain the Pro implementation. This guide describes the official Pro build; its cloning, synthesis, and retention behavior cannot be verified from the public source alone.

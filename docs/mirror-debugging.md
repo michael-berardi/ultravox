@@ -1,5 +1,7 @@
 # Native mirror debugging
 
+The `Scripts/mirror-control` helper used below is not included in this public repository. These instructions are not a runnable public-source setup guide.
+
 UltraVox has a private, macOS native mirror for inspecting the real app frontend in a hidden WKWebView. It is not a browser mock. Run the debug helper in isolated storage; its primary window is a QA window, not the installed app. Never navigate or alter the operator's primary window to obtain evidence.
 
 ## Operator contract

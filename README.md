@@ -1,6 +1,6 @@
 # UltraVox
 
-**Private, on-device transcription for macOS, Windows, and Linux. One product: a free, open-source core and an optional UltraVox Pro license that unlocks Pro features in the official build and funds development.**
+On-device speech-to-text for dictation and audio files on macOS, Windows, and Linux. Download a model once, then transcribe offline. The MIT-licensed core is free; official builds offer optional Pro features.
 
 <p align="center">
   <a href="https://github.com/michael-berardi/ultravox/releases/tag/v0.13.5"><strong>Download UltraVox</strong></a>
@@ -13,18 +13,6 @@
 <p align="center">
   <img src="docs/recorder.png" alt="UltraVox recording panel" width="360" />
 </p>
-
-## Why UltraVox
-
-UltraVox turns speech and media into text without sending recordings to a transcription service. Download a model once, then transcribe microphone recordings, meetings, and system-audio-only lectures locally.
-
-- **On-device transcription** with English and multilingual models.
-- **Global recording shortcuts**, including press-to-toggle and hold-to-record modes.
-- **Media import** for supported URLs and local audio files.
-- **Local history** with search, copy, export, retry, and deletion controls.
-- **Custom dictionary** aliases and conservative custom-term correction in every build, with a bundled [dictionary-review skill](docs/dictionary.md) any AI agent can run locally.
-- **UltraTerm voice handoff** works in every build: when UltraTerm is the frontmost app, the recording shortcut hands push-to-talk voice input to UltraTerm's own voice flow instead of the native mini-recorder.
-- **Pro features** add permissioned, read-only Retex vocabulary scanning, Meeting mode, system-audio-only Lecture mode, macOS Voice Studio for on-device voice cloning and speech generation, and the signature themes.
 
 ## The core is free; Pro is optional
 
@@ -50,14 +38,6 @@ Pro licenses are bought and activated in **Settings → Pro**, which also offers
 ## Voice Studio
 
 Voice Studio on macOS, part of Pro, is powered by FluidAudio PocketTTS. Create a local voice from dictation recordings or an imported WAV (up to ten seconds of reference audio), then generate 24 kHz mono speech from text using a cloned or built-in voice. Models download on first use; cloning and synthesis run on-device. Clone only voices you have permission to use. See the [Voice Studio guide](docs/voice-studio.md) for language packs, CLI commands, storage, and limitations.
-
-## Recording and themes
-
-The recording panel lights up when recording starts and responds to microphone input. Processing has a distinct animation. The effect stops when the panel is idle or hidden, and respects the system's reduced-motion setting.
-
-Choose a theme in **Settings → Appearance**. Recording controls and status text remain the same across themes.
-
-Audio imports and the transcription CLI accept WAV, OGG/Vorbis, OGG/Opus, and other supported audio formats. Conversion happens locally without changing the original file. Invalid audio or a recording with no recognized speech returns a clear error.
 
 ## Requirements
 
@@ -113,7 +93,7 @@ No secrets, signing identities, or service credentials belong in the public repo
 
 ## Build from source
 
-Prerequisites: Node.js 22, pnpm 10, Rust, CMake, libomp, and Xcode Command Line Tools.
+The commands below target macOS with Homebrew and Xcode Command Line Tools. They require Node.js 22, pnpm 10.27.0, Rust, CMake, and libomp. Windows and Linux need their platform-specific Tauri prerequisites.
 
 ```bash
 git clone --recurse-submodules https://github.com/michael-berardi/ultravox.git
@@ -123,23 +103,19 @@ export PATH="$(brew --prefix node@22)/bin:$PATH"
 npm install --global pnpm@10.27.0
 pnpm install --frozen-lockfile
 
-# Checks and tests
+# Checks and tests (Rust tests require the generated frontend assets)
 pnpm desktop:check
-cargo test --workspace
-pnpm test:all           # cargo tests + desktop tests + release contract
+pnpm --filter ultravox-desktop build
+cargo test --workspace -j4
+pnpm --filter ultravox-desktop test
 
 # Build the open-source app (Pro module not included)
-pnpm --filter ultravox-desktop tauri build --no-default-features --features custom-protocol
-
-# Export a clean public source tree (drops Pro sources and private tooling)
-pnpm export:oss ./ultravox-open-source
+CARGO_BUILD_JOBS=4 pnpm --filter ultravox-desktop tauri build --no-default-features --features custom-protocol
 ```
 
-The official builds are produced by the signed Pareto release workflow, which additionally links the closed Pro module. A plain local Tauri macOS bundle is ad-hoc signed. Do not install it over the canonical app when testing permission continuity: macOS ties Accessibility, Microphone, and Screen Recording grants to the designated signing requirement. Installed QA candidates must use the stable Developer ID app-only packaging workflow; published builds additionally require notarization.
+Source builds do not include the Pro module. Do not install a locally built app over an official installation when testing macOS permission continuity: signing identity affects permission grants.
 
-### Native visual QA
-
-Use the [native mirror workflow](docs/mirror-debugging.md) to inspect the actual desktop renderer. Meter and state fixtures are synthetic tests, not proof of microphone capture or visible animation performance. Verify recording and transcription separately in the installed app.
+`pnpm test:all` currently includes a release contract that requires a publishing script absent from this public repository. Use the separate checks above for public-source contributions.
 
 ## Architecture
 

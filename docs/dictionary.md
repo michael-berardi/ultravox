@@ -1,6 +1,6 @@
 # Custom dictionary and Retex vocabulary
 
-UltraVox 0.10.0 applies a compiled, in-memory dictionary after local transcription and before history, clipboard copy, or paste. On Whisper platforms, canonical terms are also appended to the existing initial prompt. No dictionary feature calls a transcription service.
+UltraVox applies a compiled, in-memory dictionary after local transcription and before history, clipboard copy, or paste. On Whisper platforms, canonical terms are also appended to the existing initial prompt. No dictionary feature calls a transcription service.
 
 ## Manual dictionary (core)
 
@@ -19,11 +19,11 @@ The parser bounds source size, entry count, aliases per entry, and field length.
 
 ## Agent dictionary review skill (core)
 
-The quickest way to fix recurring mistakes: ask your agent to "update my UltraVox dictionary" and give it the skill below. It finds the words UltraVox keeps mishearing, adds safe corrections, and proves each one works.
+To review recurring mistakes, give the skill below to an agent configured for local-only processing. Review its proposed corrections before applying them.
 
 UltraVox bundles an agent skill at `skills/dictionary-review/SKILL.md` in the repository and inside every install at `Resources/skills/dictionary-review/SKILL.md`. **Settings → Dictionary → Agent dictionary review** reveals the file or copies its contents; UltraVox never installs anything into an agent on its own.
 
-Give the file to any AI agent and it will: snapshot the local database read-only into a scratch directory, analyze completed transcripts for recurring mis-transcriptions, refuse common-word aliases, apply verified entries to `custom_dictionary` only (quitting and relaunching the app around the edit), verify every correction and negative control with `ultravox-control dictionary-apply`, and report additions, flagged candidates, and refusals. All processing stays on the device.
+The skill instructs the agent to: snapshot the local database read-only into a scratch directory, analyze completed transcripts for recurring mis-transcriptions, refuse common-word aliases, apply verified entries to `custom_dictionary` only (quitting and relaunching the app around the edit), verify every correction and negative control with `ultravox-control dictionary-apply`, and report additions, flagged candidates, and refusals. The skill cannot enforce an agent’s privacy settings. A hosted agent may transmit supplied transcripts; use a local agent if transcripts must stay on-device.
 
 ## Retex vocabulary (Pro, macOS)
 
