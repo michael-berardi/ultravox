@@ -45,7 +45,11 @@ test('startup never downloads a model on its own', () => {
   const setup = readFileSync(join(desktop, 'src-tauri', 'src', 'lib.rs'), 'utf8');
   const startup = setup.slice(setup.indexOf('.setup(|app|'));
   assert.ok(startup.length > 0, 'Tauri setup block not found');
-  assert.ok(!startup.includes('warm_transcription_model'), 'startup must not auto-download models');
+  assert.ok(!/warm_transcription_model\(\s*\)/.test(startup), 'warm-up must state whether it may download');
+  assert.ok(!/warm_transcription_model\(\s*true\s*\)/.test(startup), 'startup must not auto-download models');
+  const state = readFileSync(join(desktop, 'src-tauri', 'src', 'state.rs'), 'utf8');
+  assert.ok(/if allow_download && english && !ultravox_core::phonon::is_installed/.test(state),
+    'Phonon-2 install must be gated on allow_download');
 });
 
 test('shipped UI contains no third-party CDN fonts or scripts', () => {

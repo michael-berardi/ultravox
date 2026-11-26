@@ -734,7 +734,7 @@ pub async fn set_settings(state: State<'_, AppState>, mut config: AppConfig) -> 
             DownloadManager::with_models_dir(models_dir);
     }
     if selected_model_changed {
-        state.warm_transcription_model();
+        state.warm_transcription_model(true);
     }
     state.emit_settings_changed(&config)?;
     Ok(())
