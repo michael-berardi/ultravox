@@ -1167,6 +1167,7 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
     let mut download = tokio::process::Command::new(&yt_dlp);
     download
         .arg("--no-playlist")
+        .arg("--no-cache-dir")
         .arg("--newline")
         .arg("--max-filesize")
         .arg("2G")

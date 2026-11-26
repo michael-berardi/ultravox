@@ -266,6 +266,7 @@ impl DownloadManager {
         let part_path = final_path.with_extension("part");
         if let Some(parent) = part_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
+            crate::private_fs::protect_dir(parent)?;
         }
 
         let mut file = tokio::fs::File::create(&part_path).await?;

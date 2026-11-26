@@ -130,7 +130,8 @@ export function createUpdater(deps: UpdaterDeps, options = { checkEveryMs: CHECK
           checkAutomatically: preferences.check_automatically,
         });
       } catch (cause) {
-        set({ preferenceError: `Could not read the update preference: ${String(cause)}` });
+        // An unreadable preference file may hold an opt-out: fail closed until the user chooses again.
+        set({ checkAutomatically: false, preferenceError: `Could not read the update preference: ${String(cause)}` });
       }
       await check();
       schedule();

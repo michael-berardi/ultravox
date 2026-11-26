@@ -201,7 +201,9 @@ impl ConfigManager {
     pub fn new(app_dir: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let app_dir = app_dir.as_ref();
         std::fs::create_dir_all(app_dir)?;
-        crate::private_fs::protect_dir(app_dir)?;
+        if std::env::var_os("ULTRAVOX_DATA_DIR").is_none() {
+            crate::private_fs::protect_dir(app_dir)?;
+        }
         let config_path = app_dir.join(Self::FILE_NAME);
         let existed = config_path.exists();
         let mut config = if existed {

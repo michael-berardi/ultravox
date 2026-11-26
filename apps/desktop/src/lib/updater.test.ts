@@ -41,6 +41,20 @@ function harness(options: {
 }
 
 const tests: [string, () => Promise<void>][] = [
+  ["an unreadable preference file makes no update request", async () => {
+    const checks: unknown[] = [];
+    const broken = createUpdater({
+      check: async () => { checks.push(null as never); return null; },
+      install: async () => {},
+      getPreferences: async () => { throw new Error("parse error"); },
+      setPreferences: async () => {},
+      setTimer: () => 1,
+      clearTimer: () => {},
+    }, { checkEveryMs: 1000, busyRetryMs: 10 });
+    await broken.start();
+    equal(checks.length, 0);
+    equal(broken.getState().checkAutomatically, false);
+  }],
   ["no newer release keeps the button hidden", async () => {
     const { updater } = harness({ candidate: null });
     await updater.start();

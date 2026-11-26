@@ -1370,8 +1370,6 @@ impl AppState {
         Ok(id.to_string())
     }
 
-    /// Startup work for the speech models: finish the upgrade to Phonon-2 (download it for
-    /// English users, remove the English models it replaces) and load the selected model.
     /// Loads the selected, already-downloaded model so the first dictation is fast.
     /// `allow_download` is true only after the user changed the model selection; startup passes
     /// false so launching UltraVox never contacts a model host on its own.

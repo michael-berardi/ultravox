@@ -5,8 +5,8 @@
 
 use std::path::Path;
 
-/// Restrict an existing directory to its owner. Missing paths are left alone
-/// so callers can create them first; symlinks and non-directories are rejected.
+/// Restrict an existing directory to its owner. Missing paths and symlinked
+/// directories (the user's own layout) are left alone; non-directories are rejected.
 pub fn protect_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -17,7 +17,10 @@ pub fn protect_dir(path: &Path) -> std::io::Result<()> {
             return Ok(());
         }
         let metadata = std::fs::symlink_metadata(path)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        if metadata.file_type().is_symlink() {
+            return Ok(());
+        }
+        if !metadata.is_dir() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 format!("not a private directory: {}", path.display()),
@@ -89,6 +92,13 @@ mod tests {
         std::fs::write(&target, "private").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(protect_file(&link).is_err());
+        let dir = root.join("dir");
+        let dir_link = root.join("dir-link");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&dir, &dir_link).unwrap();
+        protect_dir(&dir_link).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o755);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
