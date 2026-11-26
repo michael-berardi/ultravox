@@ -102,6 +102,7 @@ impl DownloadManager {
     /// Create a manager backed by the given models directory.
     pub fn with_models_dir(models_dir: PathBuf) -> Self {
         std::fs::create_dir_all(&models_dir).ok();
+        let _ = crate::private_fs::protect_dir(&models_dir);
         Self {
             models_dir,
             client: reqwest::Client::builder()
@@ -268,6 +269,7 @@ impl DownloadManager {
         }
 
         let mut file = tokio::fs::File::create(&part_path).await?;
+        crate::private_fs::protect_file(&part_path)?;
         let mut received: u64 = 0;
 
         let mut response = response;

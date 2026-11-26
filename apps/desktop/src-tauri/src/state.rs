@@ -931,6 +931,7 @@ impl AppState {
 
         let recordings_dir = self.recordings_dir()?;
         std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+        ultravox_core::private_fs::protect_dir(&recordings_dir).map_err(|e| e.to_string())?;
         let output_path = recordings_dir.join(format!("{id}.wav"));
         let selected_device = self
             .config

@@ -9,15 +9,21 @@ const next: UpdateInfo = { current_version: "0.12.6", latest_version: "0.12.7", 
 
 function harness(options: {
   automatic?: boolean;
+  checkAutomatically?: boolean;
   candidate?: UpdateInfo | null;
   install?: (info: UpdateInfo) => Promise<void>;
   checkFails?: boolean;
 } = {}) {
   const timers: { run: () => void; ms: number }[] = [];
   const installs: UpdateInfo[] = [];
-  let preferences: UpdatePreferences = { automatic: options.automatic ?? false };
+  const checks: UpdateInfo[] = [];
+  let preferences: UpdatePreferences = {
+    automatic: options.automatic ?? false,
+    check_automatically: options.checkAutomatically ?? true,
+  };
   const deps: UpdaterDeps = {
     check: async () => {
+      checks.push(next);
       if (options.checkFails) throw new Error("offline");
       return options.candidate === undefined ? next : options.candidate;
     },
@@ -31,7 +37,7 @@ function harness(options: {
     clearTimer: () => {},
   };
   const updater = createUpdater(deps, { checkEveryMs: 1000, busyRetryMs: 10 });
-  return { updater, timers, installs, prefs: () => preferences };
+  return { updater, timers, installs, checks, prefs: () => preferences };
 }
 
 const tests: [string, () => Promise<void>][] = [
@@ -107,6 +113,23 @@ const tests: [string, () => Promise<void>][] = [
     await updater.start();
     equal(updater.getState().phase, "hidden");
     equal(updater.getState().checkError, "Error: offline");
+  }],
+  ["opting out of checks stops launch and periodic network calls", async () => {
+    const { updater, timers, checks } = harness({ checkAutomatically: false, automatic: true });
+    await updater.start();
+    equal(checks.length, 0, "no launch check");
+    for (const timer of timers) timer.run();
+    await Promise.resolve();
+    equal(checks.length, 0, "no periodic check");
+  }],
+  ["turning checks back on performs a check and preserves the install preference", async () => {
+    const { updater, checks, prefs } = harness({ checkAutomatically: false, automatic: false });
+    await updater.start();
+    equal(checks.length, 0);
+    await updater.setCheckAutomatically(true);
+    equal(checks.length, 1);
+    equal(prefs().automatic, false);
+    equal(prefs().check_automatically, true);
   }],
 ];
 

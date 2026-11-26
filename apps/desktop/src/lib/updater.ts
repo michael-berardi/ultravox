@@ -8,6 +8,7 @@ export type UpdaterState = {
   info: UpdateInfo | null;
   error: string | null;
   automatic: boolean;
+  checkAutomatically: boolean;
   checkError: string | null;
   preferenceError: string | null;
 };
@@ -39,6 +40,7 @@ export function createUpdater(deps: UpdaterDeps, options = { checkEveryMs: CHECK
     info: null,
     error: null,
     automatic: true,
+    checkAutomatically: true,
     checkError: null,
     preferenceError: null,
   };
@@ -82,6 +84,8 @@ export function createUpdater(deps: UpdaterDeps, options = { checkEveryMs: CHECK
   };
 
   const check = async () => {
+    // A saved opt-out stops the launch and four-hour HTTPS requests.
+    if (!state.checkAutomatically) return;
     try {
       const info = await deps.check();
       if (state.phase === "updating") return;
@@ -121,7 +125,10 @@ export function createUpdater(deps: UpdaterDeps, options = { checkEveryMs: CHECK
       started = true;
       try {
         const preferences = await deps.getPreferences();
-        set({ automatic: preferences.automatic });
+        set({
+          automatic: preferences.automatic,
+          checkAutomatically: preferences.check_automatically,
+        });
       } catch (cause) {
         set({ preferenceError: `Could not read the update preference: ${String(cause)}` });
       }
@@ -140,13 +147,34 @@ export function createUpdater(deps: UpdaterDeps, options = { checkEveryMs: CHECK
       const previous = state.automatic;
       set({ automatic: enabled, preferenceError: null });
       try {
-        await deps.setPreferences({ automatic: enabled });
+        await deps.setPreferences({
+          automatic: enabled,
+          check_automatically: state.checkAutomatically,
+        });
       } catch (cause) {
         set({ automatic: previous, preferenceError: `Could not save the update preference: ${String(cause)}` });
         return;
       }
       if (!enabled) clearRetry();
       if (enabled && state.phase === "available") await run(true);
+    },
+    async setCheckAutomatically(enabled: boolean) {
+      const previous = state.checkAutomatically;
+      set({ checkAutomatically: enabled, preferenceError: null });
+      try {
+        await deps.setPreferences({
+          automatic: state.automatic,
+          check_automatically: enabled,
+        });
+      } catch (cause) {
+        set({ checkAutomatically: previous, preferenceError: `Could not save the update preference: ${String(cause)}` });
+        return;
+      }
+      if (!enabled) {
+        clearRetry();
+        return;
+      }
+      if (!previous) await check();
     },
   };
 }

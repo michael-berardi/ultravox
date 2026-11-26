@@ -553,7 +553,8 @@ pub fn run() {
             mirror::start(app.handle().clone()).map_err(std::io::Error::other)?;
             #[cfg(not(feature = "mirror-debug"))]
             {
-                app.state::<AppState>().warm_transcription_model();
+                // Models are downloaded only when the user clicks Download.
+                // Startup must never contact a model host on its own.
                 pro_api::retex::start_retex_auto_refresh(app.handle().clone());
                 pro_api::start_entitlement_refresh(app.handle().clone());
                 voice_ipc::start(app.handle().clone());

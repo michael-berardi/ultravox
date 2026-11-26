@@ -1147,10 +1147,15 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
     tokio::fs::create_dir_all(&recordings_dir)
         .await
         .map_err(|error| format!("could not create recordings directory: {error}"))?;
+    ultravox_core::private_fs::protect_dir(&recordings_dir)
+        .map_err(|error| format!("could not secure recordings directory: {error}"))?;
     let import_dir = recordings_dir.join(".imports").join(id.to_string());
     tokio::fs::create_dir_all(&import_dir)
         .await
         .map_err(|error| format!("could not create media import directory: {error}"))?;
+    ultravox_core::private_fs::protect_dir(&recordings_dir.join(".imports"))
+        .and_then(|_| ultravox_core::private_fs::protect_dir(&import_dir))
+        .map_err(|error| format!("could not secure media import directory: {error}"))?;
     let output_template = import_dir.join("source.%(ext)s");
     let temporary_output_path = import_dir.join("source.wav");
     let output_path = recordings_dir.join(format!("{id}.wav"));
@@ -1290,6 +1295,8 @@ pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<Str
     tokio::fs::create_dir_all(&recordings_dir)
         .await
         .map_err(|error| format!("could not create recordings directory: {error}"))?;
+    ultravox_core::private_fs::protect_dir(&recordings_dir)
+        .map_err(|error| format!("could not secure recordings directory: {error}"))?;
     let output_path = recordings_dir.join(format!("{id}.wav"));
 
     let decode_source = source.clone();

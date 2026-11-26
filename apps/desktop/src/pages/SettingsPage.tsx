@@ -963,11 +963,17 @@ function DictionarySettings({
 }
 
 function UpdateSettings() {
-  const { automatic, phase, info, checkError, preferenceError } = useUpdater();
+  const { automatic, checkAutomatically, phase, info, checkError, preferenceError } = useUpdater();
   return (
     <div className="settings-group" role="tabpanel" id="panel-updates" aria-labelledby="tab-updates">
       <div className="settings-card">
         <h3>Updates</h3>
+        <ToggleRow
+          label="Check for updates"
+          description="At launch and every four hours."
+          checked={checkAutomatically}
+          onChange={(checked) => void updater.setCheckAutomatically(checked)}
+        />
         <ToggleRow
           label="Automatically update"
           description="Never during a recording."

@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 umask 022
+# Package tooling must not phone home.
+export DO_NOT_TRACK=1 HOMEBREW_NO_ANALYTICS=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="UltraVox"

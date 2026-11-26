@@ -62,22 +62,28 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 static INSTALL_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-/// Automatic updates are on unless the user turned them off (Mike 2026-10-08). The preferences file is written only
-/// when the user changes the toggle, so a missing file or a missing field means "never chose": on. A saved `false`
-/// is an explicit off and is kept.
+/// Preferences are written only when the user changes a toggle, so a missing
+/// file or field means "never chose": the shipped behavior stays on. A saved
+/// `false` is an explicit off and is kept.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpdatePreferences {
-    #[serde(default = "automatic_by_default")]
+    #[serde(default = "enabled_by_default")]
     pub automatic: bool,
+    /// Gates the launch/four-hour release check itself, not just installs.
+    #[serde(default = "enabled_by_default")]
+    pub check_automatically: bool,
 }
 
-fn automatic_by_default() -> bool {
+fn enabled_by_default() -> bool {
     true
 }
 
 impl Default for UpdatePreferences {
     fn default() -> Self {
-        Self { automatic: automatic_by_default() }
+        Self {
+            automatic: enabled_by_default(),
+            check_automatically: enabled_by_default(),
+        }
     }
 }
 
@@ -194,13 +200,16 @@ pub fn write_preferences(app: &AppHandle, preferences: &UpdatePreferences) -> Re
         .parent()
         .ok_or_else(|| "Update preference path has no parent directory.".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    ultravox_core::private_fs::protect_dir(parent).map_err(|error| error.to_string())?;
     let temporary = path.with_extension("json.tmp");
     fs::write(
         &temporary,
         serde_json::to_vec(preferences).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    fs::rename(temporary, path).map_err(|error| error.to_string())
+    ultravox_core::private_fs::protect_file(&temporary).map_err(|error| error.to_string())?;
+    fs::rename(temporary, &path).map_err(|error| error.to_string())?;
+    ultravox_core::private_fs::protect_file(&path).map_err(|error| error.to_string())
 }
 
 fn http_client(timeout: Duration) -> Result<reqwest::Client, String> {
@@ -1373,14 +1382,21 @@ mod tests {
     }
 
     #[test]
-    fn automatic_updates_are_on_unless_turned_off() {
-        assert!(UpdatePreferences::default().automatic);
+    fn update_checks_and_installs_are_each_user_controllable() {
+        let defaults = UpdatePreferences::default();
+        assert!(defaults.automatic);
+        assert!(defaults.check_automatically);
         let never_chose: UpdatePreferences = serde_json::from_str("{}").unwrap();
         assert!(never_chose.automatic);
-        let turned_off: UpdatePreferences = serde_json::from_str(r#"{"automatic":false}"#).unwrap();
-        assert!(!turned_off.automatic);
-        let turned_on: UpdatePreferences = serde_json::from_str(r#"{"automatic":true}"#).unwrap();
-        assert!(turned_on.automatic);
+        assert!(never_chose.check_automatically);
+        let checks_off: UpdatePreferences =
+            serde_json::from_str(r#"{"automatic":true,"check_automatically":false}"#).unwrap();
+        assert!(checks_off.automatic);
+        assert!(!checks_off.check_automatically);
+        let installs_off: UpdatePreferences =
+            serde_json::from_str(r#"{"automatic":false,"check_automatically":true}"#).unwrap();
+        assert!(!installs_off.automatic);
+        assert!(installs_off.check_automatically);
     }
 
     #[test]

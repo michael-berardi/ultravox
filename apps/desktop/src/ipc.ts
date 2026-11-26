@@ -110,7 +110,7 @@ export type RetexScanStatus = {
   last_refresh_at: string;
 };
 
-export type UpdatePreferences = { automatic: boolean };
+export type UpdatePreferences = { automatic: boolean; check_automatically: boolean };
 export type UpdateInfo = {
   current_version: string;
   latest_version: string;

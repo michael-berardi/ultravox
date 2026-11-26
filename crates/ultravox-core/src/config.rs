@@ -201,6 +201,7 @@ impl ConfigManager {
     pub fn new(app_dir: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let app_dir = app_dir.as_ref();
         std::fs::create_dir_all(app_dir)?;
+        crate::private_fs::protect_dir(app_dir)?;
         let config_path = app_dir.join(Self::FILE_NAME);
         let existed = config_path.exists();
         let mut config = if existed {
@@ -534,6 +535,10 @@ model_language = "english"
             uuid::Uuid::new_v4()
         ));
         let manager = ConfigManager::new(&directory).unwrap();
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         manager.save().unwrap();
         let settings = directory.join(ConfigManager::FILE_NAME);
         assert_eq!(

@@ -55,6 +55,8 @@ async fn fetch_from(
         .truncate(!resumed)
         .open(part)
         .map_err(|e| format!("open {}: {e}", part.display()))?;
+    crate::private_fs::protect_file(part)
+        .map_err(|e| format!("secure {}: {e}", part.display()))?;
     let mut received = if resumed { have } else { 0 };
     loop {
         let chunk = tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
@@ -85,6 +87,7 @@ pub async fn install(models_dir: PathBuf) -> Result<(), PhononError> {
     }
     set_progress(0.0);
     std::fs::create_dir_all(&models_dir).map_err(|e| dl(format!("create {}: {e}", models_dir.display())))?;
+    crate::private_fs::protect_dir(&models_dir).map_err(|e| dl(e.to_string()))?;
     let part = models_dir.join(format!("{ARCHIVE_NAME}.part"));
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
@@ -144,6 +147,7 @@ pub async fn install(models_dir: PathBuf) -> Result<(), PhononError> {
 fn unpack(archive: &Path, staging: &Path) -> Result<(), PhononError> {
     let _ = std::fs::remove_dir_all(staging);
     std::fs::create_dir_all(staging).map_err(|e| dl(format!("create {}: {e}", staging.display())))?;
+    crate::private_fs::protect_dir(staging).map_err(|e| dl(e.to_string()))?;
     let file = std::fs::File::open(archive).map_err(|e| dl(format!("open {}: {e}", archive.display())))?;
     let decoder = zstd::stream::read::Decoder::new(file).map_err(|e| dl(format!("zstd: {e}")))?;
     let mut tar = tar::Archive::new(decoder);
@@ -162,6 +166,7 @@ fn unpack(archive: &Path, staging: &Path) -> Result<(), PhononError> {
         entry
             .unpack(staging.join(&name))
             .map_err(|e| dl(format!("unpack {}: {e}", name.display())))?;
+        crate::private_fs::protect_file(&staging.join(&name)).map_err(|e| dl(e.to_string()))?;
     }
     let container = std::fs::read(staging.join("model.fermion"))
         .map_err(|e| dl(format!("model.fermion missing from archive: {e}")))?;
