@@ -106,7 +106,7 @@ assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/lib.rs" 'bridge_guard::int
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/bridge_guard.rs" 'Install final'
 assert_not_contains "$ROOT_DIR/README.md" '/releases/latest'
 # Download links name the exact release tag, never legacy latest.
-assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.6'
+assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.7'
 # README Privacy is a short summary (<= 6 non-empty lines) linking PRIVACY.md,
 # which carries the detail; docs/updates.md no longer claims a long README section.
 privacy_lines="$(awk '/^## Privacy$/{f=1;next} /^## /{f=0} f && NF' "$ROOT_DIR/README.md" | wc -l | tr -d ' ')"
@@ -121,11 +121,14 @@ for detail in 'ultravox-update-check' 'ULTRAVOX_NO_UPDATE_CHECK=1' 'software.par
   assert_contains "$ROOT_DIR/PRIVACY.md" "$detail"
 done
 assert_not_contains "$ROOT_DIR/docs/updates.md" 'Disclosure scope'
+# Expired-leftover sweep (PRIVACY.md lifetime table) runs a minute after launch.
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/lib.rs" 'retention::spawn_settled_cleanup'
+assert_contains "$ROOT_DIR/PRIVACY.md" 'how long it lasts'
 assert_not_contains "$ROOT_DIR/docs/updates.md" 'intentionally keeps a longer'
 # Update contract v1 (docs/updates.md): daily anonymous opt-out check, opt-in install.
 assert_contains "$ROOT_DIR/docs/updates.md" '<!-- update-contract: v1 -->'
 assert_contains "$ROOT_DIR/README.md" '(docs/updates.md)'
-assert_contains "$ROOT_DIR/CHANGELOG.md" '## 0.13.6'
+assert_contains "$ROOT_DIR/CHANGELOG.md" '## 0.13.7'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'const CHECK_TIMEOUT: Duration = Duration::from_secs(4);'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'const CHECK_USER_AGENT: &str = "ultravox-update-check";'

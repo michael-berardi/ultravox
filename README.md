@@ -3,7 +3,7 @@
 On-device speech-to-text for dictation and audio files on macOS, Windows, and Linux. Download a model once, then transcribe offline. The MIT-licensed core is free; official builds offer optional Pro features.
 
 <p align="center">
-  <a href="https://github.com/michael-berardi/ultravox/releases/tag/v0.13.6"><strong>Download UltraVox</strong></a>
+  <a href="https://github.com/michael-berardi/ultravox/releases/tag/v0.13.7"><strong>Download UltraVox</strong></a>
   ·
   <a href="#privacy"><strong>Privacy</strong></a>
   ·
@@ -51,7 +51,7 @@ Voice Studio on macOS, part of Pro, is powered by FluidAudio PocketTTS. Create a
 
 ## Install
 
-Download the original-identity [UltraVox v0.13.6 release](https://github.com/michael-berardi/ultravox/releases/tag/v0.13.6) and verify it against the adjacent SHA-256 manifest. This recovery release provides macOS arm64 assets; other platforms must use their latest available platform-specific release.
+Download the original-identity [UltraVox v0.13.7 release](https://github.com/michael-berardi/ultravox/releases/tag/v0.13.7) and verify it against the adjacent SHA-256 manifest. This recovery release provides macOS arm64 assets; other platforms must use their latest available platform-specific release.
 
 GitHub's legacy “latest” endpoint is intentionally pinned to v0.13.3, a temporary identity bridge for 0.13.0–0.13.2 updaters—not the public download for new or original-identity users. **0.12.9 users must download and install v0.13.4 directly**: their updater cannot accept or automatically pass through the pinned bridge. If 0.12.10 installs the bridge with only original-identity data, the bridge opens no stores and requests no permissions; it asks for consent to install a verified original-ID final update, with retry/manual-download choices on failure.
 

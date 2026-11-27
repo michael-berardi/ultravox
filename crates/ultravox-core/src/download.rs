@@ -87,6 +87,19 @@ pub struct DownloadManager {
     cancel_tokens: Arc<Mutex<HashMap<Uuid, oneshot::Sender<()>>>>,
 }
 
+/// The in-flight name for a download: the full file name plus `.part`
+/// (`ggml-base.bin` -> `ggml-base.bin.part`). Appending rather than replacing
+/// the extension keeps the name unique per model, so the launch sweep in the
+/// desktop app can match exact UltraVox-owned names and nothing else.
+pub fn part_path_for(final_path: &Path) -> PathBuf {
+    let mut name = final_path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".part");
+    final_path.with_file_name(name)
+}
+
 impl Default for DownloadManager {
     fn default() -> Self {
         Self::new()
@@ -263,7 +276,7 @@ impl DownloadManager {
             entry.state = DownloadState::Downloading;
         }
 
-        let part_path = final_path.with_extension("part");
+        let part_path = part_path_for(&final_path);
         if let Some(parent) = part_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
             crate::private_fs::protect_dir(parent)?;
@@ -420,6 +433,18 @@ mod tests {
         assert_eq!(
             manager.resolve_destination("model.bin"),
             PathBuf::from("/app/models/model.bin")
+        );
+    }
+
+    #[test]
+    fn part_name_appends_to_the_full_file_name() {
+        assert_eq!(
+            part_path_for(Path::new("/m/ggml-base.bin")),
+            PathBuf::from("/m/ggml-base.bin.part")
+        );
+        assert_eq!(
+            part_path_for(Path::new("/m/fluidaudio-multilingual-v3.bin")),
+            PathBuf::from("/m/fluidaudio-multilingual-v3.bin.part")
         );
     }
 

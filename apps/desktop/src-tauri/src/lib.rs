@@ -20,6 +20,9 @@ mod events;
 #[cfg_attr(feature = "mirror-debug", allow(dead_code))]
 mod legacy_migration;
 mod state;
+// Mirror-debug builds skip the startup services, including this sweep.
+#[cfg_attr(feature = "mirror-debug", allow(dead_code))]
+mod retention;
 mod update;
 
 /// Pro surface: the closed Pro module in official builds, the always-locked
@@ -566,12 +569,9 @@ pub fn run() {
                 // Remove leftover Light/Pro edition bundles from pre-0.11 installs.
                 #[cfg(target_os = "macos")]
                 std::thread::spawn(update::reconcile_legacy_editions);
-                // The previous version's rollback copy is kept only until this
-                // one has run for a minute.
-                std::thread::spawn(|| {
-                    std::thread::sleep(update::ROLLBACK_COPY_GRACE);
-                    update::remove_rollback_copies();
-                });
+                // Once this version has run for a minute: delete the previous
+                // version's rollback copy and expired temporary leftovers.
+                retention::spawn_settled_cleanup(app.handle().clone());
                 setup_tray(app.handle())?;
             }
             eprintln!(

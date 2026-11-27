@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.7 (2026-11-27)
+
+### Privacy
+- A minute after launch, UltraVox now sweeps expired leftovers that a crash or force quit can strand: update staging, Retex output and atomic-write temporaries older than an hour, and interrupted model downloads and development sandboxes older than a day. Only exact UltraVox-owned names are matched in folders you can choose (`ULTRAVOX_DATA_DIR`, a shared models folder), so other files there are never removed.
+- Interrupted model downloads are named after the full model file (`ggml-base.bin.part`), so the sweep can match them exactly. Partials left by earlier builds (`ggml-base.part`) are swept too.
+- [PRIVACY.md](PRIVACY.md) now lists every local write and how long it lasts, including webview storage and how to clear it.
+
 ## 0.13.6 (2026-11-26)
 
 Privacy hardening and update contract v1 ([docs/updates.md](docs/updates.md)).
