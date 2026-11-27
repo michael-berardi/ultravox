@@ -49,16 +49,16 @@ use state::AppState;
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 pub use commands::{
-    bridge_version, check_for_update, copy_to_clipboard, delete_recording, dictionary_skill_info,
+    bridge_version, check_for_update, claim_update_notice, copy_to_clipboard, delete_recording, dictionary_skill_info,
     export_recording, forward_voice_trigger, frontmost_app, get_app_info, get_app_status,
     get_audio_devices, get_audio_input_config, get_caret_position,
     get_download_progress, get_downloads, get_input_level, get_model_catalog,
     get_permission_status, get_recording, get_settings, get_shortcut_settings,
-    get_update_preferences, hide_indicator, import_file, import_url, install_update,
+    get_update_check_status, get_update_preferences, hide_indicator, import_file, import_url, install_update,
     is_model_downloaded, list_recordings, open_permission_settings, paste_text, prepare_model,
     report_frontend_error, request_permission, retry_transcription,
     reveal_dictionary_skill, revoke_retex_vault, search_recordings, set_retex_auto_refresh, set_settings, set_shortcut_settings, set_update_preferences,
-    show_indicator, start_download, start_key_combination_hotkey, start_modifier_hotkey,
+    show_indicator, skip_update_version, start_download, start_key_combination_hotkey, start_modifier_hotkey,
     start_recording, stop_key_combination_hotkey, stop_modifier_hotkey, stop_recording,
     transcribe_file, update_recording, AppInfo, AppStatus, BridgeVersion, CaretPosition,
     ForwardVoiceTriggerStatus, FrontmostAppBundleIdentifier, TranscriptionResult,
@@ -476,8 +476,11 @@ pub fn run() {
                 request_permission,
                 open_permission_settings,
                 get_update_preferences,
+                get_update_check_status,
                 set_update_preferences,
                 check_for_update,
+                claim_update_notice,
+                skip_update_version,
                 install_update,
                 get_caret_position,
                 copy_to_clipboard,
@@ -553,7 +556,8 @@ pub fn run() {
             mirror::start(app.handle().clone()).map_err(std::io::Error::other)?;
             #[cfg(not(feature = "mirror-debug"))]
             {
-                app.state::<AppState>().warm_transcription_model();
+                // Preload an installed model only; startup never downloads one.
+                app.state::<AppState>().warm_transcription_model(false);
                 pro_api::retex::start_retex_auto_refresh(app.handle().clone());
                 pro_api::start_entitlement_refresh(app.handle().clone());
                 voice_ipc::start(app.handle().clone());
@@ -562,6 +566,12 @@ pub fn run() {
                 // Remove leftover Light/Pro edition bundles from pre-0.11 installs.
                 #[cfg(target_os = "macos")]
                 std::thread::spawn(update::reconcile_legacy_editions);
+                // The previous version's rollback copy is kept only until this
+                // one has run for a minute.
+                std::thread::spawn(|| {
+                    std::thread::sleep(update::ROLLBACK_COPY_GRACE);
+                    update::remove_rollback_copies();
+                });
                 setup_tray(app.handle())?;
             }
             eprintln!(

@@ -20,9 +20,12 @@ bash "$EXPORT" "$DEST" >/dev/null
 
 # The export carries the open-source build inputs...
 for rel in README.md LICENSE package.json Cargo.toml \
-  apps/desktop/src-tauri/src/lib.rs Scripts/build-pkg.sh Scripts/verify-app.sh; do
+  apps/desktop/src-tauri/src/lib.rs Scripts/build-pkg.sh Scripts/verify-app.sh \
+  docs/updates.md PRIVACY.md CHANGELOG.md crates/ultravox-core/src/private_fs.rs; do
   [[ -e "$DEST/$rel" ]] || fail "missing from export: $rel"
 done
+grep -Fq '<!-- update-contract: v1 -->' "$DEST/docs/updates.md" || fail "update contract marker missing from export"
+grep -Fq 'pub async fn gated_check(' "$DEST/apps/desktop/src-tauri/src/update.rs" || fail "gated update check missing from export"
 
 # ...and nothing private.
 for rel in apps/desktop/src-tauri/src/pro apps/desktop/src/pro release \
@@ -69,6 +72,23 @@ leak access-key "imp_""live_51AbCdEfGhIjKlMnOpQrSt"
 leak dev-vars '.'"dev.vars"
 leak private-key '-----BEGIN ''PRIVATE KEY'
 leak pro-module "pub mod pro"";"
+
+# The carry gate fails an export that dropped the update contract docs.
+cp -R "$DEST" "${TMP}/carry-dropped"
+rm "${TMP}/carry-dropped/docs/updates.md"
+if bash "$EXPORT" --verify "${TMP}/carry-dropped" >/dev/null 2>&1; then
+  fail "carry gate did not catch a dropped docs/updates.md"
+fi
+
+# Release notes are verified on their own (publish-release.sh activation):
+# the leak gate still runs there, the source-tree carry gate does not.
+mkdir -p "${TMP}/notes-only"
+printf '%s\n' 'UltraVox 0.0.0: user-facing notes.' > "${TMP}/notes-only/release-notes.md"
+bash "$EXPORT" --verify "${TMP}/notes-only" >/dev/null 2>&1 || fail "notes-only verify was rejected"
+printf '%s\n' 'software.paretocybernetics.com/api/'"admin" >> "${TMP}/notes-only/release-notes.md"
+if bash "$EXPORT" --verify "${TMP}/notes-only" >/dev/null 2>&1; then
+  fail "leak gate did not catch a leak in notes-only verify"
+fi
 
 cp -R "$DEST" "${TMP}/leak-excluded"
 mkdir -p "${TMP}/leak-excluded/apps/desktop/src/pro"

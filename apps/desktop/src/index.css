@@ -805,31 +805,94 @@ body {
   gap: var(--space-2);
 }
 
-.update-automatic-choice {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-3);
-  margin: 0 0 var(--space-4);
-  padding: var(--space-3);
+/* Update notice: non-modal and below the header, so recording, history and
+   the header stay usable. Sized for the 450 px main window: all three
+   actions fit one row; Skip leads, Later and Install share the trailing edge. */
+.update-notice {
+  position: fixed;
+  top: 58px;
+  left: var(--space-3);
+  right: var(--space-3);
+  z-index: 62;
+  max-width: 520px;
+  margin: 0 auto;
+  max-height: calc(100vh - 58px - var(--space-3));
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.update-notice h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.update-notes {
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  max-height: 96px;
+  overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-automatic-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.update-notes + .update-automatic-choice {
+  margin-top: 0;
 }
 
 .update-automatic-choice input {
-  margin: 3px 0 0;
+  margin: 1px 0 0;
   accent-color: var(--accent);
 }
 
-.update-automatic-choice span {
-  display: grid;
-  gap: 2px;
+.update-notice-error {
+  margin: var(--space-3) 0 0;
+  color: var(--danger-hover);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-.update-automatic-choice small {
-  color: var(--text-tertiary);
-  line-height: 1.4;
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.update-actions-trailing {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.update-actions .btn {
+  padding-inline: 10px;
 }
 
 /* Onboarding */
@@ -1714,6 +1777,51 @@ body {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* Settings → Updates: version (secondary text) leads, Check Now trails on
+   the same row, aligned with the switches above. */
+.update-version-row {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.update-version {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.update-status {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.update-check-now {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: 600 12px/1.4 var(--font);
+  cursor: pointer;
+}
+
+.update-check-now:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.update-check-now:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.update-check-now:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .settings-error {

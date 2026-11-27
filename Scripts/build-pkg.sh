@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 umask 022
+# Package tooling must not phone home.
+export DO_NOT_TRACK=1 HOMEBREW_NO_ANALYTICS=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="UltraVox"
@@ -98,7 +100,7 @@ SCRIPT
 chmod 755 "${PACKAGE_SCRIPTS_DIR}/preinstall"
 cat > "${PACKAGE_SCRIPTS_DIR}/postinstall" <<'SCRIPT'
 #!/bin/zsh
-# Dana BUG 7: an installed app that only root can read is invisible to the user, Spotlight and UltraTerm.
+# An installed app that only root can read is invisible to the user, Spotlight and UltraTerm.
 set -u
 APP="$2/UltraVox.app"
 [[ -d "$APP" ]] || APP="/Applications/UltraVox.app"

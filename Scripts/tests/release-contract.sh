@@ -105,7 +105,54 @@ assert_contains "$PUBLISH_RELEASE" 'Only v0.13.3 bridge activation may be latest
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/lib.rs" 'bridge_guard::intercept'
 assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/bridge_guard.rs" 'Install final'
 assert_not_contains "$ROOT_DIR/README.md" '/releases/latest'
-assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.5'
+# Download links name the exact release tag, never legacy latest.
+assert_contains "$ROOT_DIR/README.md" '/releases/tag/v0.13.6'
+# README Privacy is a short summary (<= 6 non-empty lines) linking PRIVACY.md,
+# which carries the detail; docs/updates.md no longer claims a long README section.
+privacy_lines="$(awk '/^## Privacy$/{f=1;next} /^## /{f=0} f && NF' "$ROOT_DIR/README.md" | wc -l | tr -d ' ')"
+[[ "$privacy_lines" -ge 1 && "$privacy_lines" -le 6 ]] || {
+  echo "README Privacy must be 1-6 non-empty lines (has $privacy_lines)" >&2; exit 1;
+}
+awk '/^## Privacy$/{f=1;next} /^## /{f=0} f' "$ROOT_DIR/README.md" | grep -Fq '(PRIVACY.md)' || {
+  echo 'README Privacy must link PRIVACY.md' >&2; exit 1;
+}
+for detail in 'ultravox-update-check' 'ULTRAVOX_NO_UPDATE_CHECK=1' 'software.paretocybernetics.com' \
+  'update-check.json' 'update-preferences.json' 'recordings.sqlite' '--no-cache-dir' 'Delete all' 'retex vocabulary'; do
+  assert_contains "$ROOT_DIR/PRIVACY.md" "$detail"
+done
+assert_not_contains "$ROOT_DIR/docs/updates.md" 'Disclosure scope'
+assert_not_contains "$ROOT_DIR/docs/updates.md" 'intentionally keeps a longer'
+# Update contract v1 (docs/updates.md): daily anonymous opt-out check, opt-in install.
+assert_contains "$ROOT_DIR/docs/updates.md" '<!-- update-contract: v1 -->'
+assert_contains "$ROOT_DIR/README.md" '(docs/updates.md)'
+assert_contains "$ROOT_DIR/CHANGELOG.md" '## 0.13.6'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'const CHECK_TIMEOUT: Duration = Duration::from_secs(4);'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'const CHECK_USER_AGENT: &str = "ultravox-update-check";'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'pub const NO_UPDATE_CHECK_ENV: &str = "ULTRAVOX_NO_UPDATE_CHECK";'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/update.rs" 'fn checks_default_on_and_auto_install_defaults_off()'
+assert_contains "$ROOT_DIR/apps/desktop/src-tauri/src/commands.rs" 'update::gated_check('
+assert_contains "$ROOT_DIR/apps/desktop/src/pages/SettingsPage.tsx" 'Check for updates automatically'
+assert_contains "$ROOT_DIR/apps/desktop/src/pages/SettingsPage.tsx" 'Install updates automatically'
+assert_contains "$ROOT_DIR/apps/desktop/src/pages/SettingsPage.tsx" 'Check Now'
+# Update notice (contract §2) and the registered notice/skip commands.
+assert_contains "$ROOT_DIR/apps/desktop/src/components/UpdateNotice.tsx" 'Remind Me Later'
+assert_contains "$ROOT_DIR/apps/desktop/src/components/UpdateNotice.tsx" 'Skip This Version'
+assert_contains "$ROOT_DIR/apps/desktop/src/components/UpdateNotice.tsx" 'Automatically download and install updates in the future'
+for command in get_update_preferences set_update_preferences check_for_update get_update_check_status \
+  claim_update_notice skip_update_version install_update; do
+  grep -Eq "^ *${command},$" "$ROOT_DIR/apps/desktop/src-tauri/src/lib.rs" || {
+    echo "update command not registered: $command" >&2; exit 1;
+  }
+done
+# The public export must carry the privacy and update-contract work.
+for carried in docs/updates.md PRIVACY.md CHANGELOG.md crates/ultravox-core/src/private_fs.rs; do
+  if grep -Fxq -- "$carried" "$EXPORT_MANIFEST"; then
+    echo "release contract: $carried must not be excluded from the open-source export" >&2
+    exit 1
+  fi
+done
+assert_contains "$EXPORT_OSS" 'update-contract: v1'
 assert_contains "$PUBLISH_RELEASE" 'macos-arm64-recovery'
 assert_contains "$PUBLISH_RELEASE" 'Keep that endpoint pinned to v0.13.3'
 assert_contains "$PUBLISH_RELEASE" 'shasum -a 256 -c'

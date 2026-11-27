@@ -13,6 +13,7 @@ pub mod download;
 pub mod history;
 pub mod model_catalog;
 pub mod phonon;
+pub mod private_fs;
 pub mod shortcuts;
 pub mod transcription;
 #[cfg(feature = "voice-studio")]

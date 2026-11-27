@@ -78,7 +78,7 @@ The desktop uses the data directory for its application identifier, honoring `UL
   outputs/<id>.wav  # generated speech, newest 50 retained
 ```
 
-Cloning and synthesis run on-device; their audio, text, and embeddings are not uploaded by Voice Studio. Model downloads require a network connection. Voice embeddings are **derived biometric data** stored locally only by this feature; protect them as sensitive data, alongside source audio, metadata, outputs, and backups. Local storage is not a promise of encryption or secure erasure. Deleting a voice does not erase originals, exported copies, backups, or generated outputs. Tests should use a disposable directory and only permissioned inputs; `ULTRAVOX_DATA_DIR` isolates the Studio store, not necessarily FluidAudio's model cache.
+Cloning and synthesis run on-device; their audio, text, and embeddings are not uploaded by Voice Studio. Model downloads require a network connection. Voice embeddings are **derived biometric data** stored locally only by this feature; protect them as sensitive data, alongside source audio, metadata, outputs, and backups. On Unix the store (`voice-studio/` and its `voices/`, `refs/` and `outputs/` directories) is created and repaired to 0700 and its files to 0600. Local storage is not a promise of encryption or secure erasure. Deleting a voice does not erase originals, exported copies, backups, or generated outputs. Tests should use a disposable directory and only permissioned inputs; `ULTRAVOX_DATA_DIR` isolates the Studio store, not necessarily FluidAudio's model cache.
 
 ## Limitations, licensing, and troubleshooting
 

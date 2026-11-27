@@ -29,6 +29,7 @@ import { LockIcon, ProLockPrompt } from "../components/ProLock";
 import { ToggleRow } from "../components/ToggleRow";
 import { UpdateButton } from "../components/UpdateButton";
 import { updater, useUpdater } from "../lib/useUpdater";
+import { updateHeadline } from "../components/UpdateNotice";
 import { openStorefront } from "../lib/storefront";
 import { ProLicensePanel, RetexDictionarySettings } from "@pro";
 export type SettingsTab = "shortcut" | "model" | "transcription" | "dictionary" | "privacy" | "appearance" | "updates" | "pro";
@@ -962,26 +963,52 @@ function DictionarySettings({
   );
 }
 
+function formatLastChecked(seconds: number | null): string {
+  if (!seconds) return "";
+  return ` Checked ${new Date(seconds * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.`;
+}
+
+/** One status line, only when there is something to say (no standing caption). */
+function updateStatus(state: ReturnType<typeof useUpdater>): string | null {
+  const { blockedReason, checking, phase, info, skipped, upToDate, lastCheckedAt } = state;
+  if (blockedReason) return blockedReason;
+  if (checking) return null;
+  if (info && phase !== "hidden") return updateHeadline(info);
+  if (info && skipped) return `UltraVox ${info.latest_version} is skipped. Check Now offers it again.`;
+  if (upToDate) return `UltraVox is up to date.${formatLastChecked(lastCheckedAt)}`;
+  return null;
+}
+
 function UpdateSettings() {
-  const { automatic, phase, info, checkError, preferenceError } = useUpdater();
+  const state = useUpdater();
+  const { automatic, checkAutomatically, checking, phase, checkError, preferenceError, blockedReason } = state;
+  const status = updateStatus(state);
   return (
     <div className="settings-group" role="tabpanel" id="panel-updates" aria-labelledby="tab-updates">
       <div className="settings-card">
         <h3>Updates</h3>
         <ToggleRow
-          label="Automatically update"
-          description="Never during a recording."
+          label="Check for updates automatically"
+          checked={checkAutomatically}
+          onChange={(checked) => void updater.setCheckAutomatically(checked)}
+        />
+        <ToggleRow
+          label="Install updates automatically"
           checked={automatic}
           onChange={(checked) => void updater.setAutomatic(checked)}
         />
-        <div className="settings-row">
-          <div className="settings-row-label">
-            <label>Version {__APP_VERSION__}</label>
-            <p className="description">
-              {phase === "hidden" || !info ? "Up to date" : `UltraVox ${info.latest_version} is available`}
-            </p>
-          </div>
+        <div className="settings-row update-version-row">
+          <span className="update-version">Version {__APP_VERSION__}</span>
+          <button
+            type="button"
+            className="update-check-now"
+            onClick={() => void updater.checkNow()}
+            disabled={checking || phase === "updating" || Boolean(blockedReason)}
+          >
+            {checking ? "Checking…" : "Check Now"}
+          </button>
         </div>
+        {status && <p className="update-status" aria-live="polite">{status}</p>}
         {preferenceError && <p className="settings-error" role="alert">{preferenceError}</p>}
         {checkError && <p className="settings-error" role="alert">Update check failed: {checkError}</p>}
       </div>

@@ -153,8 +153,12 @@ impl RecordingHistory {
         std::fs::create_dir_all(&dir).map_err(|e| {
             HistoryError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })?;
+        crate::private_fs::protect_dir(&dir)
+            .map_err(|e| HistoryError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(e))))?;
         let db_path = dir.join(Self::DB_FILE_NAME);
-        let conn = rusqlite::Connection::open(db_path)?;
+        let conn = rusqlite::Connection::open(&db_path)?;
+        crate::private_fs::protect_file(&db_path)
+            .map_err(|e| HistoryError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(e))))?;
         let mut history = Self { conn };
         history.migrate()?;
         Ok(history)
@@ -477,6 +481,31 @@ mod tests {
             progress: 1.0,
             source_file_url: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_store_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ultravox-history-perms-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _history = RecordingHistory::new(dir.clone()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(dir.join(RecordingHistory::DB_FILE_NAME))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

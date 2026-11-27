@@ -931,6 +931,7 @@ impl AppState {
 
         let recordings_dir = self.recordings_dir()?;
         std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+        ultravox_core::private_fs::protect_dir(&recordings_dir).map_err(|e| e.to_string())?;
         let output_path = recordings_dir.join(format!("{id}.wav"));
         let selected_device = self
             .config
@@ -1369,9 +1370,10 @@ impl AppState {
         Ok(id.to_string())
     }
 
-    /// Startup work for the speech models: finish the upgrade to Phonon-2 (download it for
-    /// English users, remove the English models it replaces) and load the selected model.
-    pub fn warm_transcription_model(&self) {
+    /// Loads the selected, already-downloaded model so the first dictation is fast.
+    /// `allow_download` is true only after the user changed the model selection; startup passes
+    /// false so launching UltraVox never contacts a model host on its own.
+    pub fn warm_transcription_model(&self, allow_download: bool) {
         // `models_dir()` takes the config lock itself, so resolve it before holding the lock here.
         let models_dir = match self.models_dir() {
             Ok(dir) => dir,
@@ -1399,7 +1401,7 @@ impl AppState {
         let _ = (&version, &directory);
         tauri::async_runtime::spawn(async move {
             let started = Instant::now();
-            if english && !ultravox_core::phonon::is_installed(&models_dir) {
+            if allow_download && english && !ultravox_core::phonon::is_installed(&models_dir) {
                 // Existing installs keep working on their old English model until this finishes.
                 if let Err(error) = ultravox_core::phonon::install(models_dir.clone()).await {
                     eprintln!("Phonon-2 download failed: {error}");

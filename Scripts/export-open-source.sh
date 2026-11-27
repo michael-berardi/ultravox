@@ -14,7 +14,10 @@
 #   - hard-wires the @pro frontend alias to src/pro-stub.
 #
 # The export refuses a non-empty destination and is repeatable into an empty
-# one. It finishes with a leak gate that fails the export on any excluded path
+# one. It finishes with a carry gate (the update contract v1 docs and the
+# privacy hardening must be present: docs/updates.md with
+# `<!-- update-contract: v1 -->`, CHANGELOG.md, private_fs.rs and the gated
+# update check) and a leak gate that fails the export on any excluded path
 # still present, an ungated Pro module declaration, private admin endpoints or
 # flags, access-key literals carrying key material, dev vars files, private key
 # blocks, or (when gitleaks is installed) any gitleaks finding.
@@ -158,7 +161,7 @@ for root, dirs, names in os.walk(dest):
 PY
 fi
 
-python3 - "$DEST" "$MANIFEST" <<'PY'
+python3 - "$DEST" "$MANIFEST" "$MODE" <<'PY'
 import os
 import re
 import shutil
@@ -167,6 +170,7 @@ import sys
 
 dest = sys.argv[1]
 manifest = sys.argv[2]
+mode = sys.argv[3]
 
 BUILTIN_EXCLUDED = [
     "apps/desktop/src-tauri/src/pro",
@@ -208,6 +212,24 @@ def iter_files():
 for rel in BUILTIN_EXCLUDED + manifest_paths():
     if os.path.exists(os.path.join(dest, rel)):
         errors.append("excluded path present in export: %s" % rel)
+
+# Carry gate: the public tree must keep the update contract and privacy work.
+# It applies to every export and to `--verify` of a source tree (Cargo.toml at
+# its root), not to `--verify` of loose files such as release notes.
+carry_gate = mode == "export" or os.path.isfile(os.path.join(dest, "Cargo.toml"))
+REQUIRED = {
+    "docs/updates.md": "<!-" + "- update-contract: v1 -->",
+    "PRIVACY.md": "# Privacy",
+    "CHANGELOG.md": "## ",
+    "crates/ultravox-core/src/private_fs.rs": "pub fn protect_dir",
+    "apps/desktop/src-tauri/src/update.rs": "pub async fn gated_check(",
+}
+for rel, needle in (REQUIRED.items() if carry_gate else ()):
+    path = os.path.join(dest, rel)
+    if not os.path.isfile(path):
+        errors.append("required path missing from export: %s" % rel)
+    elif needle not in open(path, encoding="utf-8", errors="replace").read():
+        errors.append("%s: missing %r" % (rel, needle))
 
 for path in iter_files():
     rel = os.path.relpath(path, dest)

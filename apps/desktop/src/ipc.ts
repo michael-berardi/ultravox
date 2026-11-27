@@ -110,11 +110,23 @@ export type RetexScanStatus = {
   last_refresh_at: string;
 };
 
-export type UpdatePreferences = { automatic: boolean };
+/** `automatic` = install updates automatically (opt-in); `check_automatically` = the daily check (on by default). */
+export type UpdatePreferences = { automatic: boolean; check_automatically: boolean };
+/** The update notice for a version: show it, stay quiet (shown in the last 24 h), or the user skipped it. */
+export type UpdateNotice = "show" | "recent" | "skipped";
+/** "automatic": the daily background check · "manual": the user's Check Now. */
+export type UpdateCheckTrigger = "automatic" | "manual";
+export type UpdateCheckStatus = {
+  blocked_reason: string | null;
+  last_checked_at: number | null;
+  last_error: string | null;
+};
 export type UpdateInfo = {
   current_version: string;
   latest_version: string;
   release_url: string;
+  /** Short plain-text release notes (bounded by the native side). */
+  release_notes?: string;
 };
 
 
@@ -366,12 +378,26 @@ export async function setUpdatePreferences(preferences: UpdatePreferences): Prom
   return await invoke("set_update_preferences", { preferences });
 }
 
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
-  return await invoke<UpdateInfo | null>("check_for_update");
+export async function checkForUpdate(trigger: UpdateCheckTrigger = "automatic"): Promise<UpdateInfo | null> {
+  return await invoke<UpdateInfo | null>("check_for_update", { trigger });
+}
+
+export async function getUpdateCheckStatus(): Promise<UpdateCheckStatus> {
+  return await invoke<UpdateCheckStatus>("get_update_check_status");
 }
 
 export async function installUpdate(info: UpdateInfo): Promise<void> {
   return await invoke("install_update", { info });
+}
+
+/** Whether the update notice shows now; a `show` answer is recorded natively (once a day per version). */
+export async function claimUpdateNotice(version: string): Promise<UpdateNotice> {
+  return await invoke<UpdateNotice>("claim_update_notice", { version });
+}
+
+/** Skip This Version: no notice for it until a newer release exists. */
+export async function skipUpdateVersion(version: string): Promise<void> {
+  await invoke("skip_update_version", { version });
 }
 
 

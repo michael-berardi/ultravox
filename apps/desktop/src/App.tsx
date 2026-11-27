@@ -5,6 +5,7 @@ import { MainWindow } from "./pages/MainWindow";
 import { VoiceStudioPage } from "@pro";
 import { SettingsPage, type SettingsTab } from "./pages/SettingsPage";
 import { useUpdaterLifecycle } from "./lib/useUpdater";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { useProStatus } from "./lib/useProStatus";
 import {
   canRequestPermission,
@@ -411,6 +412,7 @@ export default function App() {
           )}
         </>
       )}
+      {!isReminderWindow && <UpdateNotice />}
       {!isReminderWindow && permissionPanelVisible && (
         <PermissionPanel
           status={permissionStatus}

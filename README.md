@@ -3,7 +3,7 @@
 On-device speech-to-text for dictation and audio files on macOS, Windows, and Linux. Download a model once, then transcribe offline. The MIT-licensed core is free; official builds offer optional Pro features.
 
 <p align="center">
-  <a href="https://github.com/michael-berardi/ultravox/releases/tag/v0.13.5"><strong>Download UltraVox</strong></a>
+  <a href="https://github.com/michael-berardi/ultravox/releases/tag/v0.13.6"><strong>Download UltraVox</strong></a>
   ·
   <a href="#privacy"><strong>Privacy</strong></a>
   ·
@@ -51,7 +51,7 @@ Voice Studio on macOS, part of Pro, is powered by FluidAudio PocketTTS. Create a
 
 ## Install
 
-Download the original-identity [UltraVox v0.13.5 release](https://github.com/michael-berardi/ultravox/releases/tag/v0.13.5) and verify it against the adjacent SHA-256 manifest. This recovery release provides macOS arm64 assets; other platforms must use their latest available platform-specific release.
+Download the original-identity [UltraVox v0.13.6 release](https://github.com/michael-berardi/ultravox/releases/tag/v0.13.6) and verify it against the adjacent SHA-256 manifest. This recovery release provides macOS arm64 assets; other platforms must use their latest available platform-specific release.
 
 GitHub's legacy “latest” endpoint is intentionally pinned to v0.13.3, a temporary identity bridge for 0.13.0–0.13.2 updaters—not the public download for new or original-identity users. **0.12.9 users must download and install v0.13.4 directly**: their updater cannot accept or automatically pass through the pinned bridge. If 0.12.10 installs the bridge with only original-identity data, the bridge opens no stores and requests no permissions; it asks for consent to install a verified original-ID final update, with retry/manual-download choices on failure.
 
@@ -75,13 +75,15 @@ macOS packages are Developer ID signed, notarized by Apple, and staple-verified.
 
 ## Privacy
 
-Transcription and dictionary post-processing run on your device. After a selected model is downloaded, microphone recordings can be transcribed offline. Meeting capture is a Pro feature on macOS. Media URL import still requires network access to retrieve the source.
-
-Manual dictionary text stays in local UltraVox settings. On macOS with Pro unlocked, UltraVox does not inspect an Obsidian vault directly: it invokes Retex 1.2.0 or newer read-only as `retex vocabulary --vault <selected> --limit 10000 --raw-json`, locally ranks those bounded candidates, retains at most 256 terms, and only does so after the user completes the **Settings → Dictionary** permission wizard. Retex deterministically scans local records and returns only bounded canonical terms and aggregate counts; UltraVox never receives raw note bodies, excerpts, or paths. UltraVox ranks returned terms against recent on-device transcript text so likely mishearings are retained, but transcript text is never passed to Retex or uploaded. Removing a selected vault revokes permission and clears generated vocabulary; manual entries remain.
+- No telemetry, analytics or crash reports. Transcription and dictionary processing stay on your device.
+- Network use is limited to what you start (model downloads, media URL imports, update installs) plus one anonymous update check a day, which you can turn off.
+- Official Pro builds also contact the Pareto license service with a random install ID, for licensing only.
+- Recordings, transcripts, settings and models stay in the app data folder (owner-only on Unix) until you delete them.
+- Every request, every local file and how to delete it: [PRIVACY.md](PRIVACY.md).
 
 ## Updates
 
-UltraVox checks for stable updates at launch and every four hours, against the public release assets of the canonical repository. When a newer version exists, an **Update** button appears in the window's top bar; click it to download, verify, install and relaunch. **Settings → Updates → Automatically update** installs new versions on its own, but only while UltraVox is idle: never during a recording, meeting, transcription or import. Every candidate must pass its immutable SHA-256 manifest; macOS additionally requires the canonical Developer ID, sealed code, designated requirement, and notarization ticket. Licensed installs may also use the authenticated Pareto channel. Failed verification leaves the installed version untouched.
+UltraVox checks once a day, anonymously, for a newer stable release and offers it with its release notes: **Install Update**, **Remind Me Later** or **Skip This Version**. Installing automatically is opt-in (**Settings → Updates**), runs only while UltraVox is idle, and every download is verified (SHA-256, Developer ID, notarization) before anything is replaced. See [docs/updates.md](docs/updates.md).
 
 ## Licensing
 
@@ -96,6 +98,7 @@ No secrets, signing identities, or service credentials belong in the public repo
 The commands below target macOS with Homebrew and Xcode Command Line Tools. They require Node.js 22, pnpm 10.27.0, Rust, CMake, and libomp. Windows and Linux need their platform-specific Tauri prerequisites.
 
 ```bash
+export DO_NOT_TRACK=1 HOMEBREW_NO_ANALYTICS=1
 git clone --recurse-submodules https://github.com/michael-berardi/ultravox.git
 cd ultravox
 brew install cmake libomp rust node@22

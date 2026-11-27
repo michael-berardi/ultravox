@@ -20,7 +20,10 @@ use ultravox_core::{
 use ultravox_macos_bridge as bridge;
 
 use crate::state::AppState;
-use crate::update::{self, UpdateInfo, UpdatePreferences};
+use crate::update::{
+    self, CheckTrigger, UpdateCheckStatus, UpdateInfo, UpdateNotice, UpdatePreferences,
+    UpdatePreferencesPatch,
+};
 
 pub const APP_NAME: &str = "UltraVox";
 pub const APP_IDENTIFIER: &str = "com.imploselabs.ultravox";
@@ -380,17 +383,42 @@ pub fn get_update_preferences(state: State<'_, AppState>) -> Result<UpdatePrefer
     update::read_preferences(&state.app)
 }
 
+/// Settings switches only: the skip and notice state is kept, and a switch
+/// left out keeps its stored value.
 #[tauri::command]
 pub fn set_update_preferences(
     state: State<'_, AppState>,
-    preferences: UpdatePreferences,
+    preferences: UpdatePreferencesPatch,
 ) -> Result<(), String> {
-    update::write_preferences(&state.app, &preferences)
+    update::patch_preferences(&state.app, &preferences).map(|_| ())
+}
+
+/// The update notice: shows at most once a day per version, never for a
+/// skipped version. Records the showing when it returns `show`.
+#[tauri::command]
+pub fn claim_update_notice(state: State<'_, AppState>, version: String) -> Result<UpdateNotice, String> {
+    update::claim_notice(&state.app, &version)
+}
+
+/// **Skip This Version**: no notice for it until a newer release exists.
+#[tauri::command]
+pub fn skip_update_version(state: State<'_, AppState>, version: String) -> Result<(), String> {
+    update::skip_version(&state.app, &version)
+}
+
+/// Every update request goes through `update::gated_check`: automatic checks
+/// are daily, anonymous and opt-out; `trigger: "manual"` is the user's Check Now.
+#[tauri::command]
+pub async fn check_for_update(
+    app: AppHandle,
+    trigger: Option<CheckTrigger>,
+) -> Result<Option<UpdateInfo>, String> {
+    update::gated_check(&app, APP_VERSION, trigger.unwrap_or_default()).await
 }
 
 #[tauri::command]
-pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
-    update::check(APP_VERSION).await
+pub fn get_update_check_status(app: AppHandle) -> Result<UpdateCheckStatus, String> {
+    update::check_status(&app)
 }
 
 #[tauri::command]
@@ -734,7 +762,7 @@ pub async fn set_settings(state: State<'_, AppState>, mut config: AppConfig) -> 
             DownloadManager::with_models_dir(models_dir);
     }
     if selected_model_changed {
-        state.warm_transcription_model();
+        state.warm_transcription_model(true);
     }
     state.emit_settings_changed(&config)?;
     Ok(())
@@ -1147,10 +1175,15 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
     tokio::fs::create_dir_all(&recordings_dir)
         .await
         .map_err(|error| format!("could not create recordings directory: {error}"))?;
+    ultravox_core::private_fs::protect_dir(&recordings_dir)
+        .map_err(|error| format!("could not secure recordings directory: {error}"))?;
     let import_dir = recordings_dir.join(".imports").join(id.to_string());
     tokio::fs::create_dir_all(&import_dir)
         .await
         .map_err(|error| format!("could not create media import directory: {error}"))?;
+    ultravox_core::private_fs::protect_dir(&recordings_dir.join(".imports"))
+        .and_then(|_| ultravox_core::private_fs::protect_dir(&import_dir))
+        .map_err(|error| format!("could not secure media import directory: {error}"))?;
     let output_template = import_dir.join("source.%(ext)s");
     let temporary_output_path = import_dir.join("source.wav");
     let output_path = recordings_dir.join(format!("{id}.wav"));
@@ -1162,6 +1195,7 @@ pub async fn import_url(state: State<'_, AppState>, url: String) -> Result<Strin
     let mut download = tokio::process::Command::new(&yt_dlp);
     download
         .arg("--no-playlist")
+        .arg("--no-cache-dir")
         .arg("--newline")
         .arg("--max-filesize")
         .arg("2G")
@@ -1290,6 +1324,8 @@ pub async fn import_file(state: State<'_, AppState>, path: String) -> Result<Str
     tokio::fs::create_dir_all(&recordings_dir)
         .await
         .map_err(|error| format!("could not create recordings directory: {error}"))?;
+    ultravox_core::private_fs::protect_dir(&recordings_dir)
+        .map_err(|error| format!("could not secure recordings directory: {error}"))?;
     let output_path = recordings_dir.join(format!("{id}.wav"));
 
     let decode_source = source.clone();

@@ -43,6 +43,7 @@ pub fn invoke_allowed(label: &str, command: &str) -> bool {
                 | "get_settings"
                 | "get_permission_status"
                 | "get_update_preferences"
+                | "get_update_check_status"
                 | "list_recordings"
                 | "search_recordings"
                 | "get_recording"

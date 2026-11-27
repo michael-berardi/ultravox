@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { checkForUpdate, getUpdatePreferences, installUpdate, setUpdatePreferences } from "../ipc";
+import { checkForUpdate, claimUpdateNotice, getUpdateCheckStatus, getUpdatePreferences, installUpdate, setUpdatePreferences, skipUpdateVersion } from "../ipc";
 import { createUpdater, type UpdaterState } from "./updater";
 
 declare global { interface Window { __ULTRAVOX_MIRROR_UPDATER__?: (patch: Partial<UpdaterState> | null) => void } }
@@ -10,6 +10,9 @@ export const updater = createUpdater({
   install: installUpdate,
   getPreferences: getUpdatePreferences,
   setPreferences: setUpdatePreferences,
+  getStatus: getUpdateCheckStatus,
+  claimNotice: claimUpdateNotice,
+  skipVersion: skipUpdateVersion,
   setTimer: (run, ms) => window.setTimeout(run, ms),
   clearTimer: (handle) => window.clearTimeout(handle as number),
   log: (message) => console.error(message),
@@ -36,7 +39,7 @@ export function useUpdater(): UpdaterState {
   return useSyncExternalStore(subscribe, snapshot);
 }
 
-/** Starts launch and periodic checks; mount once in the main window. */
+/** Starts the background check (native gate: at most daily); mount once in the main window. */
 export function useUpdaterLifecycle(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return;

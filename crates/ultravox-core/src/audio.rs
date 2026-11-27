@@ -586,6 +586,7 @@ impl CpalAudioBackend {
         let mut output_guard = StartupOutputGuard::new(output_path.clone());
         let mut writer = hound::WavWriter::create(&output_path, spec)
             .map_err(|e| AudioError::Format(format!("wav writer: {e}")))?;
+        crate::private_fs::protect_file(&output_path)?;
         let mut resampler = StreamingResampler::new(actual_sample_rate, sample_rate)?;
         check_startup_cancelled(&stop_rx)?;
         stream
@@ -954,6 +955,7 @@ impl AudioBackend for CpalAudioBackend {
         }
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)?;
+            crate::private_fs::protect_dir(parent)?;
         }
 
         let id = recording_id_from_output_path(&output_path);
@@ -1174,6 +1176,7 @@ pub fn decode_media_file_to_wav(
         let output = options
             .open(dest)
             .map_err(|e| AudioError::Format(format!("cannot create new normalized WAV: {e}")))?;
+        crate::private_fs::protect_file(dest)?;
         created_destination = true;
         let mut writer = hound::WavWriter::new(std::io::BufWriter::new(output), spec)
             .map_err(|e| AudioError::Format(format!("wav writer: {e}")))?;

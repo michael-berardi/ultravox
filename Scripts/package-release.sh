@@ -8,8 +8,10 @@
 #   linux x86_64 : ./Scripts/package-release.sh   (requires webkit2gtk)
 #   Windows      : run inside Git Bash/MSYS2; NSIS comes from tauri.conf
 set -euo pipefail
-# Installed apps must be readable by every user (Dana BUG 7: a 077 umask shipped a root-only 0700 bundle).
+# Installed apps must be readable by every user (a 077 umask once shipped a root-only 0700 bundle).
 umask 022
+# Package tooling must not phone home.
+export DO_NOT_TRACK=1 HOMEBREW_NO_ANALYTICS=1
 
 export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
